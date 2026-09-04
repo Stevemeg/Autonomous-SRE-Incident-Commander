@@ -84,6 +84,10 @@ replace looking at the diff.
       (master specification section 20).
 - [ ] `python scripts/verify_spec_transcription.py` passes if anything under `docs/spec/`
       changed.
+- [ ] `python scripts/validate_docs.py` passes if anything under `docs/` changed — internal
+      links resolve, Mermaid diagrams are structurally valid, every requirement is traced in
+      both directions, and no master specification section 4 responsibility has silently
+      disappeared.
 - [ ] Commit message describes the milestone, uses a conventional-commit type, and does
       not overstate what was delivered.
 
@@ -126,7 +130,8 @@ checks move into automation so that compliance does not depend on discipline:
 | `.gitignore` covering secrets, environments, build output and IaC state | **In place** (Phase 0) |
 | Manual pre-commit checklist (this document) | **In place** (Phase 0) |
 | `scripts/check_repo_hygiene.py` secret and junk scan | **In place** (Phase 0) |
-| `pre-commit` hooks (formatting, linting, secret scan) | Planned — Phase 2 |
+| `scripts/validate_docs.py` documentation and traceability validation | **In place** (Phase 2) |
+| `pre-commit` hooks (formatting, linting, secret scan) | Planned — Phase 3, with the first code |
 | Secret scanning in CI (e.g. gitleaks) | Planned — Phase 14 |
 | Dependency vulnerability scanning | Planned — Phase 14 |
 | SAST | Planned — Phase 14 |

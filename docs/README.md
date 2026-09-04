@@ -3,25 +3,62 @@
 This directory holds every non-code artifact required by the master specification
 (section 16, "REQUIRED ARCHITECTURE/DOCUMENTATION").
 
-> **Current project stage: Phase 0 complete — repository bootstrap.**
-> Everything below except `spec/` is an empty skeleton. No architecture has been
-> authored and no implementation exists.
+> **Current project stage: Phase 2 — Architecture Package delivered, awaiting approval.**
+> The architecture is **proposed**, not accepted, and **no implementation exists**. No ADR is
+> Accepted. No metric anywhere in this directory is a measurement.
 
-| Directory | Contents | Stage authored |
+## Start here
+
+**[`architecture/PROJECT_INITIATION_AND_ARCHITECTURE_PACKAGE.md`](./architecture/PROJECT_INITIATION_AND_ARCHITECTURE_PACKAGE.md)**
+— the master specification §23 package, sections A–Q. It is the spine: it summarises every
+area and points to the document that owns the detail.
+
+## Contents
+
+| Directory | Contents | Stage |
 |---|---|---|
-| [`spec/`](./spec/) | The authoritative master specification (`.docx`) and its verified Markdown transcription | **Complete** |
-| [`prd/`](./prd/) | PRD, SRS, personas, user journeys, incident lifecycle | Phase 1 |
-| [`architecture/`](./architecture/) | Architecture overview, C4 diagrams, agent topology, tool registry, memory/RAG, observability, data model/API, failure & recovery, CI/CD & infrastructure | Phase 2 |
-| [`adr/`](./adr/) | Architecture Decision Records for every major technology choice | Phase 2 onward |
-| [`security/`](./security/) | Threat model and repository security checklist | Phase 2 (threat model); checklist active now |
-| [`evaluation/`](./evaluation/) | Evaluation harness architecture, metrics definitions, golden-scenario design | Phase 2 (design), Phase 11 (build) |
+| [`spec/`](./spec/) | The authoritative master specification (`.docx`) and its verified Markdown transcription | Complete |
+| [`prd/`](./prd/) | PRD (§A, B, D), SRS (§C, 138 requirement IDs), personas, journeys, incident lifecycle | **Authored** |
+| [`architecture/`](./architecture/) | A–Q package spine, architecture overview, C4, agent topology, tool registry, safety policy, memory/RAG, observability, data model/API, failure & recovery, traceability, CI/CD | **Authored** |
+| [`adr/`](./adr/) | 11 Architecture Decision Records | **Written; none Accepted** |
+| [`security/`](./security/) | Threat model (§L) and the active repository security checklist | **Authored** |
+| [`evaluation/`](./evaluation/) | Evaluation harness architecture (§I) | **Authored** |
 
 ## Reading order for a new reviewer
 
 1. [`spec/MASTER_PROJECT_PROMPT_V3.md`](./spec/MASTER_PROJECT_PROMPT_V3.md) — what the product must be.
-2. [`prd/PRD.md`](./prd/PRD.md) — what we are building and for whom.
-3. [`architecture/ARCHITECTURE_OVERVIEW.md`](./architecture/ARCHITECTURE_OVERVIEW.md) — how it fits together.
-4. [`adr/README.md`](./adr/README.md) — why each major choice was made.
+2. [`architecture/PROJECT_INITIATION_AND_ARCHITECTURE_PACKAGE.md`](./architecture/PROJECT_INITIATION_AND_ARCHITECTURE_PACKAGE.md) — the whole package, A–Q.
+3. [`prd/PRD.md`](./prd/PRD.md) and [`prd/SRS.md`](./prd/SRS.md) — what we are building and for whom.
+4. [`architecture/ARCHITECTURE_OVERVIEW.md`](./architecture/ARCHITECTURE_OVERVIEW.md) — how it fits together.
+5. [`architecture/agent-topology.md`](./architecture/agent-topology.md) — the most consequential decision in the package.
+6. [`adr/README.md`](./adr/README.md) — why each major choice was made, and what would reverse it.
+
+### If you are reviewing for security
+
+[`security/THREAT_MODEL.md`](./security/THREAT_MODEL.md) →
+[`architecture/remediation-safety-policy.md`](./architecture/remediation-safety-policy.md) →
+[`architecture/tool-registry.md`](./architecture/tool-registry.md) §1 (how the model is
+prevented from unrestricted infrastructure access).
+
+## Document ownership
+
+To keep the set internally consistent, each area has exactly one authoritative document.
+Where a summary and a detail document disagree, **the detail document wins** and the summary
+is the defect.
+
+| Area | Authoritative document |
+|---|---|
+| Requirements | [`prd/SRS.md`](./prd/SRS.md) |
+| Node inventory and consolidation | [`architecture/agent-topology.md`](./architecture/agent-topology.md) |
+| Tools, capabilities, permissions | [`architecture/tool-registry.md`](./architecture/tool-registry.md) |
+| Risk tiers, approval, execution safety | [`architecture/remediation-safety-policy.md`](./architecture/remediation-safety-policy.md) |
+| Memory tiers, RAG, provenance | [`architecture/memory-and-rag.md`](./architecture/memory-and-rag.md) |
+| Trace model, metrics, SLOs | [`architecture/observability.md`](./architecture/observability.md) |
+| State machine, retries, recovery | [`architecture/failure-and-recovery.md`](./architecture/failure-and-recovery.md) |
+| Entities, invariants, API boundaries | [`architecture/data-model-and-api.md`](./architecture/data-model-and-api.md) |
+| Threats and security invariants | [`security/THREAT_MODEL.md`](./security/THREAT_MODEL.md) |
+| Scenarios, judges, metrics, regression | [`evaluation/EVALUATION_ARCHITECTURE.md`](./evaluation/EVALUATION_ARCHITECTURE.md) |
+| Technology decisions | [`adr/`](./adr/) |
 
 ## Rules for this directory
 
@@ -33,3 +70,6 @@ This directory holds every non-code artifact required by the master specificatio
   (master specification section 13).
 - No invented metrics, benchmarks, customers or business impact
   (master specification sections 9 and 22).
+- `scripts/validate_docs.py` enforces the mechanical half of these rules: link integrity,
+  Mermaid structure, requirement traceability in both directions, and that no §4
+  responsibility has silently disappeared.

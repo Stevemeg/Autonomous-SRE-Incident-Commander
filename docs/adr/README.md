@@ -1,8 +1,9 @@
 # Architecture Decision Records
 
-> **Status: no decisions recorded yet.** The index below lists *candidate* decisions
-> derived from the master specification, not decisions that have been made. Phase 2
-> (architecture, threat model, technology decisions and ADRs) will author them.
+> **Status: eleven records written during the Architecture Package; none is Accepted.**
+> All are `Proposed`, `Needs validation` or `Deferred` pending owner approval of the
+> Architecture Package and, where stated, pending measurement. **No decision below is
+> binding on implementation yet.**
 
 ## Why ADRs are mandatory here
 
@@ -29,6 +30,8 @@ An ADR is the artifact that makes a decision defensible under interview pressure
    observable trigger that should cause us to revisit it.
 5. **Records are immutable once Accepted.** To change a decision, write a new ADR and mark
    the old one `Superseded by ADR-NNNN`. Never edit history in place.
+6. **Close calls are recorded as close.** A genuinely marginal decision written up as
+   obvious will not survive scrutiny — see ADR-0002.
 
 ## Naming and status
 
@@ -36,41 +39,67 @@ Files are named `NNNN-short-kebab-case-title.md`, numbered sequentially from `00
 
 | Status | Meaning |
 |---|---|
-| `Proposed` | Written, under review, not yet binding |
+| `Proposed` | Written and reasoned, under review, **not yet binding** |
+| `Needs validation` | Direction chosen, but confirmation depends on a measurement that has not been taken |
+| `Deferred` | Deliberately not adopting now; the analysis and the adoption triggers are recorded |
 | `Accepted` | Binding; implementation must conform |
 | `Superseded` | Replaced by a later ADR, which must be named |
 | `Deprecated` | No longer applies and has no replacement |
 | `Rejected` | Considered and explicitly declined; kept because the reasoning is valuable |
 
+`Needs validation` and `Deferred` extend the original vocabulary. They exist because
+section 9 forbids reporting unmeasured results as fact: a decision whose justification
+depends on a measurement we have not taken must not be recorded as `Accepted`.
+
 Use [`0000-adr-template.md`](./0000-adr-template.md) as the starting point.
 
 ## Index
 
-_No ADRs have been accepted yet._
+| ADR | Title | Status | Spec ref | Date |
+|---|---|---|---|---|
+| [0001](./0001-agent-topology-consolidation.md) | Agent topology — 19 responsibilities into 12 nodes | `Proposed` | 4, 5, 6, 15 | 2026-09-04 |
+| [0002](./0002-orchestration-langgraph-vs-temporal.md) | Orchestration — LangGraph checkpointing vs Temporal | `Proposed` | 4, 12, 13 | 2026-09-04 |
+| [0003](./0003-tool-boundary-native-adapters-mcp-ready.md) | Tool boundary — native adapters behind an MCP-ready seam | `Proposed` | 7, 13, 14, 15, 20 | 2026-09-04 |
+| [0004](./0004-postgresql-pgvector-primary-datastore.md) | PostgreSQL + pgvector as the single primary datastore | `Proposed` | 8, 13, 15 | 2026-09-04 |
+| [0005](./0005-llm-provider-abstraction.md) | LLM provider abstraction — thin internal interface, not LiteLLM | `Proposed` | 9, 10, 11, 13 | 2026-09-04 |
+| [0006](./0006-redis-necessity.md) | Redis — not adopted in v1 | `Deferred` | 13 | 2026-09-04 |
+| [0007](./0007-eventing-message-broker-necessity.md) | Message broker (Kafka/NATS) — not adopted in v1 | `Deferred` | 12, 13 | 2026-09-04 |
+| [0008](./0008-rag-retrieval-strategy.md) | RAG retrieval — hybrid default, reranking only if measured | `Needs validation` | 8 | 2026-09-04 |
+| [0009](./0009-memory-architecture-tiers.md) | Memory architecture — five tiers, human-gated promotion | `Proposed` | 8, 10 | 2026-09-04 |
+| [0010](./0010-observability-and-evaluation-tooling.md) | Observability tooling — OTel-native, not LangSmith or Phoenix | `Proposed` | 9, 10, 11, 13 | 2026-09-04 |
+| [0011](./0011-authentication-authorization-tenancy.md) | Authentication, authorization and tenancy model | `Proposed` | 15 | 2026-09-04 |
 
-| ADR | Title | Status | Date |
+## Priority order for acceptance
+
+ADRs must be accepted in dependency order. The first four constrain the schema and the node
+contract, so they block Phase 3 onward; the rest can be accepted as their evidence arrives.
+
+| Priority | ADR | Blocks | Why this order |
+|---:|---|---|---|
+| 1 | 0011 Tenancy and authorization | Phase 3 (schema) | `tenant_id` and RLS touch every table; least reversible decision in the project |
+| 2 | 0001 Agent topology | Phase 4 | Determines what is built and how permissions are separated |
+| 3 | 0004 Datastore | Phase 3 | Schema, indexing and retrieval all depend on it |
+| 4 | 0002 Orchestration | Phase 4 | Determines the durability contract nodes are written against |
+| 5 | 0003 Tool boundary | Phase 4 | Determines the registry and broker interfaces |
+| 6 | 0009 Memory tiers | Phase 6 | Shapes the knowledge and memory schema |
+| 7 | 0005 LLM abstraction | Phase 4 | Needed before the first model call is instrumented |
+| 8 | 0010 Observability tooling | Phase 4 | Trace schema must exist before nodes emit |
+| 9 | 0008 RAG retrieval | Phase 6, revisit Phase 11 | `Needs validation` — resolved by measurement, not debate |
+| 10 | 0006 Redis | Revisit Phase 15 | `Deferred` — trigger is a load measurement |
+| 11 | 0007 Message broker | Revisit Phase 15 | `Deferred` — trigger is a load measurement |
+
+## Candidate decisions still to be written
+
+Identified during the Architecture Package but not yet ADRs, because the evidence to decide
+them does not exist. Recorded so the scope is visible.
+
+| # | Candidate decision | Spec ref | Blocked until |
 |---|---|---|---|
-| — | — | — | — |
-
-## Candidate decisions for Phase 2
-
-These are the decisions the master specification obliges us to make explicitly. They are
-listed here so the scope of Phase 2 is visible; **none has been decided.**
-
-| # | Candidate decision | Spec reference |
-|---|---|---|
-| 1 | Agent/node topology: which of the 19 candidate nodes are distinct, and which are merged | 4 |
-| 2 | Orchestration framework: LangGraph or a justified equivalent | 4, 13 |
-| 3 | Workflow durability: LangGraph persistence vs Temporal vs another engine | 12 |
-| 4 | Tool boundary: native adapters vs MCP, and the MCP-ready adapter seam | 7 |
-| 5 | Primary datastore and vector strategy: PostgreSQL + pgvector vs a dedicated vector database | 8, 13 |
-| 6 | Whether Redis is justified, and for what | 13 |
-| 7 | Multi-provider LLM abstraction: direct SDKs vs LiteLLM or equivalent | 13 |
-| 8 | Retrieval strategy: dense vs hybrid, and whether reranking is justified | 8 |
-| 9 | Tenancy and isolation model | 15 |
-| 10 | Telemetry backend: Loki vs Elasticsearch/OpenSearch | 14 |
-| 11 | Eventing: direct invocation vs Kafka/NATS | 13 |
-| 12 | Tracing and evaluation tooling: raw OpenTelemetry vs LangSmith vs Arize Phoenix | 11, 13 |
-| 13 | Integration simulator design and replay-fixture format | 14 |
-| 14 | Evaluation judge model strategy and calibration approach | 9 |
-| 15 | Frontend scope and framework commitment | 13 |
+| C1 | Telemetry log backend: Loki vs Elasticsearch/OpenSearch | 14 | Phase 10 — depends on adapter experience |
+| C2 | Integration simulator design and replay-fixture format | 14 | Phase 4 — needs the first adapter |
+| C3 | Evaluation judge model strategy and calibration approach | 9 | Phase 11 — needs a labelled corpus |
+| C4 | Frontend scope and framework commitment beyond Next.js baseline | 13 | Phase 9 |
+| C5 | Kubernetes deployment topology and Terraform module boundaries | 13, 16 | Phase 14 |
+| C6 | Embedding model selection and re-index strategy | 8 | Phase 6 — needs the retrieval evaluation set |
+| C7 | Alert correlation algorithm (deterministic signal weighting) | 3, 4 | Phase 5 — needs an alert corpus |
+| C8 | Data-retention automation and partition management | 15 | Phase 13 |

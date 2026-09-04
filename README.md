@@ -12,16 +12,19 @@ approval, verifies outcomes, and preserves operational memory.
 >
 > **No product code has been written yet, and nothing described below is implemented.**
 >
-> This repository currently contains the master specification, a verified Markdown
-> transcription of it, and an empty documentation skeleton. The next deliverable is the
-> Project Initiation & Architecture Package required by section 23 of the master
-> specification, which must be completed and approved before any implementation begins.
+> The **Project Initiation & Architecture Package** required by section 23 of the master
+> specification is complete and awaiting approval. It contains sections A–Q, eleven
+> Architecture Decision Records, 138 traced requirements and 21 diagrams — all of it
+> *proposed*. No ADR is Accepted, no architecture is binding, and no metric in this
+> repository is a measurement.
+>
+> **Read it here: [`docs/architecture/PROJECT_INITIATION_AND_ARCHITECTURE_PACKAGE.md`](docs/architecture/PROJECT_INITIATION_AND_ARCHITECTURE_PACKAGE.md)**
 >
 > | | |
 > |---|---|
-> | **Completed** | Phase 0 — repository bootstrap |
-> | **In progress** | Nothing |
-> | **Next** | Architecture Package, then Phase 1 — product requirements |
+> | **Completed** | Phase 0 — repository bootstrap · Phase 1 — product requirements · Phase 2 — architecture package |
+> | **In progress** | Nothing — awaiting approval of the architecture package |
+> | **Next** | Phase 3 — domain model, PostgreSQL schema, tenancy and event model |
 > | **Implemented product features** | None |
 >
 > Section 20 of the specification forbids fake integrations, fabricated metrics and
@@ -102,14 +105,15 @@ If the two ever disagree, the `.docx` wins and the Markdown is the defect.
 .
 ├── docs/
 │   ├── spec/            Authoritative specification + verified transcription
-│   ├── prd/             PRD, SRS, personas, journeys, incident lifecycle   (skeleton)
-│   ├── architecture/    Overview, C4, agent topology, tool registry,
-│   │                    memory/RAG, observability, data model, failure
-│   │                    and recovery, CI/CD and infrastructure             (skeleton)
-│   ├── adr/             Architecture Decision Records + template           (no ADRs yet)
-│   ├── security/        Threat model (skeleton) + repository checklist (active)
-│   └── evaluation/      Evaluation harness architecture                    (skeleton)
-├── scripts/             Repository tooling (spec verification, hygiene scan)
+│   ├── prd/             PRD, SRS (138 requirements), personas, journeys
+│   ├── architecture/    A–Q package spine, overview, C4, agent topology,
+│   │                    tool registry, safety policy, memory/RAG,
+│   │                    observability, data model/API, failure & recovery,
+│   │                    requirements traceability, CI/CD and infrastructure
+│   ├── adr/             11 Architecture Decision Records      (none Accepted yet)
+│   ├── security/        Threat model + repository checklist (active)
+│   └── evaluation/      Evaluation harness architecture
+├── scripts/             Repository tooling (spec verification, hygiene, doc validation)
 ├── src/                 Application source                       (intentionally empty)
 ├── tests/               Test suites                              (intentionally empty)
 └── configs/             Configuration                            (intentionally empty)
@@ -131,22 +135,35 @@ Python · FastAPI · LangGraph or a justified equivalent · PostgreSQL + pgvecto
 where justified · Next.js + TypeScript · multi-provider LLM abstraction · OpenTelemetry ·
 Prometheus · Grafana · Loki · Docker · Kubernetes · Terraform · GitHub Actions · pytest
 
-Technologies to be evaluated rather than adopted by default: Temporal, LiteLLM, MCP,
-LangSmith, Arize Phoenix, Kafka/NATS, OpenSearch/Elasticsearch, dedicated vector
-databases.
+All eight technologies the specification flags as "evaluate rather than blindly add" have
+now been evaluated in ADRs. The recommendations — **none accepted yet** — are:
+
+| Technology | Recommendation | ADR |
+|---|---|---|
+| Temporal | Not adopted; LangGraph + PostgreSQL checkpointing instead. *A close call, recorded as close.* | [0002](docs/adr/0002-orchestration-langgraph-vs-temporal.md) |
+| MCP | Not adopted as transport; native adapters behind an MCP-ready seam | [0003](docs/adr/0003-tool-boundary-native-adapters-mcp-ready.md) |
+| Dedicated vector database | Not adopted; pgvector in the primary store | [0004](docs/adr/0004-postgresql-pgvector-primary-datastore.md) |
+| LiteLLM | Not adopted; thin internal provider interface | [0005](docs/adr/0005-llm-provider-abstraction.md) |
+| Redis | Deferred, with measured adoption triggers | [0006](docs/adr/0006-redis-necessity.md) |
+| Kafka / NATS | Deferred, with measured adoption triggers | [0007](docs/adr/0007-eventing-message-broker-necessity.md) |
+| LangSmith / Arize Phoenix | Not adopted; OpenTelemetry-native, Phoenix in reserve | [0010](docs/adr/0010-observability-and-evaluation-tooling.md) |
+| OpenSearch / Elasticsearch | Deferred to Phase 10 as a log-backend choice | [ADR index](docs/adr/README.md) |
 
 Integrations are built against adapter interfaces with deterministic local simulators and
 replay fixtures. The project will not depend on live production infrastructure.
 
 ## Roadmap
 
-Taken from section 19 of the master specification. No phase is complete.
+Taken from section 19 of the master specification. Phases 1 and 2 are documentation
+deliverables; **no product capability is implemented.** Four capabilities are pulled
+earlier than a literal reading of section 19, each justified in the architecture package
+section O.
 
 | Phase | Scope | Status |
 |---:|---|---|
 | 0 | Repository bootstrap and specification control | **Complete** |
-| 1 | Product requirements, personas, business metrics and competitive positioning | Not started |
-| 2 | Architecture, threat model, technology decisions and ADRs | Not started |
+| 1 | Product requirements, personas, business metrics and competitive positioning | **Complete** |
+| 2 | Architecture, threat model, technology decisions and ADRs | **Complete — awaiting approval** |
 | 3 | Domain model, PostgreSQL schema, tenancy and event model | Not started |
 | 4 | Agent state machine, planner, tool registry and orchestration | Not started |
 | 5 | Telemetry ingestion, alert correlation and incident lifecycle | Not started |
@@ -176,6 +193,9 @@ python scripts/verify_spec_transcription.py
 
 # Scan for secrets, credentials and generated files before committing
 python scripts/check_repo_hygiene.py
+
+# Validate documentation: links, Mermaid structure, requirement traceability
+python scripts/validate_docs.py
 ```
 
 Both must pass before any commit. The full pre-commit and pre-push procedure is
