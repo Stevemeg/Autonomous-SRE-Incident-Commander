@@ -20,7 +20,9 @@ Checks performed:
   4. Spec responsibility - every agent/node responsibility named in master specification
                            section 4 has an explicit disposition in the agent topology
                            document. Nothing from the specification may silently vanish.
-  5. No implementation   - no product source code exists outside scripts/.
+  5. Phase boundary      - no code exists for a phase that has not been approved:
+                           no agents, orchestration, remediation execution, external
+                           integrations or frontend.
   6. Unmeasured claims   - no invented improvement percentages (sections 9 and 22).
 
 Standard library only. Exit code 0 = clean, 1 = findings.
@@ -70,10 +72,51 @@ UNMEASURED_CLAIM = re.compile(
     re.IGNORECASE,
 )
 
-CODE_EXTENSIONS = {
-    ".ts", ".tsx", ".js", ".jsx", ".go", ".java", ".rb", ".rs", ".php", ".cs",
-    ".sql", ".tf", ".c", ".cpp", ".h",
-}
+# Phase 3 delivers the domain model and persistence. Anything belonging to a later,
+# unapproved phase is a scope violation, and cheap to detect mechanically.
+
+#: Source trees that may contain implementation at the current phase.
+ALLOWED_SOURCE_ROOTS = (
+    "src/asic/__init__.py",
+    "src/asic/domain",
+    "src/asic/db",
+    "migrations",
+    "scripts",
+    "tests",
+)
+
+#: Packages whose existence would mean a later phase started early.
+FORBIDDEN_PACKAGES = (
+    "src/asic/agents",  # Phase 4+ - agent nodes
+    "src/asic/orchestration",  # Phase 4  - workflow engine
+    "src/asic/nodes",
+    "src/asic/api",  # Phase 9  - HTTP surfaces
+    "src/asic/integrations",  # Phase 10 - external adapters
+    "src/asic/adapters",
+    "src/asic/evaluation",  # Phase 11 - harness
+    "frontend",  # Phase 9  - dashboard
+    "web",
+    "ui",
+)
+
+#: Imports that would mean an unapproved capability arrived with them.
+FORBIDDEN_IMPORTS = (
+    "langgraph",
+    "langchain",
+    "fastapi",
+    "starlette",
+    "uvicorn",
+    "openai",
+    "anthropic",
+    "litellm",
+    "kubernetes",
+    "prometheus_api_client",
+    "slack_sdk",
+    "jira",
+)
+
+#: Frontend and infrastructure languages, none of which belong to Phase 3.
+FORBIDDEN_EXTENSIONS = {".ts", ".tsx", ".jsx", ".vue", ".svelte", ".tf", ".go", ".java"}
 
 
 class Findings:
@@ -217,9 +260,7 @@ def validate_mermaid_block(path: Path, start: int, body: list[str], f: Findings)
 
     # A diagram with no relationship is almost certainly a mistake.
     joined = "\n".join(content[1:])
-    has_edge = bool(
-        re.search(r"(-->|---|-\.->|==>|->>|-->>|\|\|--|\}o--|\|\|\.\.|: )", joined)
-    )
+    has_edge = bool(re.search(r"(-->|---|-\.->|==>|->>|-->>|\|\|--|\}o--|\|\|\.\.|: )", joined))
     if not has_edge and not header.startswith(("journey", "gantt", "pie", "mindmap", "timeline")):
         f.add("mermaid", f"{where} -> diagram declares no relationships")
 
@@ -244,7 +285,10 @@ def check_requirement_traceability(f: Findings) -> tuple[int, int]:
     for req in sorted(defined - traced):
         f.add("traceability", f"{req} defined in SRS but absent from the traceability matrix")
     for req in sorted(traced - defined):
-        f.add("traceability", f"{req} appears in the traceability matrix but is not defined in the SRS")
+        f.add(
+            "traceability",
+            f"{req} appears in the traceability matrix but is not defined in the SRS",
+        )
 
     return (len(defined), len(traced))
 
@@ -288,24 +332,47 @@ def check_responsibility_coverage(f: Findings) -> int:
     return len(names)
 
 
-# ------------------------------------------------------------- 5. no implementation code
+# ----------------------------------------------------------------- 5. phase boundary
 
 
-def check_no_implementation(f: Findings) -> int:
+def check_phase_boundary(f: Findings) -> int:
+    """Assert no later phase has started early.
+
+    Phase 3 is the domain model and tenant-aware persistence. Agents, orchestration,
+    remediation execution, external integrations and the frontend are explicitly out of
+    scope, and their absence is checkable rather than assertable.
+    """
     scanned = 0
+
+    for package in FORBIDDEN_PACKAGES:
+        if (REPO / package).exists():
+            f.add(
+                "phase",
+                f"{package}/ exists, but that belongs to a later, unapproved phase",
+            )
+
     for path in REPO.rglob("*"):
         if not path.is_file():
             continue
         parts = path.relative_to(REPO).parts
-        if parts and parts[0] in {".git", ".claude", "node_modules", ".venv"}:
+        if parts and parts[0] in {".git", ".claude", ".venv", "node_modules", "__pycache__"}:
             continue
-        if parts and parts[0] == "scripts":
+        if "__pycache__" in parts:
             continue
         scanned += 1
-        if path.suffix.lower() in CODE_EXTENSIONS:
-            f.add("implementation", f"unexpected source file: {rel(path)}")
-        elif path.suffix.lower() == ".py":
-            f.add("implementation", f"unexpected Python file outside scripts/: {rel(path)}")
+
+        if path.suffix.lower() in FORBIDDEN_EXTENSIONS:
+            f.add("phase", f"{rel(path)}: {path.suffix} files belong to a later phase")
+
+        if path.suffix == ".py" and parts[0] == "src":
+            relative = rel(path)
+            if not any(relative.startswith(root) for root in ALLOWED_SOURCE_ROOTS):
+                f.add("phase", f"{relative} is outside the source trees this phase may touch")
+            text = path.read_text(encoding="utf-8", errors="replace")
+            for module in FORBIDDEN_IMPORTS:
+                if re.search(rf"^\s*(?:import|from)\s+{re.escape(module)}", text, re.M):
+                    f.add("phase", f"{relative} imports {module!r}, which belongs to a later phase")
+
     return scanned
 
 
@@ -340,7 +407,7 @@ def main() -> int:
     blocks = check_mermaid(files, f)
     defined, traced = check_requirement_traceability(f)
     responsibilities = check_responsibility_coverage(f)
-    scanned = check_no_implementation(f)
+    scanned = check_phase_boundary(f)
     check_unmeasured_claims(files, f)
 
     print(f"markdown files    : {len(files)}")
@@ -348,7 +415,7 @@ def main() -> int:
     print(f"mermaid diagrams  : {blocks} checked")
     print(f"requirement IDs   : {defined} defined in SRS, {traced} referenced in matrix")
     print(f"spec section 4    : {responsibilities} responsibilities checked for disposition")
-    print(f"non-script files  : {scanned} scanned for implementation code")
+    print(f"repository files  : {scanned} scanned against the Phase 3 boundary")
     print()
 
     order = [
@@ -356,7 +423,7 @@ def main() -> int:
         ("mermaid", "Mermaid structure"),
         ("traceability", "Requirement traceability"),
         ("coverage", "Specification coverage"),
-        ("implementation", "No implementation code"),
+        ("phase", "Phase 3 scope boundary"),
         ("claims", "No unmeasured claims"),
     ]
 
@@ -375,7 +442,7 @@ def main() -> int:
         return 1
     print("RESULT: CLEAN - links resolve, diagrams are structurally valid,")
     print("        every requirement is traced, no specification responsibility was")
-    print("        dropped, and no implementation code exists.")
+    print("        dropped, and no later-phase code exists.")
     return 0
 
 

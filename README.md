@@ -8,28 +8,30 @@ approval, verifies outcomes, and preserves operational memory.
 
 ---
 
-> ## Project status: architecture and design phase
+> ## Project status: foundations built, no product behaviour yet
 >
-> **No product code has been written yet, and nothing described below is implemented.**
->
-> The **Project Initiation & Architecture Package** required by section 23 of the master
-> specification is complete and awaiting approval. It contains sections A–Q, eleven
-> Architecture Decision Records, 138 traced requirements and 21 diagrams — all of it
-> *proposed*. No ADR is Accepted, no architecture is binding, and no metric in this
-> repository is a measurement.
->
-> **Read it here: [`docs/architecture/PROJECT_INITIATION_AND_ARCHITECTURE_PACKAGE.md`](docs/architecture/PROJECT_INITIATION_AND_ARCHITECTURE_PACKAGE.md)**
+> **No agent, no orchestration, no remediation, no API and no frontend exists.** What
+> exists is the ground they will stand on: the architecture package, and a domain model
+> and tenant-aware persistence layer that enforces the safety invariants at the database.
 >
 > | | |
 > |---|---|
-> | **Completed** | Phase 0 — repository bootstrap · Phase 1 — product requirements · Phase 2 — architecture package |
-> | **In progress** | Nothing — awaiting approval of the architecture package |
-> | **Next** | Phase 3 — domain model, PostgreSQL schema, tenancy and event model |
+> | **Completed** | Phase 0 bootstrap · Phase 1 requirements · Phase 2 architecture · **Phase 3 domain model and persistence** |
+> | **In progress** | Nothing — awaiting approval to begin Phase 4 |
+> | **Next** | Phase 4 — agent state machine, planner, tool registry and orchestration |
 > | **Implemented product features** | None |
 >
+> Phase 3 delivered 36 tables, 30 of them protected by PostgreSQL row-level security, a
+> deterministic incident state machine, an append-only event log with gapless sequencing,
+> and domain-level idempotency. **181 tests pass** (117 of them with no database required).
+>
+> **Start here:** [`docs/architecture/PROJECT_INITIATION_AND_ARCHITECTURE_PACKAGE.md`](docs/architecture/PROJECT_INITIATION_AND_ARCHITECTURE_PACKAGE.md)
+> — sections A–Q. Then [`docs/architecture/tenancy-and-rls.md`](docs/architecture/tenancy-and-rls.md)
+> for how tenant isolation survives an application bug.
+>
 > Section 20 of the specification forbids fake integrations, fabricated metrics and
-> placeholder production logic. This README will state that a capability exists only once
-> it exists and has been validated.
+> placeholder production logic. This README states that a capability exists only once it
+> exists and has been validated. **No performance has been measured.**
 
 ---
 
@@ -110,17 +112,23 @@ If the two ever disagree, the `.docx` wins and the Markdown is the defect.
 │   │                    tool registry, safety policy, memory/RAG,
 │   │                    observability, data model/API, failure & recovery,
 │   │                    requirements traceability, CI/CD and infrastructure
-│   ├── adr/             11 Architecture Decision Records      (none Accepted yet)
+│   ├── adr/             14 Architecture Decision Records        (3 Accepted)
 │   ├── security/        Threat model + repository checklist (active)
 │   └── evaluation/      Evaluation harness architecture
+├── src/asic/
+│   ├── domain/          Vocabularies, incident state machine, events,
+│   │                    idempotency, safety guards      (no I/O, no database)
+│   └── db/              SQLAlchemy models, tenant session context, projections
+├── migrations/          Alembic: schema, then row-level security
+├── tests/
+│   ├── domain/          Pure unit tests, no database required
+│   └── db/              Isolation, RLS, constraints, event model
 ├── scripts/             Repository tooling (spec verification, hygiene, doc validation)
-├── src/                 Application source                       (intentionally empty)
-├── tests/               Test suites                              (intentionally empty)
 └── configs/             Configuration                            (intentionally empty)
 ```
 
-`src/`, `tests/` and `configs/` are empty by design and each contains a README explaining
-why. The package layout is an output of the architecture work, not an input to it.
+`configs/` is empty by design; runtime configuration arrives with the services that need
+it.
 
 Start with **[`docs/README.md`](docs/README.md)** for the documentation index and reading
 order.
@@ -164,7 +172,7 @@ section O.
 | 0 | Repository bootstrap and specification control | **Complete** |
 | 1 | Product requirements, personas, business metrics and competitive positioning | **Complete** |
 | 2 | Architecture, threat model, technology decisions and ADRs | **Complete — awaiting approval** |
-| 3 | Domain model, PostgreSQL schema, tenancy and event model | Not started |
+| 3 | Domain model, PostgreSQL schema, tenancy and event model | **Complete** |
 | 4 | Agent state machine, planner, tool registry and orchestration | Not started |
 | 5 | Telemetry ingestion, alert correlation and incident lifecycle | Not started |
 | 6 | RAG, operational knowledge and governed memory | Not started |
@@ -188,17 +196,35 @@ There is no application to run yet. The repository tooling requires only Python 
 no third-party dependencies:
 
 ```bash
-# Verify the Markdown specification still matches the authoritative .docx
-python scripts/verify_spec_transcription.py
-
-# Scan for secrets, credentials and generated files before committing
-python scripts/check_repo_hygiene.py
-
-# Validate documentation: links, Mermaid structure, requirement traceability
-python scripts/validate_docs.py
+# Repository tooling - standard library only, no dependencies
+python scripts/verify_spec_transcription.py   # .md still matches the authoritative .docx
+python scripts/check_repo_hygiene.py          # secrets, credentials, generated files
+python scripts/validate_docs.py               # links, Mermaid, traceability, phase scope
 ```
 
-Both must pass before any commit. The full pre-commit and pre-push procedure is
+All three must pass before any commit.
+
+### Running the test suite
+
+The pure-domain tests need nothing. The database tests need PostgreSQL with `pgvector`:
+
+```bash
+python -m venv .venv && .venv/Scripts/python -m pip install -e ".[dev]"
+
+# Domain tests only - no database
+.venv/Scripts/python -m pytest tests/domain
+
+# Full suite: start PostgreSQL, migrate, then run
+docker run -d --name asic-pg -e POSTGRES_PASSWORD=<choose> -e POSTGRES_USER=asic_owner     -e POSTGRES_DB=asic -p 55432:5432 pgvector/pgvector:pg16
+export ASIC_MIGRATION_DATABASE_URL=postgresql+psycopg2://asic_owner:<choose>@localhost:55432/asic
+.venv/Scripts/python -m alembic upgrade head
+export ASIC_TEST_DATABASE_URL=$ASIC_MIGRATION_DATABASE_URL
+.venv/Scripts/python -m pytest
+```
+
+Database-backed tests skip cleanly when `ASIC_TEST_DATABASE_URL` is unset, so the domain
+suite runs anywhere. Connection strings come from the environment and never from a
+committed file. The full pre-commit and pre-push procedure is
 [`docs/security/REPOSITORY_SECURITY_CHECKLIST.md`](docs/security/REPOSITORY_SECURITY_CHECKLIST.md).
 
 Build, test and deployment instructions will be added when there is something to build.

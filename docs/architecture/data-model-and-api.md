@@ -1,13 +1,27 @@
 # Data Model and API Boundary
 
-- **Status:** Authored — Architecture Package (V3 §23 M). **Conceptual model only — no migrations, no DDL, no implementation.**
+- **Status:** **Implemented in Phase 3.** The conceptual model below is realised as 36 tables in `src/asic/db/models/`, migrated by `migrations/versions/`, and verified by `tests/db/`. The API boundary in §7 remains **conceptual** — no endpoint is implemented.
 - **Master specification references:** Sections 8, 12, 13, 15, 16, 23(M)
 - **Related:** [`../security/THREAT_MODEL.md`](../security/THREAT_MODEL.md) · [`memory-and-rag.md`](./memory-and-rag.md)
 
-> Per the project brief, **no migrations are created at this stage.** Physical schema,
-> indexes, partitioning and DDL are Phase 3 work. This document fixes entities,
-> relationships and invariants so that Phase 3 has something to implement rather than
-> invent.
+> **Phase 3 delivered the schema.** 36 tables, 38 native enum types, 30 of them
+> tenant-scoped and protected by row-level security. Where the model below and the code
+> disagree, the code is authoritative and this document is the defect.
+>
+> Two names changed during implementation, and the reconciliation is recorded rather than
+> applied silently:
+>
+> | Architecture package | Implemented as | Why |
+> |---|---|---|
+> | `tool_descriptor` | **`tool_definition`** | The Phase 3 brief names the entity "Tool Definition"; one name across brief, schema and code is worth more than fidelity to the earlier draft. |
+> | `verified_outcome` | **`memory_entry`** (with `kind`) | The brief names the entity "Memory". One table with a `memory_kind` discriminator covers both T4 operational facts and T5 verified outcomes, which share every column that matters. |
+>
+> Six tables were added beyond the package's 30, each earning its place: `role`,
+> `permission`, `role_permission` and `user_role_assignment` (the brief requires
+> "Role / Permission", and authority is per tenant *and* environment);
+> `tenant_tool_grant` (the capability menu is resolved per tenant, so it cannot live on the
+> global catalogue); and `trace_span` (the brief's section F requires parent/child
+> relationships in the trace, which a run-level row alone cannot express).
 
 ---
 
@@ -30,6 +44,10 @@
 ```mermaid
 erDiagram
     TENANT ||--o{ USER : "has"
+    USER ||--o{ USER_ROLE_ASSIGNMENT : "granted"
+    ROLE ||--o{ USER_ROLE_ASSIGNMENT : "assigned via"
+    ROLE ||--o{ ROLE_PERMISSION : "bundles"
+    PERMISSION ||--o{ ROLE_PERMISSION : "included in"
     TENANT ||--o{ SERVICE : "owns"
     TENANT ||--o{ ENVIRONMENT : "defines"
     TENANT ||--o{ INCIDENT : "scopes"
@@ -58,10 +76,12 @@ erDiagram
     REMEDIATION_ACTION ||--o| APPROVAL : "may require"
     REMEDIATION_ACTION ||--o{ TOOL_EXECUTION : "executes via"
     REMEDIATION_ACTION ||--o| VERIFICATION : "verified by"
-    REMEDIATION_ACTION ||--o| VERIFIED_OUTCOME : "may yield"
+    REMEDIATION_ACTION ||--o| MEMORY_ENTRY : "may yield"
 
-    TOOL_DESCRIPTOR ||--o{ TOOL_EXECUTION : "defines"
-    TOOL_DESCRIPTOR ||--o{ REMEDIATION_ACTION : "typed by"
+    TOOL_DEFINITION ||--o{ TOOL_EXECUTION : "defines"
+    TOOL_DEFINITION ||--o{ REMEDIATION_ACTION : "typed by"
+    TOOL_DEFINITION ||--o{ TENANT_TOOL_GRANT : "granted through"
+    TENANT ||--o{ TENANT_TOOL_GRANT : "holds"
 
     USER ||--o{ APPROVAL : "decides"
     USER ||--o{ AUDIT_RECORD : "acts in"
@@ -69,12 +89,14 @@ erDiagram
     KNOWLEDGE_DOCUMENT ||--o{ KNOWLEDGE_CHUNK : "chunked into"
     KNOWLEDGE_CHUNK }o--o{ EVIDENCE : "cited by"
 
-    VERIFIED_OUTCOME }o--o| MEMORY_PROMOTION : "promoted via"
+    MEMORY_ENTRY }o--o| MEMORY_PROMOTION : "promoted via"
     MEMORY_PROMOTION }o--|| APPROVAL : "gated by"
 
     EVALUATION_SCENARIO ||--o{ EVALUATION_RUN : "scored in"
     EVALUATION_RUN ||--o{ EXECUTION_TRACE : "analyses"
     WORKFLOW_RUN ||--|| EXECUTION_TRACE : "emits"
+    EXECUTION_TRACE ||--o{ TRACE_SPAN : "contains"
+    TRACE_SPAN ||--o{ TRACE_SPAN : "parent of"
 
     BEHAVIOUR_VERSION ||--o{ WORKFLOW_RUN : "produced by"
     BEHAVIOUR_VERSION ||--o{ EVALUATION_RUN : "evaluated"
@@ -127,7 +149,7 @@ Every entity required by the brief, plus those the design makes necessary. `AO` 
 
 | Entity | Purpose | Key attributes | Invariants |
 |---|---|---|---|
-| **`tool_descriptor`** | Registry entry | name, version, capability, input/output schema, permission_scope, risk_tier, timeout, retry, idempotency, rollback_ref, audit_requirements, approval_policy | Versioned, Git-reviewed; **no runtime mutation by any agent path** |
+| **`tool_definition`** | Registry entry | name, version, capability, input/output schema, permission_scope, risk_tier, timeout, retry, idempotency, rollback_ref, audit_requirements, approval_policy | Versioned, Git-reviewed; **no runtime mutation by any agent path** |
 | **`remediation_action`** | A proposal, then its execution | id, incident_id, hypothesis_id, tool_name, tool_version, arguments, action_version_hash, risk_tier, permission_scope, preconditions, rollback_ref, expected_effect, verification_criteria, timeout, status | All twelve §6 fields present or the row is invalid; `verification_criteria` **immutable after proposal** |
 | **`policy_decision`** `AO` | The gate's verdict | id, action_id, verdict, rule_id, policy_version, evaluated_at, actor | **Exactly one per action, always** — including allow |
 | **`approval`** `AO` | A human decision | id, action_id, action_version_hash, required_role, approver_user_id, decision, justification, requested_at, decided_at, expires_at | `approver ≠ proposer`; hash must match at execution (SI-6) |
@@ -140,7 +162,7 @@ Every entity required by the brief, plus those the design makes necessary. `AO` 
 |---|---|---|---|
 | **`knowledge_document`** | Source document | id, tenant_id, source_uri, doc_type, version, superseded_by, acl_labels, trust_class, source_updated_at, ingested_at, content_hash | Versioned, never overwritten (DM-5) |
 | **`knowledge_chunk`** | Retrievable unit | id, document_id, tenant_id, seq, text, embedding, embedding_model_id, chunk_strategy, service_ids, environments, acl_labels | Embedding model recorded per chunk; scope columns are query predicates |
-| **`verified_outcome`** | T5 memory | id, tenant_id, root_cause_class, context_signature, action_ref, observed_effect, verification_verdict, support_count, first_seen, last_seen | `support_count = 1` is **never** auto-promoted (§10) |
+| **`memory_entry`** | Durable memory (T4/T5, discriminated by `kind`) | id, tenant_id, root_cause_class, context_signature, action_ref, observed_effect, verification_verdict, support_count, first_seen, last_seen | `support_count = 1` is **never** auto-promoted (§10) |
 | **`memory_promotion`** | Governed write | id, proposed_by, target(`T4`\|`T5`), payload, approval_id, status, created_version | Requires an `approval` row (SI-12) |
 | **`postmortem`** | Draft artifact | id, incident_id, content, citations[], status(`draft`\|`reviewed`\|`published`), authored_by, reviewed_by | Cannot reach `published` without a human reviewer |
 
@@ -297,13 +319,23 @@ ADMINISTRATION
 
 ---
 
-## 9. What Phase 3 must decide
+## 9. What Phase 3 decided, and what remains open
 
-Deliberately left open, because deciding them without an implementation would be invention:
+**Decided and implemented:**
 
-1. Physical partitioning boundaries and retention automation.
-2. Whether `evidence.content` lives inline or in object storage above a size threshold.
-3. pgvector index type and parameters (HNSW vs IVFFlat), driven by measured corpus size.
-4. Whether workflow checkpoints share the primary database or get their own.
-5. Concrete RLS policy expressions and the session-context mechanism.
-6. Whether `timeline_event` is a materialised view or a maintained table.
+| Question | Decision | Where |
+|---|---|---|
+| Concrete RLS policy expressions and session-context mechanism | `app.current_tenant_id()` reading a transaction-local setting; `USING` + `WITH CHECK` + `FORCE` on all 30 tenant-scoped tables | [`tenancy-and-rls.md`](./tenancy-and-rls.md), [ADR-0011](../adr/0011-authentication-authorization-tenancy.md) |
+| `timeline_event`: view or table | A maintained table written only by the projection, with a unique constraint on `source_event_id` making the projection idempotent | [ADR-0014](../adr/0014-materialised-incident-status.md) |
+| Closed vocabularies: enum or varchar | Native PostgreSQL `ENUM` — two safety constraints depend on the column only holding known values | [ADR-0012](../adr/0012-native-postgresql-enum-types.md) |
+| Cross-tenant references | Composite foreign keys carrying `tenant_id` | [ADR-0013](../adr/0013-composite-tenant-foreign-keys.md) |
+| pgvector index type | HNSW with `vector_cosine_ops`, `m=16`, `ef_construction=64` | `knowledge_chunk` model |
+
+**Still open, deliberately — deciding these without measurement would be invention:**
+
+1. Physical partitioning boundaries and retention automation (Phase 13).
+2. Whether `evidence.content` lives inline or in object storage above a size threshold —
+   needs a measured size distribution.
+3. Whether HNSW parameters suit the real corpus — needs the retrieval evaluation set
+   (Phase 6, [ADR-0008](../adr/0008-rag-retrieval-strategy.md)).
+4. Whether workflow checkpoints share the primary database or get their own (Phase 4).

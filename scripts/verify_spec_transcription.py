@@ -27,8 +27,11 @@ import zipfile
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_DOCX = REPO_ROOT / "docs" / "spec" / (
-    "Autonomous SRE Incident Commander - Master Project Prompt V3.docx"
+DEFAULT_DOCX = (
+    REPO_ROOT
+    / "docs"
+    / "spec"
+    / ("Autonomous SRE Incident Commander - Master Project Prompt V3.docx")
 )
 DEFAULT_MD = REPO_ROOT / "docs" / "spec" / "MASTER_PROJECT_PROMPT_V3.md"
 
@@ -74,9 +77,9 @@ def normalize(line: str) -> str:
     """
     text = unicodedata.normalize("NFC", line).strip()
     text = text.replace("\t", " ")
-    text = text.lstrip("#").strip()          # Markdown headings
-    text = re.sub(r"^[-*+]\s+", "", text)    # Markdown bullets
-    text = re.sub(r"^\d+\.\s+", "", text)    # Markdown ordered-list markers
+    text = text.lstrip("#").strip()  # Markdown headings
+    text = re.sub(r"^[-*+]\s+", "", text)  # Markdown bullets
+    text = re.sub(r"^\d+\.\s+", "", text)  # Markdown ordered-list markers
     text = text.lstrip("•").strip()  # literal bullet glyphs from the .docx
     text = text.replace("*", "").replace("`", "")  # emphasis / code spans
     text = re.sub(r"\s+", " ", text)
@@ -111,9 +114,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--docx", type=Path, default=DEFAULT_DOCX)
     parser.add_argument("--md", type=Path, default=DEFAULT_MD)
-    parser.add_argument(
-        "-v", "--verbose", action="store_true", help="print every compared line"
-    )
+    parser.add_argument("-v", "--verbose", action="store_true", help="print every compared line")
     args = parser.parse_args()
 
     for path in (args.docx, args.md):
@@ -128,8 +129,8 @@ def main() -> int:
     target = content_set(raw_target)
     source_set, target_set = set(source), set(target)
 
-    missing = [line for line in source if line not in target_set]   # dropped
-    added = [line for line in target if line not in source_set]     # invented
+    missing = [line for line in source if line not in target_set]  # dropped
+    added = [line for line in target if line not in source_set]  # invented
 
     # The numbered sections must appear in the Markdown in the source's order.
     source_headings = headings(raw_source, DOCX_HEADING_RE)
@@ -153,7 +154,9 @@ def main() -> int:
         for line in missing:
             print(f"  - {line}", file=sys.stderr)
     if added:
-        print("\nPresent in Markdown but NOT in .docx (possible invented content):", file=sys.stderr)
+        print(
+            "\nPresent in Markdown but NOT in .docx (possible invented content):", file=sys.stderr
+        )
         for line in added:
             print(f"  + {line}", file=sys.stderr)
     if not heading_order_ok:

@@ -8,9 +8,16 @@ Every requirement identifier defined in the SRS appears here exactly once, mappe
 architecture component that will satisfy it, the phase in which it is built, how it will be
 validated, and the acceptance criterion.
 
-> **The "Status" of every row is `Not implemented`.** The column is omitted from the tables
-> below rather than repeated 138 times. It will be added when implementation begins, and no
-> row may be marked otherwise without a passing test referenced by name.
+> **Implementation status.** Phase 3 (domain model and tenant-aware persistence) is
+> complete; every other phase is not started. Rather than repeat a status column 138 times,
+> the rule is: a requirement is implemented **only** where a passing test is named in the
+> Validation column *and* that test exists and passes today.
+>
+> As of Phase 3 that applies to the persistence-layer half of FR-INC-04, FR-ING-03,
+> FR-ING-05, FR-REM-03, FR-REM-05, FR-REM-08, FR-POL-03, FR-APR-04, FR-APR-05, FR-VRF-03,
+> FR-MEM-02, FR-MEM-04, FR-EVL-09, FR-API-02, NFR-SEC-03 and NFR-REL-06 — the *schema and
+> constraints* that make them enforceable. **The behaviour that uses them is not built.**
+> No row may be described as fully implemented until its behaviour exists too.
 
 Coverage is enforced by `scripts/validate_docs.py`, which fails if any SRS identifier is
 missing here or if an identifier appears here that the SRS does not define.

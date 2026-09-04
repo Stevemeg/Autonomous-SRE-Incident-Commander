@@ -28,32 +28,87 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 # Files whose *content* is not scanned (binary or lock-style), though their presence and
 # path are still checked.
 BINARY_SUFFIXES = {
-    ".docx", ".xlsx", ".pptx", ".pdf", ".png", ".jpg", ".jpeg", ".gif", ".ico",
-    ".webp", ".svg", ".zip", ".gz", ".tar", ".whl", ".woff", ".woff2", ".ttf",
-    ".eot", ".mp4", ".mov", ".so", ".dll", ".dylib", ".pyc", ".jpeg",
+    ".docx",
+    ".xlsx",
+    ".pptx",
+    ".pdf",
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".gif",
+    ".ico",
+    ".webp",
+    ".svg",
+    ".zip",
+    ".gz",
+    ".tar",
+    ".whl",
+    ".woff",
+    ".woff2",
+    ".ttf",
+    ".eot",
+    ".mp4",
+    ".mov",
+    ".so",
+    ".dll",
+    ".dylib",
+    ".pyc",
 }
 
 # Secret-shaped content. Each entry: (label, compiled pattern).
 SECRET_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     ("AWS access key id", re.compile(r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b")),
-    ("AWS secret access key", re.compile(r"(?i)aws.{0,20}secret.{0,20}['\"][0-9a-zA-Z/+]{40}['\"]")),
+    (
+        "AWS secret access key",
+        re.compile(r"(?i)aws.{0,20}secret.{0,20}['\"][0-9a-zA-Z/+]{40}['\"]"),
+    ),
     ("GitHub token", re.compile(r"\bgh[pousr]_[A-Za-z0-9]{36,}\b")),
     ("GitHub fine-grained token", re.compile(r"\bgithub_pat_[A-Za-z0-9_]{22,}\b")),
     ("Slack token", re.compile(r"\bxox[abporsu]-[A-Za-z0-9-]{10,}\b")),
     ("Slack webhook", re.compile(r"https://hooks\.slack\.com/services/T[A-Za-z0-9/+]{20,}")),
-    ("Microsoft Teams webhook", re.compile(r"https://[a-z0-9.-]*webhook\.office\.com/webhookb2/[A-Za-z0-9@/-]{20,}")),
+    (
+        "Microsoft Teams webhook",
+        re.compile(r"https://[a-z0-9.-]*webhook\.office\.com/webhookb2/[A-Za-z0-9@/-]{20,}"),
+    ),
     ("OpenAI API key", re.compile(r"\bsk-(?:proj-)?[A-Za-z0-9_-]{32,}\b")),
     ("Anthropic API key", re.compile(r"\bsk-ant-[A-Za-z0-9_-]{24,}\b")),
     ("Google API key", re.compile(r"\bAIza[0-9A-Za-z_-]{35}\b")),
     ("Google service-account key", re.compile(r'"type"\s*:\s*"service_account"')),
-    ("PagerDuty API key", re.compile(r"(?i)\b(?:pd|pagerduty)[_-]?(?:api[_-]?)?key['\"]?\s*[:=]\s*['\"][A-Za-z0-9_+-]{16,}['\"]")),
-    ("JIRA API token", re.compile(r"(?i)\bjira.{0,20}token['\"]?\s*[:=]\s*['\"][A-Za-z0-9]{20,}['\"]")),
-    ("Private key block", re.compile(r"-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP )?PRIVATE KEY-----")),
+    (
+        "PagerDuty API key",
+        re.compile(
+            r"(?i)\b(?:pd|pagerduty)[_-]?(?:api[_-]?)?key['\"]?\s*[:=]\s*['\"][A-Za-z0-9_+-]{16,}['\"]"
+        ),
+    ),
+    (
+        "JIRA API token",
+        re.compile(r"(?i)\bjira.{0,20}token['\"]?\s*[:=]\s*['\"][A-Za-z0-9]{20,}['\"]"),
+    ),
+    (
+        "Private key block",
+        re.compile(r"-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP )?PRIVATE KEY-----"),
+    ),
     ("JWT", re.compile(r"\bey[A-Za-z0-9_-]{10,}\.ey[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b")),
-    ("Bearer token literal", re.compile(r"(?i)authorization\s*[:=]\s*['\"]?bearer\s+[A-Za-z0-9._-]{20,}")),
-    ("Password assignment", re.compile(r"(?i)\b(?:password|passwd|pwd)\s*[:=]\s*['\"][^'\"\s]{6,}['\"]")),
-    ("Generic secret assignment", re.compile(r"(?i)\b(?:api[_-]?key|secret[_-]?key|access[_-]?token|auth[_-]?token|client[_-]?secret)\s*[:=]\s*['\"][^'\"\s]{12,}['\"]")),
-    ("Connection string with credentials", re.compile(r"(?i)\b(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis|amqp)://[^:\s/]+:[^@\s]+@")),
+    (
+        "Bearer token literal",
+        re.compile(r"(?i)authorization\s*[:=]\s*['\"]?bearer\s+[A-Za-z0-9._-]{20,}"),
+    ),
+    (
+        "Password assignment",
+        re.compile(r"(?i)\b(?:password|passwd|pwd)\s*[:=]\s*['\"][^'\"\s]{6,}['\"]"),
+    ),
+    (
+        "Generic secret assignment",
+        re.compile(
+            r"(?i)\b(?:api[_-]?key|secret[_-]?key|access[_-]?token|auth[_-]?token|client[_-]?secret)\s*[:=]\s*['\"][^'\"\s]{12,}['\"]"
+        ),
+    ),
+    (
+        "Connection string with credentials",
+        re.compile(
+            r"(?i)\b(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis|amqp)://[^:\s/]+:[^@\s]+@"
+        ),
+    ),
 ]
 
 # Values that look secret-shaped but are obviously placeholders.
@@ -68,14 +123,20 @@ FORBIDDEN_PATH_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     ("private key file", re.compile(r"\.(?:pem|key|p12|pfx|der)$")),
     ("SSH key", re.compile(r"(^|/)id_(?:rsa|ed25519|ecdsa|dsa)(\.|$)")),
     ("kubeconfig", re.compile(r"(?i)(^|/)(?:kubeconfig|.*\.kubeconfig)$")),
-    ("cloud credentials", re.compile(r"(?i)(^|/)(?:credentials|service-account[^/]*\.json|gcp-[^/]*\.json)$")),
+    (
+        "cloud credentials",
+        re.compile(r"(?i)(^|/)(?:credentials|service-account[^/]*\.json|gcp-[^/]*\.json)$"),
+    ),
     ("terraform state", re.compile(r"\.tfstate(\.|$)")),
     ("terraform variables", re.compile(r"\.tfvars$")),
     ("python bytecode cache", re.compile(r"(^|/)__pycache__/|\.pyc$")),
     ("virtual environment", re.compile(r"(^|/)(?:\.venv|venv|env|ENV)/")),
     ("node modules", re.compile(r"(^|/)node_modules/")),
     ("build output", re.compile(r"(^|/)(?:dist|build|out|\.next|\.turbo)/")),
-    ("tool cache", re.compile(r"(^|/)\.(?:pytest_cache|mypy_cache|ruff_cache|eslintcache|nyc_output)(/|$)")),
+    (
+        "tool cache",
+        re.compile(r"(^|/)\.(?:pytest_cache|mypy_cache|ruff_cache|eslintcache|nyc_output)(/|$)"),
+    ),
     ("coverage artifact", re.compile(r"(^|/)(?:htmlcov/|\.coverage($|\.)|coverage\.xml$)")),
     ("OS junk", re.compile(r"(?i)(^|/)(?:\.DS_Store|Thumbs\.db|Desktop\.ini|ehthumbs\.db)$")),
     ("editor state", re.compile(r"(^|/)\.idea/")),
@@ -90,7 +151,10 @@ def tracked_files() -> list[Path]:
     try:
         listed = subprocess.run(
             ["git", "ls-files", "--cached", "--others", "--exclude-standard"],
-            cwd=REPO_ROOT, capture_output=True, text=True, check=True,
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            check=True,
         ).stdout
     except (subprocess.CalledProcessError, FileNotFoundError) as exc:
         print(f"ERROR: could not list Git files: {exc}", file=sys.stderr)
@@ -138,9 +202,7 @@ def scan_content(path: Path, rel: str) -> list[str]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--quiet", action="store_true", help="only print findings and the verdict"
-    )
+    parser.add_argument("--quiet", action="store_true", help="only print findings and the verdict")
     args = parser.parse_args()
 
     files = tracked_files()

@@ -1,0 +1,8 @@
+Alembic migrations for the Autonomous SRE Incident Commander.
+
+Migrations run as the schema OWNER role. The application connects as a separate, less
+privileged role (`asic_app`) that is subject to row-level security and holds no
+UPDATE/DELETE grant on append-only tables.
+
+Connection string comes from ASIC_MIGRATION_DATABASE_URL or ASIC_DATABASE_URL. It is
+deliberately absent from alembic.ini so that no credential is ever committed.

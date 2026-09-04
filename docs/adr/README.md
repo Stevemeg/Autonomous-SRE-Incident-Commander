@@ -1,9 +1,14 @@
 # Architecture Decision Records
 
-> **Status: eleven records written during the Architecture Package; none is Accepted.**
-> All are `Proposed`, `Needs validation` or `Deferred` pending owner approval of the
-> Architecture Package and, where stated, pending measurement. **No decision below is
-> binding on implementation yet.**
+> **Fourteen records. Three are Accepted.**
+>
+> ADRs 0001-0011 were written during the Architecture Package and remain `Proposed`,
+> `Needs validation` or `Deferred`; the Architecture Package itself is approved, but each
+> of those decisions becomes binding only as the phase that implements it lands.
+>
+> ADRs 0012-0014 were raised *during* Phase 3, decided, implemented and verified by tests.
+> They are `Accepted` because the evidence exists: each names the passing tests that
+> confirm it.
 
 ## Why ADRs are mandatory here
 
@@ -68,6 +73,9 @@ Use [`0000-adr-template.md`](./0000-adr-template.md) as the starting point.
 | [0009](./0009-memory-architecture-tiers.md) | Memory architecture — five tiers, human-gated promotion | `Proposed` | 8, 10 | 2026-09-04 |
 | [0010](./0010-observability-and-evaluation-tooling.md) | Observability tooling — OTel-native, not LangSmith or Phoenix | `Proposed` | 9, 10, 11, 13 | 2026-09-04 |
 | [0011](./0011-authentication-authorization-tenancy.md) | Authentication, authorization and tenancy model | `Proposed` | 15 | 2026-09-04 |
+| [0012](./0012-native-postgresql-enum-types.md) | Native PostgreSQL ENUM types for closed vocabularies | **`Accepted`** | 12, 15, 20 | 2026-09-04 |
+| [0013](./0013-composite-tenant-foreign-keys.md) | Composite tenant-scoped foreign keys | **`Accepted`** | 15 | 2026-09-04 |
+| [0014](./0014-materialised-incident-status.md) | Materialised incident status, reconciled against the event log | **`Accepted`** | 12 | 2026-09-04 |
 
 ## Priority order for acceptance
 
@@ -87,6 +95,17 @@ contract, so they block Phase 3 onward; the rest can be accepted as their eviden
 | 9 | 0008 RAG retrieval | Phase 6, revisit Phase 11 | `Needs validation` — resolved by measurement, not debate |
 | 10 | 0006 Redis | Revisit Phase 15 | `Deferred` — trigger is a load measurement |
 | 11 | 0007 Message broker | Revisit Phase 15 | `Deferred` — trigger is a load measurement |
+
+## Decisions raised by Phase 3
+
+Recorded here because the Phase 3 brief requires that architectural decisions discovered
+during implementation become ADRs rather than being made silently:
+
+| ADR | Discovered because | Evidence |
+|---|---|---|
+| [0012](./0012-native-postgresql-enum-types.md) | Two safety check constraints (`risk_tier <> 'r3'`, external-event provenance) are only meaningful if the column cannot hold an unknown value | `TestEnumTypeParity`; migration round-trip verified |
+| [0013](./0013-composite-tenant-foreign-keys.md) | RLS controls what a session *sees*, not what a row *references*; a cross-tenant reference passes RLS | `TestCompositeForeignKeys`; `test_references_between_tenant_scoped_tables_carry_the_tenant` |
+| [0014](./0014-materialised-incident-status.md) | "Status is derived from the log" needed a physical answer that did not make the dashboard's main query unaffordable | `test_status_divergence_from_the_log_is_detected` |
 
 ## Candidate decisions still to be written
 
