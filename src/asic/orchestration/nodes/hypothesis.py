@@ -44,7 +44,7 @@ from asic.contracts.state import (
     NodeFailureRef,
 )
 from asic.db.models.investigation import Evidence, Hypothesis, HypothesisEvidence
-from asic.domain.budget import BudgetLedger, BudgetState
+from asic.domain.budget import BudgetState
 from asic.domain.enums import (
     EvidenceRelation,
     HypothesisStatus,
@@ -483,10 +483,13 @@ def _failure(
 
 
 def _budget_state(state: GraphState, deps: NodeDependencies) -> BudgetState:
-    snapshot = state.get("budget")
-    if snapshot is None:
-        return BudgetState.initial(deps.budget_policy)
-    return BudgetState(policy=deps.budget_policy, ledger=BudgetLedger.from_dict(snapshot.consumed))
+    """The run's budget, with the wall clock read at the moment of the call.
+
+    Delegated so every node observes elapsed time the same way. Reading the snapshot alone
+    would give a figure that was correct when the last checkpoint was written and stale by
+    the time this node checks whether it may take another step.
+    """
+    return deps.budget_from(state.get("budget"))
 
 
 def _snapshot(budget: BudgetState) -> BudgetSnapshot:

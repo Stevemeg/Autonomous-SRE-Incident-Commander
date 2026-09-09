@@ -1,6 +1,6 @@
 # Architecture Decision Records
 
-> **Seventeen records. Six are Accepted.**
+> **Eighteen records. Seven are Accepted.**
 >
 > ADRs 0001-0011 were written during the Architecture Package. Three of them - 0002, 0003
 > and 0005 - are now `Accepted`, because Phase 4 implemented them and the evidence exists.
@@ -80,6 +80,7 @@ Use [`0000-adr-template.md`](./0000-adr-template.md) as the starting point.
 | [0015](./0015-domain-owned-checkpointing.md) | Domain-owned checkpointing, not the LangGraph checkpointer | **`Accepted`** | 12 | 2026-09-07 |
 | [0016](./0016-deterministic-model-provider.md) | A deterministic model provider for Phase 4; no live provider yet | **`Accepted`** | 9, 10, 11, 14, 20 | 2026-09-07 |
 | [0017](./0017-read-only-capability-ceiling.md) | A read-only capability ceiling enforced in three independent places | **`Accepted`** | 6, 7, 15 | 2026-09-07 |
+| [0018](./0018-migrations-are-historical-contracts.md) | Migrations are historical contracts and never read live application code | **`Accepted`** | 12, 15, 20 | 2026-09-09 |
 
 ## Priority order for acceptance
 
@@ -118,6 +119,7 @@ during implementation become ADRs rather than being made silently:
 | [0015](./0015-domain-owned-checkpointing.md) | ADR-0002 required durability to be ours; a framework checkpointer cannot commit in the node's own transaction, nor reconcile against durable rows | `TestCheckpointing`, `TestResume` |
 | [0016](./0016-deterministic-model-provider.md) | Two nodes are model-backed, but nothing in this phase can evaluate a model's output — so a live provider would buy an unreadable signal at the cost of determinism | `test_planner.py`, `test_hypothesis.py`, `test_scenarios.py` |
 | [0017](./0017-read-only-capability-ceiling.md) | The remediation authorization path is Phase 8; a registered write tool before it would be a capability authorized by nothing | `TestRiskCeiling`, `TestRefusals`, negative-tested boundary validator |
+| [0018](./0018-migrations-are-historical-contracts.md) | A migration deriving its table list from the live model registry silently changed what an earlier migration did, and broke fresh installs | `TestPinnedListsMatchHistory`, `TestMigrationsAreSelfContained`, `TestUpgradePaths` |
 
 ## Candidate decisions still to be written
 

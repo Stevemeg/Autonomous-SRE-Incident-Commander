@@ -26,8 +26,13 @@ approval, verifies outcomes, and preserves operational memory.
 > Phase 4 delivered five graph nodes under enforced contracts, a tool broker that is the
 > sole egress point, six deterministic simulators, eleven scenarios, budgets checked before
 > every step, at-least-once execution with effect-level idempotency, and OpenTelemetry spans
-> persisted alongside the work they describe. **433 tests pass** (246 of them with no
+> persisted alongside the work they describe. **468 tests pass** (266 of them with no
 > database required).
+>
+> Which timeouts are *enforced* and which are merely declared is set out in
+> [`docs/architecture/orchestration-kernel.md`](docs/architecture/orchestration-kernel.md)
+> §11 — including the one that is not, and why fixing it needs a different execution model
+> rather than a bigger number.
 >
 > **Start here:** [`docs/architecture/PROJECT_INITIATION_AND_ARCHITECTURE_PACKAGE.md`](docs/architecture/PROJECT_INITIATION_AND_ARCHITECTURE_PACKAGE.md)
 > — sections A–Q. Then [`docs/architecture/orchestration-kernel.md`](docs/architecture/orchestration-kernel.md)
@@ -121,7 +126,7 @@ If the two ever disagree, the `.docx` wins and the Markdown is the defect.
 │   │                    tool registry, safety policy, memory/RAG,
 │   │                    observability, data model/API, failure & recovery,
 │   │                    requirements traceability, CI/CD and infrastructure
-│   ├── adr/             17 Architecture Decision Records        (6 Accepted)
+│   ├── adr/             18 Architecture Decision Records        (7 Accepted)
 │   ├── security/        Threat model + repository checklist (active)
 │   └── evaluation/      Evaluation harness architecture
 ├── src/asic/
@@ -205,7 +210,7 @@ section O.
 | 12 | OpenTelemetry, metrics, logs, dashboards and SLOs | Not started |
 | 13 | Security, RBAC, tenant isolation and supply-chain controls | Not started |
 | 14 | CI/CD, Docker, Kubernetes and Terraform | Not started |
-| 15 | Load, resilience, chaos, security and E2E hardening | Not started |
+| 15 | Load, resilience, chaos, security and E2E hardening | Not started — carries two named obligations from Phase 4: concurrency under a shared connection pool, and preemptible node execution |
 | 16 | Documentation, demo scenarios, portfolio evidence and production-readiness review | Not started |
 
 Phase 0 is not part of the specification's roadmap; it is the repository groundwork that

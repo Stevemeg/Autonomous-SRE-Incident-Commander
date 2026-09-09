@@ -25,14 +25,25 @@ from __future__ import annotations
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import datetime
 from types import TracebackType
 from typing import Final
 
 from sqlalchemy.orm import Session
 
-from asic.contracts.state import InvestigationObjective, RunIdentity, TraceContext
-from asic.db.session import bind_tenant
-from asic.domain.budget import BudgetPolicy
+from asic.contracts.state import (
+    BudgetSnapshot,
+    InvestigationObjective,
+    RunIdentity,
+    TraceContext,
+)
+from asic.db.session import (
+    DEFAULT_IDLE_IN_TRANSACTION_TIMEOUT_MS,
+    DEFAULT_STATEMENT_TIMEOUT_MS,
+    apply_statement_timeouts,
+    bind_tenant,
+)
+from asic.domain.budget import BudgetLedger, BudgetPolicy, BudgetState
 from asic.domain.clock import Clock
 from asic.llm.port import ModelProvider
 from asic.observability.audit import AuditWriter
@@ -82,11 +93,26 @@ class UnitOfWork:
     is how a node's writes end up committed apart from the checkpoint that describes them.
     """
 
-    __slots__ = ("_factory", "_session", "_tenant_id")
+    __slots__ = (
+        "_factory",
+        "_idle_in_transaction_timeout_ms",
+        "_session",
+        "_statement_timeout_ms",
+        "_tenant_id",
+    )
 
-    def __init__(self, factory: SessionFactory, *, tenant_id: uuid.UUID) -> None:
+    def __init__(
+        self,
+        factory: SessionFactory,
+        *,
+        tenant_id: uuid.UUID,
+        statement_timeout_ms: int = DEFAULT_STATEMENT_TIMEOUT_MS,
+        idle_in_transaction_timeout_ms: int = DEFAULT_IDLE_IN_TRANSACTION_TIMEOUT_MS,
+    ) -> None:
         self._factory = factory
         self._tenant_id = tenant_id
+        self._statement_timeout_ms = statement_timeout_ms
+        self._idle_in_transaction_timeout_ms = idle_in_transaction_timeout_ms
         self._session: Session | None = None
 
     @property
@@ -108,6 +134,15 @@ class UnitOfWork:
             raise RuntimeError("a unit of work is already open; nesting is not supported")
         session = self._factory()
         bind_tenant(session, self._tenant_id)
+        # Both settings are transaction-local, so they die with the unit of work and cannot
+        # leak onto a pooled connection. This is the one bound in the system that a server
+        # enforces: PostgreSQL cancels an over-running statement whether or not anything in
+        # this process is watching.
+        apply_statement_timeouts(
+            session,
+            statement_timeout_ms=self._statement_timeout_ms,
+            idle_in_transaction_timeout_ms=self._idle_in_transaction_timeout_ms,
+        )
         self._session = session
         return session
 
@@ -160,11 +195,37 @@ class NodeDependencies:
     audit: AuditWriter
     checkpoints: CheckpointStore
     clock: Clock
+    #: When the *run* began, from the execution trace. Wall-clock elapsed time is measured
+    #: against this, so a resumed run keeps counting rather than starting again.
+    run_started_at: datetime
     budget_policy: BudgetPolicy = field(default_factory=BudgetPolicy)
 
     @property
     def session(self) -> Session:
         return self.unit_of_work.session
+
+    @property
+    def elapsed_seconds(self) -> float:
+        """How long this run has been going, measured rather than accumulated."""
+        return max(0.0, (self.clock.now() - self.run_started_at).total_seconds())
+
+    def budget_from(self, snapshot: BudgetSnapshot | None) -> BudgetState:
+        """Rebuild the budget from a state snapshot, with the wall clock brought up to date.
+
+        Every node calls this rather than reading the snapshot directly. The snapshot's
+        elapsed figure was correct when it was written; by the time a node reads it, time
+        has passed. Observing the clock here is what makes the wall-clock limit bind
+        *before* the next step instead of only being noticed after the run ends.
+        """
+        base = (
+            BudgetState.initial(self.budget_policy)
+            if snapshot is None
+            else BudgetState(
+                policy=self.budget_policy,
+                ledger=BudgetLedger.from_dict(snapshot.consumed),
+            )
+        )
+        return base.observe_elapsed(self.elapsed_seconds)
 
 
 __all__ = [

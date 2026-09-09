@@ -25,7 +25,7 @@ area and points to the document that owns the detail.
 | [`architecture/`](./architecture/) | A–Q package spine, architecture overview, C4, agent topology, tool registry, safety policy, memory/RAG, observability, data model/API, failure & recovery, traceability, CI/CD | **Authored** |
 | [`architecture/tenancy-and-rls.md`](./architecture/tenancy-and-rls.md) | How tenant isolation survives an application bug | **Implemented and tested** |
 | [`architecture/orchestration-kernel.md`](./architecture/orchestration-kernel.md) | The graph, node contracts, tool broker, budgets, checkpointing and trace model | **Implemented and tested** |
-| [`adr/`](./adr/) | 17 Architecture Decision Records | 11 open; **6 Accepted** (verified in Phase 3 and Phase 4) |
+| [`adr/`](./adr/) | 18 Architecture Decision Records | 11 open; **7 Accepted** (verified in Phase 3 and Phase 4) |
 | [`security/`](./security/) | Threat model (§L) and the active repository security checklist | **Authored** |
 | [`evaluation/`](./evaluation/) | Evaluation harness architecture (§I) | **Authored** |
 

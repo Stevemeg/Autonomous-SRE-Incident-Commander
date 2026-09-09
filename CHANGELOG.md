@@ -22,6 +22,67 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Migration history is a contract again.** Migration `0003` derived its table list from
+  the live model registry, so adding one tenant-scoped table in Phase 4 silently changed
+  what a Phase 3 migration would do — and a fresh `alembic upgrade head` began failing on a
+  table `0002` had never created. The lists are now literal, and three things make that
+  safe rather than merely convenient:
+
+  - the pinned lists were **proved identical** to what the original derivation produced,
+    by extracting the models from the Phase 3 commit and comparing the sets — 30
+    tenant-scoped and 9 append-only tables, symmetric difference empty in both cases, and
+    re-checked on every test run;
+  - restoring the original was **demonstrated non-viable**: run against an empty database
+    with today's models it fails with `relation "workflow_checkpoint" does not exist`, and
+    no corrective migration can help because `0003` fails before one would be reached;
+  - the upgrade path that matters is now tested against a real throwaway database — a
+    database at the pre-Phase-4 head reaching current head, alongside clean-to-head, a full
+    round trip, and drift detection.
+
+  A guard test parses every migration's AST and fails the build if one reads
+  `tenant_scoped_tables()` or `append_only_tables()` again. Recorded as
+  [ADR-0018](docs/adr/0018-migrations-are-historical-contracts.md), which also documents the
+  evidence that no persistent database consumed the original.
+
+- **The wall-clock budget is now enforced, not merely declared.** `elapsed_seconds` was
+  never charged, so `BudgetKind.WALL_CLOCK` always read zero and the timeout rule could
+  never fire: a run could exceed its deadline indefinitely provided it stayed under the
+  iteration count. Elapsed time is now *observed* — measured as now minus the run's start,
+  rather than summed from node durations, so it counts the gaps between nodes and the time a
+  suspended run spent waiting. It is read at every node boundary and at every node entry,
+  and a resumed run continues from `execution_trace.started_at` so an interruption cannot
+  hand it a fresh allowance.
+
+- **Database work now has a server-enforced bound.** Every unit of work sets
+  `statement_timeout` and `idle_in_transaction_session_timeout`, transaction-locally so they
+  cannot leak onto a pooled connection. This is the only timeout in the system that a
+  *server* enforces: PostgreSQL cancels the statement whether or not anything in the process
+  is watching. The statement bound sits at or below the shortest node timeout and the idle
+  bound above the longest, both asserted by tests rather than by arithmetic in a comment.
+
+### Changed
+
+- **Timeout claims now match behaviour.** `docs/architecture/orchestration-kernel.md` §11
+  states, per layer, whether a timeout is enforced and by what. Four are enforced — database
+  statement and idle-in-transaction by PostgreSQL, tool invocation by the broker's deadline,
+  and the investigation wall clock at step boundaries. **Node execution is declared and not
+  preemptible**, and the reason is recorded rather than glossed: a node holds an open
+  transaction on a psycopg2 connection, and abandoning its thread would leave that thread
+  writing through a connection the kernel is rolling back, corrupting the checkpoint that
+  makes the run recoverable. Proper enforcement needs an async execution model or a per-node
+  connection closable out of band; it is a **Phase 15 obligation**, and a test asserts the
+  kernel does not preempt so the claim cannot drift from the code.
+
+- The broker's adapter deadline is now proved against an adapter that genuinely never
+  returns, rather than one that raises a timeout error. The previous test exercised the
+  error path; this one exercises the execution boundary.
+
+- Migration `0005`'s downgrade documents that it fails by design once any tool has run:
+  `ON DELETE RESTRICT` protects execution history from losing the catalogue row that
+  explains it. Referential integrity was not weakened to make the downgrade succeed.
+
 ### Added
 
 - **Phase 4 — orchestration kernel: agent state machine, planner, tool registry and
@@ -120,8 +181,9 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   - **Dependencies.** `langgraph` (ADR-0002) and `opentelemetry-api`/`-sdk` (ADR-0010). No
     model provider SDK, no HTTP framework, no infrastructure client.
 
-  - **Validated:** 433 tests pass (246 needing no database); `ruff`, `ruff format --check`
-    and `mypy --strict` clean across 60 source files; migrations round-trip to base and back
+  - **Validated:** 468 tests pass (266 needing no database) after the Phase 4
+    corrections; `ruff`, `ruff format --check` and `mypy --strict` clean across 60
+    source files; migrations round-trip to base and back
     with no orphan enum types and no schema drift; specification transcription, repository
     hygiene and documentation validation all clean. **No performance was measured and no
     claim is made about the quality of the system's reasoning** — the harness that could

@@ -28,7 +28,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
-from datetime import UTC, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any, Final
 
 import sqlalchemy as sa
@@ -178,6 +178,7 @@ class InvestigationKernel:
             _assert_behaviour_version(session, behaviour_version_id)
 
             correlation_id = uuid.uuid4()
+            run_started_at = self._clock.now()
             run = WorkflowRun(
                 id=uuid.uuid4(),
                 tenant_id=tenant_id,
@@ -238,7 +239,7 @@ class InvestigationKernel:
         context = RunContext(
             identity=identity, trace=trace, scope=scope, lease_owner=self._lease_owner
         )
-        return self._drive(context, objective, state, resumed=False)
+        return self._drive(context, objective, state, resumed=False, run_started_at=run_started_at)
 
     # ----------------------------------------------------------------------- resume
 
@@ -304,6 +305,9 @@ class InvestigationKernel:
                 correlation_id=str(trace_row.correlation_id),
             )
             objective = _objective(session, incident, scope)
+            # The original start, not now: an interruption must not hand a run a fresh
+            # wall-clock allowance.
+            run_started_at = trace_row.started_at
             state, report = rehydrate(
                 session,
                 checkpoint=checkpoint,
@@ -360,6 +364,7 @@ class InvestigationKernel:
             objective,
             state,
             resumed=True,
+            run_started_at=run_started_at,
             rehydration=report,
             span_ordinal=span_ordinal,
         )
@@ -373,10 +378,17 @@ class InvestigationKernel:
         state: GraphState,
         *,
         resumed: bool,
+        run_started_at: datetime,
         rehydration: RehydrationReport | None = None,
         span_ordinal: int = 0,
     ) -> RunOutcome:
-        """Run the graph, committing and checkpointing at every node boundary."""
+        """Run the graph, committing and checkpointing at every node boundary.
+
+        ``run_started_at`` is the instant the *run* began, taken from the execution trace,
+        so a resumed run keeps counting from the original start rather than restarting its
+        wall clock. That is what makes the wall-clock budget a deadline on the incident
+        rather than a per-attempt allowance an interruption could reset.
+        """
         tracer = TraceRecorder(
             tenant_id=context.tenant_id,
             execution_trace_id=uuid.UUID(context.identity.execution_trace_id),
@@ -405,12 +417,19 @@ class InvestigationKernel:
             audit=audit,
             checkpoints=checkpoints,
             clock=self._clock,
+            run_started_at=run_started_at,
             budget_policy=self._budget_policy,
         )
         graph = build_graph(deps)
 
         executed: list[str] = []
         written = 0
+        # Seed the elapsed total before the first node runs. A resumed run has already been
+        # going for a while, and without this its first planning step would see a wall clock
+        # of zero and take a step it had no time left for.
+        state = _observe_elapsed(  # type: ignore[assignment]
+            dict(state), self._budget_policy, self._clock.now(), run_started_at
+        )
         current = dict(state)
         interrupted = False
 
@@ -431,6 +450,14 @@ class InvestigationKernel:
                     executed.append(node_name)
                     self._validate(node_name, update)
                     current = _merge(current, update)
+                    # Measure the wall clock here, at the boundary, so the next planning
+                    # step's pre-flight budget check sees the real elapsed total. Without
+                    # this the wall-clock limit would be a number nothing ever compared
+                    # against, and a run could exceed its deadline indefinitely so long as
+                    # it stayed under the iteration count.
+                    current = _observe_elapsed(
+                        current, self._budget_policy, self._clock.now(), run_started_at
+                    )
                     tracer.flush(uow.session)
                     written += self._checkpoint(
                         deps,
@@ -702,6 +729,30 @@ def _merge(current: dict[str, Any], update: Mapping[str, Any]) -> dict[str, Any]
         else:
             merged[key] = value
     return merged
+
+
+def _observe_elapsed(
+    state: dict[str, Any],
+    policy: BudgetPolicy,
+    now: datetime,
+    run_started_at: datetime,
+) -> dict[str, Any]:
+    """Write the run's wall-clock total into the state's budget snapshot.
+
+    Measured against the run's start rather than summed from node durations, so it counts
+    the gaps between nodes and the time a suspended run spent waiting - which is what a
+    deadline on an incident actually means.
+    """
+    elapsed = max(0.0, (now - run_started_at).total_seconds())
+    budget = _budget_of(state, policy).observe_elapsed(elapsed)
+    updated = dict(state)
+    kind = budget.exhausted_kind()
+    updated["budget"] = BudgetSnapshot(
+        consumed=budget.ledger.to_dict(),
+        remaining=budget.remaining(),
+        exhausted_kind=kind.value if kind else None,
+    )
+    return updated
 
 
 def _budget_of(state: Mapping[str, Any], policy: BudgetPolicy) -> BudgetState:

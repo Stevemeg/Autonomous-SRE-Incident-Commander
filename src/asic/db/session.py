@@ -46,6 +46,21 @@ DATABASE_URL_ENV: Final[str] = "ASIC_DATABASE_URL"
 #: can never point at a real database.
 TEST_DATABASE_URL_ENV: Final[str] = "ASIC_TEST_DATABASE_URL"
 
+#: Server-side ceiling on a single SQL statement, in milliseconds. PostgreSQL cancels the
+#: statement itself, so this is enforcement rather than a value in a contract: a query that
+#: blocks on a lock or a runaway plan cannot hang a node indefinitely.
+#:
+#: Sized to be the innermost timeout in the stack - at or below the shortest node timeout -
+#: so a stuck query fails naming itself rather than surfacing later as a vague node
+#: failure. A statement that takes longer than this is not a slow query, it is a stuck one.
+DEFAULT_STATEMENT_TIMEOUT_MS: Final[int] = 10_000
+
+#: Server-side ceiling on how long a transaction may sit idle before PostgreSQL terminates
+#: the session. It must exceed the longest node timeout, because a node legitimately holds
+#: its transaction open across a model call while the database sees nothing happening -
+#: setting it below that would kill healthy work.
+DEFAULT_IDLE_IN_TRANSACTION_TIMEOUT_MS: Final[int] = 180_000
+
 #: Environment variable holding the *owner* connection string, used by migrations and by
 #: administrative operations such as creating a tenant. Deliberately distinct from
 #: :data:`DATABASE_URL_ENV`: the application role has no INSERT on the global catalogues,
@@ -119,6 +134,31 @@ def bind_tenant(session: Session, tenant_id: uuid.UUID) -> None:
     session.execute(
         sa.text("SELECT set_config(:setting, :value, true)"),
         {"setting": TENANT_SETTING, "value": str(tenant_id)},
+    )
+
+
+def apply_statement_timeouts(
+    session: Session,
+    *,
+    statement_timeout_ms: int = DEFAULT_STATEMENT_TIMEOUT_MS,
+    idle_in_transaction_timeout_ms: int = DEFAULT_IDLE_IN_TRANSACTION_TIMEOUT_MS,
+) -> None:
+    """Bound database work for the current transaction.
+
+    ``SET LOCAL`` so the setting dies with the transaction and cannot leak onto a pooled
+    connection - the same reason the tenant binding is transaction-local.
+
+    This is the only timeout in the system that a *server* enforces. Everything above it
+    depends on our own code noticing; PostgreSQL cancels the statement whether or not
+    anything is watching, which is what makes it the innermost and most reliable bound.
+    """
+    if statement_timeout_ms < 0 or idle_in_transaction_timeout_ms < 0:
+        raise ValueError("timeouts must be non-negative milliseconds")
+    session.execute(sa.text(f"SET LOCAL statement_timeout = {int(statement_timeout_ms)}"))
+    session.execute(
+        sa.text(
+            f"SET LOCAL idle_in_transaction_session_timeout = {int(idle_in_transaction_timeout_ms)}"
+        )
     )
 
 

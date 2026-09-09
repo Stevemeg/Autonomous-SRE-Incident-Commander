@@ -173,12 +173,18 @@ means exhaustion produces a clean partial result with everything gathered so far
 |---|---:|---|
 | Planning iterations | 12 | Planner, before the model call |
 | Tool calls | 40 | Collector, before the broker call |
-| Wall clock | 6 h | Terminator |
+| Wall clock | 6 h | Observed at every node boundary and at every node entry; refuses the next step |
 | Tokens | 200 000 | Charged after each model call, checked before the next |
 | Cost (USD) | 5.00 | As above |
 
 These are *configured* limits, not measured ones. No load test has been run and nothing
 claims they are right for production traffic.
+
+Wall clock is the one dimension that is **observed rather than accumulated**. Summing node
+durations would undercount: it would miss the gaps between nodes and the time a suspended
+run spent waiting. It is measured as *now minus the run's start*, taken from
+`execution_trace.started_at`, so a resumed run keeps counting instead of receiving a fresh
+allowance — an interruption cannot extend a deadline.
 
 A refusal is recorded explicitly as `budget_refusal`, because the ledger alone cannot express
 it: the refusal happens before the cost is paid, so a run stopped by a budget still looks
@@ -332,7 +338,64 @@ the longest node timeout, so a slow node cannot lose a lease it is still using.
 
 ---
 
-## 11. Observability
+## 11. Timeouts: what is enforced, and what is only declared
+
+The distinction matters more than the numbers. A timeout is **enforced** only if something
+cancels or abandons the operation; a value recorded in a contract and honoured by convention
+is **declarative**, and calling it enforcement would be the kind of claim this project is
+supposed to avoid.
+
+| Layer | Value | Status | What actually stops it |
+|---|---|---|---|
+| **Database statement** | 10 s | **Enforced — by the server** | PostgreSQL cancels the statement. `SET LOCAL statement_timeout` on every unit of work, so it is transaction-local and cannot leak onto a pooled connection |
+| **Idle in transaction** | 180 s | **Enforced — by the server** | PostgreSQL terminates a session idle inside a transaction. Set above the longest node timeout, because a node legitimately holds its transaction open across a model call |
+| **Tool invocation** | per descriptor, 20–30 s | **Enforced — by the caller** | The adapter runs on a worker thread and the broker abandons it at the deadline. Proved against an adapter that genuinely never returns |
+| **Investigation wall clock** | 6 h | **Enforced — at step boundaries** | Observed at every node boundary and at every node entry; the next step is refused and the run terminates as `wall_clock_timeout` |
+| **Node execution** | 10–120 s | **Declared, not enforced** | Nothing interrupts a node in flight. See §11.2 |
+
+### 11.1 Why the layers are ordered as they are
+
+Each bound is shorter than the one containing it, so the innermost fires first and the
+failure names the thing that actually stalled. A statement timeout above the shortest node
+timeout would surface a stuck query as a vague node failure; an idle-in-transaction timeout
+below the longest node timeout would kill healthy work while a model was thinking. Both
+relationships are asserted by tests rather than left to arithmetic in a comment.
+
+### 11.2 Node execution is not preemptible, and why that is not fixed here
+
+**The limitation, stated plainly.** `NodeContract.timeout_seconds` is recorded on every span
+and used for layering, but the kernel does not interrupt a node that overruns it. A node
+that blocked in pure Python — an infinite loop with no I/O — would not be stopped by the
+orchestrator.
+
+**Why not simply run nodes on a worker thread, as the broker does for adapters?** Because a
+node is not an adapter call. A node holds an open transaction on a psycopg2 connection, and
+a connection used concurrently from two threads is undefined behaviour. Abandoning a node
+mid-transaction would leave the abandoned thread writing through a connection the kernel is
+simultaneously rolling back — corrupting the very checkpoint that makes the run recoverable.
+The cure would be worse than the disease.
+
+**What bounds a slow node today.** Everything a node actually waits on is bounded: database
+statements by the server, tool calls by the broker's deadline, and model calls by the
+provider's own timeout when a real one is wired. The wall-clock budget then refuses the next
+step. The unbounded case is a node spinning in Python with no I/O at all, which is a defect
+in the node rather than a hazard the orchestrator can route around.
+
+**What proper enforcement needs**, and why it is not in this phase: an async execution model
+with cancellation, or a per-node connection that can be closed out of band so an abandoned
+thread cannot reach the database. Either is an orchestration change, not a tuning change,
+and the brief for this correction is explicit that a new execution engine is out of scope.
+Recorded as a **Phase 15 obligation** alongside the concurrency work, since both concern the
+same execution model. Introducing Temporal or another workflow engine to solve it is
+explicitly not the answer (ADR-0002).
+
+**How the claim is kept honest.** `tests/orchestration/test_timeouts.py` asserts that the
+kernel does *not* run nodes on a worker pool. If node preemption is ever implemented, that
+test fails and forces this section to be rewritten rather than quietly left wrong.
+
+---
+
+## 12. Observability
 
 Every span is emitted twice from one description — an OpenTelemetry span for live tooling,
 and a `trace_span` row that is durable, tenant-scoped and queryable. One trace serves
@@ -355,7 +418,7 @@ instrumentation honest — it is emitted whether or not anyone is collecting.
 
 ---
 
-## 12. Security invariants exercised
+## 13. Security invariants exercised
 
 | Invariant | How it holds here | Adversarial test |
 |---|---|---|
@@ -371,7 +434,7 @@ instrumentation honest — it is emitted whether or not anyone is collecting.
 
 ---
 
-## 13. Failure handling
+## 14. Failure handling
 
 | Failure | Response |
 |---|---|
@@ -395,7 +458,7 @@ No silent fallback to fabricated data, and no `success` status after an exceptio
 
 ---
 
-## 14. What Phase 11 will consume
+## 15. What Phase 11 will consume
 
 Each scenario declares a `ScenarioExpectation`: the expected termination reason and incident
 status, the domains a competent investigation should consult, the expected root-cause class
@@ -409,7 +472,7 @@ improvement is claimed.**
 
 ---
 
-## 15. Running the vertical slice
+## 16. Running the vertical slice
 
 ```bash
 export ASIC_MIGRATION_DATABASE_URL=postgresql+psycopg2://asic_owner:<password>@localhost:55432/asic
@@ -425,7 +488,7 @@ catalogues — widening it to make a demo convenient would undo that.
 
 ---
 
-## 16. Known limitations
+## 17. Known limitations
 
 Stated because they are real, not because they are comfortable.
 
@@ -436,5 +499,5 @@ Stated because they are real, not because they are comfortable.
 | Single-service evidence collection | A multi-service incident collects for the first service in scope | Phase 7 analyser strategies |
 | Concurrency under a shared pool untested | Lease correctness is tested; contention is not measured | Phase 15 |
 | No performance measured | No latency, throughput or cost figure exists | Phase 15 |
-| Node-level timeouts declared but not preemptively enforced | A node that hangs is bounded only by the tool deadline inside it | Phase 12, with async execution |
-| Wall-clock budget advanced by the injected clock | Under `SystemClock` it tracks real time; the tests drive it explicitly | — |
+| **Node execution is not preemptible** | A node that blocks in pure Python is bounded only by the timeouts *inside* it | §11.2, Phase 15 obligation |
+| `0005` cannot be downgraded once a tool has run | Correct: `ON DELETE RESTRICT` protects execution history | Deprecate a catalogue entry rather than deleting it ([ADR-0018](../adr/0018-migrations-are-historical-contracts.md)) |

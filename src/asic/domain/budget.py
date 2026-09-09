@@ -126,6 +126,19 @@ class BudgetLedger:
             cost_usd=self.cost_usd + cost_usd,
         )
 
+    def with_elapsed(self, seconds: float) -> BudgetLedger:
+        """Set - not add - the wall-clock total.
+
+        Wall clock is the one dimension that is *observed* rather than accumulated.
+        Summing per-node durations would undercount: it would miss the time between nodes,
+        the time a run spent suspended after an interruption, and any wait for a lease or a
+        human. The honest figure is "now minus when this run started", so it is measured
+        against the run's start and written, never incremented.
+        """
+        if seconds < 0:
+            raise ValueError("elapsed wall-clock time cannot be negative")
+        return replace(self, elapsed_seconds=seconds)
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "iterations": self.iterations,
@@ -221,6 +234,15 @@ class BudgetState:
                 cost_usd=cost_usd,
             ),
         )
+
+    def observe_elapsed(self, seconds: float) -> BudgetState:
+        """Record the run's wall-clock total, measured from when the run started.
+
+        The kernel calls this at every node boundary, which is what makes the wall-clock
+        budget an enforced limit rather than a declared one: the next
+        :meth:`require_headroom` sees the updated total and refuses the step.
+        """
+        return replace(self, ledger=self.ledger.with_elapsed(seconds))
 
     def require_headroom(self, *, iterations: int = 0, tool_calls: int = 0) -> None:
         """Fail before a step that would exceed a limit.
