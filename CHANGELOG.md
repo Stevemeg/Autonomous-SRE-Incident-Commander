@@ -24,6 +24,109 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Phase 4 — orchestration kernel: agent state machine, planner, tool registry and
+  broker.** A bounded, read-only, simulator-backed incident investigation now runs end to
+  end. **No remediation, external integration, API or frontend exists**, and no capability
+  above risk tier `RO` is registered — three independent layers prevent one appearing
+  ([ADR-0017](docs/adr/0017-read-only-capability-ceiling.md)).
+
+  - **Typed graph state and enforced node contracts** (`src/asic/contracts/`). Five graph
+    nodes, each declaring the twelve attributes specification section 4 requires. Three of
+    them are *enforced*, not merely published: the kernel rejects any state key a node's
+    contract does not list, the broker refuses any capability the calling node does not
+    declare, and contract tests fail the build if a node stops emitting its audit events.
+    The state carries references and scalars only — there is no `messages` key and no field
+    able to hold a prompt, a payload or a credential.
+
+  - **Tool registry, capability resolution and broker** (`src/asic/tools/`). The broker is
+    the single controlled boundary: every request passes request validation, tenant
+    context, capability resolution, the risk boundary, argument validation, idempotency,
+    adapter invocation with a deadline, result validation, audit and trace. It fails closed
+    at every stage. Scope arguments — tenant, environment, service, namespace — are
+    *resolved from the incident and rejected if supplied*, so a caller cannot widen its own
+    reach. Seven read-only capabilities are registered; every write tier named in the
+    architecture is deliberately absent.
+
+  - **Deterministic simulators** (`src/asic/simulators/`), explicit test infrastructure
+    sitting at the adapter boundary behind the broker rather than inside a node — so the
+    pipeline a simulated call takes is the pipeline a real one will take. Eleven scenarios
+    cover supporting evidence, contradicted evidence, insufficient evidence, an adapter
+    error, a timeout, a transient error that clears on retry, a malformed tool result,
+    malformed model output, budget exhaustion, hostile injected content and a multi-service
+    incident. **No scenario hard-codes a successful root-cause analysis.**
+
+  - **Bounded autonomy.** Iterations, tool calls, wall clock, tokens and cost are checked
+    *before* each step, so exhaustion produces a clean partial result rather than paying for
+    the step that broke the limit. A refusal is recorded explicitly, because the ledger
+    cannot express a cost that was never paid. Four deterministic guards can override the
+    planner: unparseable output gets one repair then a typed failure; an ungranted domain is
+    rejected and never repaired; a redundant collection is converted; and the budget
+    terminates the run regardless of what the model asked for.
+
+  - **Deterministic termination.** An ordered, total rule set — every run leaves with
+    exactly one verdict naming the rule that produced it. `RESOLVED` is unreachable, and
+    correctly so: a deployment that cannot remediate cannot verify a fix, so an actionable
+    cause is escalated to a human rather than reported as resolved.
+
+  - **Fact distinguished from claim, in code.** Provenance is assigned by the broker, so a
+    node cannot label its own output a verified fact. Every evidence id a hypothesis cites
+    is checked against the persisted set and the whole hypothesis is dropped if any is
+    fabricated. A deterministic confidence ceiling derived from support count, contradiction
+    and evidence quality caps whatever the model claimed, with both numbers and the
+    derivation stored so calibration is measurable later.
+
+  - **Durability** (`src/asic/orchestration/`, migration `0004`). One transaction per node,
+    with the checkpoint written alongside the work it describes, so a checkpoint can never
+    describe rolled-back work. Resume rebuilds state from durable rows and takes only the
+    ephemeral remainder from the checkpoint; where they disagree, the rows win and the
+    divergence is recorded. A conditional-update lease prevents two orchestrators advancing
+    one incident. The guarantee is stated exactly as **at-least-once node execution with
+    effect-level idempotency** — not exactly-once, which the design does not support.
+
+  - **Observability** (`src/asic/observability/`). Every span is emitted twice from one
+    description: an OpenTelemetry span for live tooling and a durable `trace_span` row for
+    operators and, later, the evaluation harness. Span ids are derived rather than random so
+    a replay reproduces them. Spans carry node and version, budget headroom at entry, the
+    decision *and the alternatives weighed*, provider, model, prompt version and hash,
+    tokens, cost and termination reason — and no prompt text, payloads or credentials,
+    because redaction happens at emission. No exporter is configured; that is Phase 12.
+
+  - **Model boundary** (`src/asic/llm/`). The thin internal port ADR-0005 chose, returning
+    text rather than parsed objects so that validation happens in the node where it can be
+    tested. The only adapter is deterministic; no provider SDK is a dependency
+    ([ADR-0016](docs/adr/0016-deterministic-model-provider.md)).
+
+  - **Adversarial tests.** Hostile content in a log line and in a runbook asks for a
+    capability, a tenant switch and an approval bypass. All three are inert: the capability
+    menu was resolved before the content existed, tenant context comes from the bound
+    session, and there is no approval path to bypass. An import-graph test parses every node
+    module and fails if one reaches past the broker to a provider.
+
+  - **Persistence and migrations.** One new table, `workflow_checkpoint` — tenant-scoped,
+    RLS-forced, append-only — created and protected in the same migration. Migration `0005`
+    seeds the read-only catalogue from the code descriptors, and the registry refuses to run
+    if the two ever diverge. Migration `0003`'s table lists were pinned to the schema as it
+    stood when it was authored: deriving them from the live models meant a later phase
+    silently changed what an old migration did.
+
+  - **Validation.** `scripts/validate_docs.py` now enforces the Phase 4 boundary — forbidden
+    packages, imports, file types, arbitrary-execution shapes anywhere in `src/`, and a
+    catalogue that must import clean and be entirely read-only. Negative-tested by planting
+    an `api/` package importing `fastapi` and `subprocess`, a `temporalio` import, a `.tsx`
+    file and a write capability; all eight violations were caught. The secret scanner gained
+    a per-line pragma so the redaction fixtures are exempted visibly rather than through a
+    path allowlist that would grow quietly.
+
+  - **Dependencies.** `langgraph` (ADR-0002) and `opentelemetry-api`/`-sdk` (ADR-0010). No
+    model provider SDK, no HTTP framework, no infrastructure client.
+
+  - **Validated:** 433 tests pass (246 needing no database); `ruff`, `ruff format --check`
+    and `mypy --strict` clean across 60 source files; migrations round-trip to base and back
+    with no orphan enum types and no schema drift; specification transcription, repository
+    hygiene and documentation validation all clean. **No performance was measured and no
+    claim is made about the quality of the system's reasoning** — the harness that could
+    measure it is Phase 11.
+
 - **Phase 3 — domain model, PostgreSQL schema, multi-tenancy and event model.** The first
   phase containing implementation. **No agent, orchestration, remediation executor,
   external integration, API or frontend exists**, and `scripts/validate_docs.py` now fails

@@ -46,6 +46,12 @@ DATABASE_URL_ENV: Final[str] = "ASIC_DATABASE_URL"
 #: can never point at a real database.
 TEST_DATABASE_URL_ENV: Final[str] = "ASIC_TEST_DATABASE_URL"
 
+#: Environment variable holding the *owner* connection string, used by migrations and by
+#: administrative operations such as creating a tenant. Deliberately distinct from
+#: :data:`DATABASE_URL_ENV`: the application role has no INSERT on the global catalogues,
+#: and a deployment that pointed both at the same role would have given that away.
+MIGRATION_URL_ENV: Final[str] = "ASIC_MIGRATION_DATABASE_URL"
+
 
 @dataclass(frozen=True, slots=True)
 class TenantContext:

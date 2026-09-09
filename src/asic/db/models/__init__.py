@@ -37,6 +37,7 @@ from asic.db.models.knowledge import (
     MemoryPromotion,
     Postmortem,
 )
+from asic.db.models.orchestration import WorkflowCheckpoint
 from asic.db.models.remediation import (
     Approval,
     PolicyDecision,
@@ -130,6 +131,7 @@ __all__ = [
     "User",
     "UserRoleAssignment",
     "Verification",
+    "WorkflowCheckpoint",
     "WorkflowRun",
     "append_only_tables",
     "metadata_obj",

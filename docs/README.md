@@ -3,10 +3,12 @@
 This directory holds every non-code artifact required by the master specification
 (section 16, "REQUIRED ARCHITECTURE/DOCUMENTATION").
 
-> **Current project stage: Phase 3 complete — domain model and tenant-aware persistence.**
-> The architecture package is approved. The schema, the incident state machine, the event
-> log and row-level security exist and are tested. **No agent, orchestration, remediation,
-> API or frontend exists.** No metric anywhere in this directory is a measurement.
+> **Current project stage: Phase 4 complete — the orchestration kernel.**
+> A bounded, read-only, simulator-backed incident investigation runs end to end through a
+> typed graph with a capability broker, durable checkpointing and structured traces.
+> **No remediation, no external integration, no API and no frontend exists**, and no
+> capability above risk tier `RO` is registered. No metric anywhere in this directory is a
+> measurement.
 
 ## Start here
 
@@ -22,7 +24,8 @@ area and points to the document that owns the detail.
 | [`prd/`](./prd/) | PRD (§A, B, D), SRS (§C, 138 requirement IDs), personas, journeys, incident lifecycle | **Authored** |
 | [`architecture/`](./architecture/) | A–Q package spine, architecture overview, C4, agent topology, tool registry, safety policy, memory/RAG, observability, data model/API, failure & recovery, traceability, CI/CD | **Authored** |
 | [`architecture/tenancy-and-rls.md`](./architecture/tenancy-and-rls.md) | How tenant isolation survives an application bug | **Implemented and tested** |
-| [`adr/`](./adr/) | 14 Architecture Decision Records | 11 proposed; **3 Accepted** (raised and verified in Phase 3) |
+| [`architecture/orchestration-kernel.md`](./architecture/orchestration-kernel.md) | The graph, node contracts, tool broker, budgets, checkpointing and trace model | **Implemented and tested** |
+| [`adr/`](./adr/) | 17 Architecture Decision Records | 11 open; **6 Accepted** (verified in Phase 3 and Phase 4) |
 | [`security/`](./security/) | Threat model (§L) and the active repository security checklist | **Authored** |
 | [`evaluation/`](./evaluation/) | Evaluation harness architecture (§I) | **Authored** |
 
@@ -34,14 +37,18 @@ area and points to the document that owns the detail.
 4. [`architecture/ARCHITECTURE_OVERVIEW.md`](./architecture/ARCHITECTURE_OVERVIEW.md) — how it fits together.
 5. [`architecture/agent-topology.md`](./architecture/agent-topology.md) — the most consequential decision in the package.
 6. [`adr/README.md`](./adr/README.md) — why each major choice was made, and what would reverse it.
-7. [`architecture/tenancy-and-rls.md`](./architecture/tenancy-and-rls.md) — the one part that is built.
+7. [`architecture/tenancy-and-rls.md`](./architecture/tenancy-and-rls.md) — how tenant isolation survives a bug.
+8. [`architecture/orchestration-kernel.md`](./architecture/orchestration-kernel.md) — what
+   Phase 4 built, what it deliberately did not, and what remains unmeasured.
 
 ### If you are reviewing for security
 
 [`security/THREAT_MODEL.md`](./security/THREAT_MODEL.md) →
 [`architecture/remediation-safety-policy.md`](./architecture/remediation-safety-policy.md) →
 [`architecture/tool-registry.md`](./architecture/tool-registry.md) §1 (how the model is
-prevented from unrestricted infrastructure access).
+prevented from unrestricted infrastructure access) →
+[`architecture/orchestration-kernel.md`](./architecture/orchestration-kernel.md) §12 (which
+of those invariants are enforced in code today, and by which adversarial test).
 
 ## Document ownership
 
@@ -60,6 +67,7 @@ is the defect.
 | State machine, retries, recovery | [`architecture/failure-and-recovery.md`](./architecture/failure-and-recovery.md) |
 | Entities, invariants, API boundaries | [`architecture/data-model-and-api.md`](./architecture/data-model-and-api.md) |
 | Tenancy, RLS, composite keys | [`architecture/tenancy-and-rls.md`](./architecture/tenancy-and-rls.md) |
+| Graph, node contracts, broker, budgets, checkpointing | [`architecture/orchestration-kernel.md`](./architecture/orchestration-kernel.md) |
 | Threats and security invariants | [`security/THREAT_MODEL.md`](./security/THREAT_MODEL.md) |
 | Scenarios, judges, metrics, regression | [`evaluation/EVALUATION_ARCHITECTURE.md`](./evaluation/EVALUATION_ARCHITECTURE.md) |
 | Technology decisions | [`adr/`](./adr/) |
@@ -75,5 +83,5 @@ is the defect.
 - No invented metrics, benchmarks, customers or business impact
   (master specification sections 9 and 22).
 - `scripts/validate_docs.py` enforces the mechanical half of these rules: link integrity,
-  Mermaid structure, requirement traceability in both directions, and that no §4
-  responsibility has silently disappeared.
+  Mermaid structure, requirement traceability in both directions, that no §4 responsibility
+  has silently disappeared, and that no later-phase capability has entered the repository.

@@ -72,14 +72,22 @@ UNMEASURED_CLAIM = re.compile(
     re.IGNORECASE,
 )
 
-# Phase 3 delivers the domain model and persistence. Anything belonging to a later,
-# unapproved phase is a scope violation, and cheap to detect mechanically.
+# Phase 4 delivers the orchestration kernel: a read-only, simulator-backed investigation.
+# Anything belonging to a later, unapproved phase is a scope violation, and cheap to detect
+# mechanically. The list moves forward one phase at a time, deliberately: a boundary that
+# only ever loosens stops being a boundary.
 
 #: Source trees that may contain implementation at the current phase.
 ALLOWED_SOURCE_ROOTS = (
     "src/asic/__init__.py",
-    "src/asic/domain",
+    "src/asic/contracts",
     "src/asic/db",
+    "src/asic/domain",
+    "src/asic/llm",
+    "src/asic/observability",
+    "src/asic/orchestration",
+    "src/asic/simulators",
+    "src/asic/tools",
     "migrations",
     "scripts",
     "tests",
@@ -87,36 +95,63 @@ ALLOWED_SOURCE_ROOTS = (
 
 #: Packages whose existence would mean a later phase started early.
 FORBIDDEN_PACKAGES = (
-    "src/asic/agents",  # Phase 4+ - agent nodes
-    "src/asic/orchestration",  # Phase 4  - workflow engine
-    "src/asic/nodes",
     "src/asic/api",  # Phase 9  - HTTP surfaces
     "src/asic/integrations",  # Phase 10 - external adapters
     "src/asic/adapters",
     "src/asic/evaluation",  # Phase 11 - harness
+    "src/asic/remediation",  # Phase 8  - execution
     "frontend",  # Phase 9  - dashboard
     "web",
     "ui",
+    "terraform",  # Phase 14
+    "charts",
 )
 
-#: Imports that would mean an unapproved capability arrived with them.
+#: Imports that would mean an unapproved capability arrived with them. LangGraph and
+#: OpenTelemetry are absent because ADR-0002 and ADR-0010 approve them for this phase.
 FORBIDDEN_IMPORTS = (
-    "langgraph",
-    "langchain",
     "fastapi",
     "starlette",
     "uvicorn",
     "openai",
     "anthropic",
     "litellm",
+    "temporalio",
     "kubernetes",
     "prometheus_api_client",
     "slack_sdk",
     "jira",
+    "redis",
+    "kafka",
+    "confluent_kafka",
+    "nats",
+    "elasticsearch",
+    "opensearchpy",
+    "langsmith",
+    "langchain_openai",
+    "langchain_anthropic",
 )
 
-#: Frontend and infrastructure languages, none of which belong to Phase 3.
+#: Frontend and infrastructure languages, none of which belong to this phase.
 FORBIDDEN_EXTENSIONS = {".ts", ".tsx", ".jsx", ".vue", ".svelte", ".tf", ".go", ".java"}
+
+#: Capability prefixes the read-only kernel may register. A write capability in the
+#: catalogue would mean a tool exists with no policy gate in front of it.
+ALLOWED_CAPABILITY_PREFIXES = ("read.",)
+
+#: Shapes that would create an arbitrary-execution channel. Checked across the whole source
+#: tree, because the guarantee is "no such field exists anywhere", not "not in the models".
+FORBIDDEN_EXECUTION_PATTERNS = (
+    re.compile(r"\bsubprocess\b"),
+    re.compile(r"\bos\.system\b"),
+    re.compile(r"\bos\.popen\b"),
+    re.compile(r"\bshell\s*=\s*True\b"),
+    re.compile(r"^\s*(?:import|from)\s+pty\b", re.M),
+)
+
+#: Files exempt from the execution-shape scan, and why. The validator names the forbidden
+#: shapes, so it necessarily contains them as data.
+EXECUTION_SCAN_EXEMPT = ("scripts/validate_docs.py", "src/asic/domain/safety.py")
 
 
 class Findings:
@@ -338,9 +373,10 @@ def check_responsibility_coverage(f: Findings) -> int:
 def check_phase_boundary(f: Findings) -> int:
     """Assert no later phase has started early.
 
-    Phase 3 is the domain model and tenant-aware persistence. Agents, orchestration,
-    remediation execution, external integrations and the frontend are explicitly out of
-    scope, and their absence is checkable rather than assertable.
+    Phase 4 is the orchestration kernel: typed contracts, a capability broker, deterministic
+    simulators and a read-only investigation. Remediation execution, external integrations,
+    the HTTP surface, the frontend and the evaluation harness are explicitly out of scope,
+    and their absence is checkable rather than assertable.
     """
     scanned = 0
 
@@ -364,16 +400,69 @@ def check_phase_boundary(f: Findings) -> int:
         if path.suffix.lower() in FORBIDDEN_EXTENSIONS:
             f.add("phase", f"{rel(path)}: {path.suffix} files belong to a later phase")
 
-        if path.suffix == ".py" and parts[0] == "src":
-            relative = rel(path)
+        if path.suffix != ".py":
+            continue
+        relative = rel(path)
+        if parts[0] == "src":
             if not any(relative.startswith(root) for root in ALLOWED_SOURCE_ROOTS):
                 f.add("phase", f"{relative} is outside the source trees this phase may touch")
             text = path.read_text(encoding="utf-8", errors="replace")
             for module in FORBIDDEN_IMPORTS:
-                if re.search(rf"^\s*(?:import|from)\s+{re.escape(module)}", text, re.M):
+                if re.search(rf"^\s*(?:import|from)\s+{re.escape(module)}\b", text, re.M):
                     f.add("phase", f"{relative} imports {module!r}, which belongs to a later phase")
 
+        if relative in EXECUTION_SCAN_EXEMPT:
+            continue
+        if parts[0] in {"src", "migrations"}:
+            text = path.read_text(encoding="utf-8", errors="replace")
+            for pattern in FORBIDDEN_EXECUTION_PATTERNS:
+                if pattern.search(text):
+                    f.add(
+                        "phase",
+                        f"{relative} matches {pattern.pattern!r}: the system executes only "
+                        "registered, typed operations and has no arbitrary-execution path",
+                    )
+
+    _check_capability_catalogue(f)
     return scanned
+
+
+def _check_capability_catalogue(f: Findings) -> None:
+    """Assert the registered catalogue is entirely read-only.
+
+    Imported rather than parsed, so this checks what the code will actually load rather
+    than what a regular expression believes it says.
+    """
+    sys.path.insert(0, str(REPO / "src"))
+    try:
+        from asic.tools.catalogue import READ_ONLY_CATALOGUE
+    except Exception as exc:  # the validator reports problems, it does not crash on them
+        f.add("phase", f"the capability catalogue could not be loaded: {exc}")
+        return
+    finally:
+        sys.path.pop(0)
+
+    for descriptor in READ_ONLY_CATALOGUE:
+        if descriptor.risk_tier.value != "ro":
+            f.add(
+                "phase",
+                f"tool {descriptor.name} is risk tier {descriptor.risk_tier.value}; this "
+                "phase registers read-only capabilities only, because there is no policy "
+                "gate to authorize anything else",
+            )
+        if not any(
+            descriptor.capability.startswith(prefix) for prefix in ALLOWED_CAPABILITY_PREFIXES
+        ):
+            f.add(
+                "phase",
+                f"tool {descriptor.name} declares capability {descriptor.capability!r}, "
+                f"which is not one of {list(ALLOWED_CAPABILITY_PREFIXES)}",
+            )
+        if descriptor.rollback_tool_name is not None:
+            f.add(
+                "phase",
+                f"tool {descriptor.name} declares a rollback, which only a write tool needs",
+            )
 
 
 # ----------------------------------------------------------------- 6. unmeasured claims
@@ -415,7 +504,7 @@ def main() -> int:
     print(f"mermaid diagrams  : {blocks} checked")
     print(f"requirement IDs   : {defined} defined in SRS, {traced} referenced in matrix")
     print(f"spec section 4    : {responsibilities} responsibilities checked for disposition")
-    print(f"repository files  : {scanned} scanned against the Phase 3 boundary")
+    print(f"repository files  : {scanned} scanned against the Phase 4 boundary")
     print()
 
     order = [
@@ -423,7 +512,7 @@ def main() -> int:
         ("mermaid", "Mermaid structure"),
         ("traceability", "Requirement traceability"),
         ("coverage", "Specification coverage"),
-        ("phase", "Phase 3 scope boundary"),
+        ("phase", "Phase 4 scope boundary"),
         ("claims", "No unmeasured claims"),
     ]
 

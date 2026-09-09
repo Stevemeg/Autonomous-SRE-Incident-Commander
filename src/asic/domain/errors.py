@@ -7,6 +7,11 @@ record) can record it precisely.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:  # pragma: no cover - import cycle guard, types only
+    from asic.domain.enums import BudgetKind
+
 
 class DomainError(Exception):
     """Base class for all domain rule violations."""
@@ -46,3 +51,104 @@ class UnregisteredCapability(DomainError):
 
 class IdempotencyViolation(DomainError):
     """The same logical operation was submitted twice with conflicting content."""
+
+
+# ------------------------------------------------------------------ orchestration (P4)
+
+
+class BudgetExhausted(DomainError):
+    """A hard limit was reached, or would be by the step about to be taken.
+
+    Carries the dimension so the caller can terminate with the correct reason -
+    ``wall_clock_timeout`` and ``budget_exhausted`` are different outcomes with different
+    operational responses (master specification section 5).
+    """
+
+    def __init__(self, message: str, *, kind: BudgetKind) -> None:
+        super().__init__(message)
+        self.kind = kind
+
+
+class ContractViolation(DomainError):
+    """A node did something its declared contract does not permit.
+
+    The common case is writing a state key the contract does not list. Declaring allowed
+    state mutations and never checking them would make the contract documentation rather
+    than a constraint.
+    """
+
+
+class SchemaViolation(DomainError):
+    """Structured output failed validation against its declared schema.
+
+    Raised for model output, tool arguments and tool results alike. It is deliberately a
+    *typed failure* rather than a coercion: silently repairing a malformed result is how a
+    system ends up reasoning over data that does not mean what it appears to mean.
+    """
+
+
+class CapabilityNotGranted(DomainError):
+    """A registered capability exists but this tenant, environment or node lacks it.
+
+    Distinct from :class:`UnregisteredCapability` because the two have different
+    responses: an unregistered capability is a defect or an attack, whereas an ungranted
+    one may be a legitimate configuration difference between environments.
+    """
+
+
+class RiskTierNotPermitted(DomainError):
+    """A capability was requested whose risk tier this deployment does not execute.
+
+    In the read-only orchestration kernel every write tier is refused here, before any
+    adapter is reached. Fails closed.
+    """
+
+
+class BrokerBypassAttempt(DomainError):
+    """Something tried to reach an adapter without going through the tool broker."""
+
+
+class LeaseNotHeld(DomainError):
+    """A worker tried to advance a workflow run whose lease it does not hold.
+
+    Two orchestrators believing they own the same incident is the failure mode with the
+    worst consequence in this system, so losing a lease stops work immediately rather than
+    being retried.
+    """
+
+
+class ToolFailure(DomainError):
+    """A tool invocation failed. Subclassed by the failure classes that differ in retry."""
+
+
+class ToolTimeout(ToolFailure):
+    """A tool call exceeded its declared timeout.
+
+    For a read tool the outcome is known-clean: nothing was changed. For a write tool the
+    outcome is *unknown* and must be reconciled by querying actual state, never retried
+    blindly - which is why the two are not the same exception.
+    """
+
+
+class ToolAdapterError(ToolFailure):
+    """The adapter or upstream system returned an error.
+
+    ``transient`` distinguishes something worth retrying from something that will fail
+    identically next time.
+    """
+
+    def __init__(self, message: str, *, transient: bool = False) -> None:
+        super().__init__(message)
+        self.transient = transient
+
+
+class ModelProviderError(DomainError):
+    """A model provider failed to produce a response.
+
+    ``transient`` drives retry and, in a later phase, provider failover. A model outage is
+    a reason to pause and preserve gathered evidence, not to discard it.
+    """
+
+    def __init__(self, message: str, *, transient: bool = True) -> None:
+        super().__init__(message)
+        self.transient = transient

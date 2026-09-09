@@ -1,6 +1,8 @@
 # ADR-0003: Tool boundary — native adapters behind an MCP-ready seam
 
-- **Status:** Proposed
+- **Status:** Accepted — implemented in Phase 4. The broker depends on the `ToolProvider`
+  protocol; the only implementation is the deterministic simulator. No MCP provider exists,
+  and none of §5.4's adoption triggers has been met.
 - **Date:** 2026-09-04
 - **Deciders:** Project owner (pending approval)
 - **Spec reference:** §7, §13, §14, §15, §20 of [`../spec/MASTER_PROJECT_PROMPT_V3.md`](../spec/MASTER_PROJECT_PROMPT_V3.md)

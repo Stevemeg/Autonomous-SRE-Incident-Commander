@@ -1,6 +1,6 @@
 # Requirements Traceability Matrix
 
-- **Status:** Authored — Architecture Package. **No requirement below is implemented.**
+- **Status:** Authored — Architecture Package. **Most requirements below are not implemented**; the note beneath says exactly which are, and on what evidence.
 - **Requirement definitions:** [`../prd/SRS.md`](../prd/SRS.md)
 - **Master specification:** [`../spec/MASTER_PROJECT_PROMPT_V3.md`](../spec/MASTER_PROJECT_PROMPT_V3.md)
 
@@ -8,16 +8,31 @@ Every requirement identifier defined in the SRS appears here exactly once, mappe
 architecture component that will satisfy it, the phase in which it is built, how it will be
 validated, and the acceptance criterion.
 
-> **Implementation status.** Phase 3 (domain model and tenant-aware persistence) is
-> complete; every other phase is not started. Rather than repeat a status column 138 times,
-> the rule is: a requirement is implemented **only** where a passing test is named in the
-> Validation column *and* that test exists and passes today.
+> **Implementation status.** Phases 3 and 4 are complete; every other phase is not
+> started. Rather than repeat a status column 138 times, the rule is: a requirement is
+> implemented **only** where a passing test is named in the Validation column *and* that
+> test exists and passes today.
 >
-> As of Phase 3 that applies to the persistence-layer half of FR-INC-04, FR-ING-03,
+> **From Phase 3** — the *schema and constraints* that make a requirement enforceable, but
+> not the behaviour that uses them: the persistence-layer half of FR-INC-04, FR-ING-03,
 > FR-ING-05, FR-REM-03, FR-REM-05, FR-REM-08, FR-POL-03, FR-APR-04, FR-APR-05, FR-VRF-03,
-> FR-MEM-02, FR-MEM-04, FR-EVL-09, FR-API-02, NFR-SEC-03 and NFR-REL-06 — the *schema and
-> constraints* that make them enforceable. **The behaviour that uses them is not built.**
-> No row may be described as fully implemented until its behaviour exists too.
+> FR-MEM-02, FR-MEM-04, FR-EVL-09, FR-API-02, NFR-SEC-03 and NFR-REL-06.
+>
+> **From Phase 4** — behaviour, exercised end to end against deterministic simulators and
+> covered by named tests ([`orchestration-kernel.md`](./orchestration-kernel.md)):
+>
+> | Requirement area | What is built | What is not |
+> |---|---|---|
+> | Investigation planning and bounds (FR-INC-01..03, FR-EVD-01..02) | The bounded loop, gap declaration, the capability menu, budgets checked before each step, deterministic termination | Model-assisted per-domain analysis; multi-service strategy |
+> | Tool authorization (FR-REM-06, NFR-SEC-01..02) | Registry, capability resolution, the broker chokepoint, refusals audited on every path | Anything above risk tier `RO`, which has no policy gate yet |
+> | Evidence provenance and citation (FR-EVD-02, FR-RCA-02..03) | Broker-assigned provenance, citation integrity enforced before ranking, a deterministic confidence ceiling | Retrieval quality, reranking, knowledge ingestion |
+> | Durability (NFR-REL-01..03, NFR-REL-07) | Per-node transactions, checkpointing, resume with reconciliation, leasing, degradation on partial failure | Unknown-outcome reconciliation for writes; approval waits |
+> | Observability (FR-OBS-01..04) | One trace model, spans persisted with the work they describe, correlation identifiers, redaction at emission | Exporters, dashboards, SLOs — Phase 12 |
+> | Prompt-injection resistance (NFR-SEC-07) | Structural: the menu precedes the content, scope is resolved not supplied, fenced untrusted regions | Nothing further is claimed; detection is a signal, not the defence |
+>
+> **The behaviour a row describes must exist before that row is called implemented.** No
+> requirement is marked complete on the strength of a schema alone, and none on the
+> strength of a simulator alone where the requirement names a real integration.
 
 Coverage is enforced by `scripts/validate_docs.py`, which fails if any SRS identifier is
 missing here or if an identifier appears here that the SRS does not define.

@@ -34,7 +34,7 @@ from collections.abc import Sequence
 
 from alembic import op
 
-from asic.db.models import GLOBAL_TABLES, append_only_tables, tenant_scoped_tables
+from asic.db.models import GLOBAL_TABLES
 
 revision: str = "0003_tenant_isolation_rls"
 down_revision: str | None = "0002_domain_schema"
@@ -53,9 +53,66 @@ AUDITOR_ROLE = "asic_auditor"
 
 POLICY_NAME = "tenant_isolation"
 
+#: The tenant-scoped tables **as they existed when this migration was authored**.
+#:
+#: An earlier draft derived this list from the live model registry. That is wrong for a
+#: migration, and subtly so: adding a tenant-scoped table in a later phase would silently
+#: change what this migration does, so a fresh ``upgrade head`` would try to enable
+#: row-level security on a table that migration 0002 has not created yet. A migration must
+#: describe the schema at its own point in history.
+#:
+#: Coverage of *current* models is asserted elsewhere - the RLS coverage test compares the
+#: live database against ``tenant_scoped_tables()``, so a new tenant-scoped table without
+#: its own protecting migration still fails the build.
+TENANT_TABLES: tuple[str, ...] = (
+    "alert",
+    "app_user",
+    "approval",
+    "audit_record",
+    "environment",
+    "evaluation_run",
+    "evaluation_scenario",
+    "evidence",
+    "execution_trace",
+    "hypothesis",
+    "hypothesis_evidence",
+    "incident",
+    "incident_event",
+    "investigation_step",
+    "knowledge_chunk",
+    "knowledge_document",
+    "memory_entry",
+    "memory_promotion",
+    "policy_decision",
+    "postmortem",
+    "remediation_action",
+    "service",
+    "service_dependency",
+    "tenant_tool_grant",
+    "timeline_event",
+    "tool_execution",
+    "trace_span",
+    "user_role_assignment",
+    "verification",
+    "workflow_run",
+)
+
+#: Append-only tables as of this migration, for the same reason.
+APPEND_ONLY_TABLES: tuple[str, ...] = (
+    "approval",
+    "audit_record",
+    "behaviour_version",
+    "evidence",
+    "incident_event",
+    "policy_decision",
+    "tool_execution",
+    "trace_span",
+    "verification",
+)
+
 
 def _sorted_tenant_tables() -> list[str]:
-    return sorted(tenant_scoped_tables())
+    return sorted(TENANT_TABLES)
 
 
 def upgrade() -> None:
@@ -122,12 +179,12 @@ def upgrade() -> None:
     # --------------------------------------------------------- append-only tables
     # History cannot be rewritten by application code. The owner retains the ability so
     # that retention purges and lawful erasure remain possible as deliberate operations.
-    for table in sorted(append_only_tables()):
+    for table in sorted(APPEND_ONLY_TABLES):
         op.execute(f"REVOKE UPDATE, DELETE ON {table} FROM {APP_ROLE}")
 
 
 def downgrade() -> None:
-    for table in sorted(append_only_tables()):
+    for table in sorted(APPEND_ONLY_TABLES):
         op.execute(f"GRANT UPDATE, DELETE ON {table} TO {APP_ROLE}")
 
     for table in _sorted_tenant_tables():

@@ -1,14 +1,15 @@
 # Architecture Decision Records
 
-> **Fourteen records. Three are Accepted.**
+> **Seventeen records. Six are Accepted.**
 >
-> ADRs 0001-0011 were written during the Architecture Package and remain `Proposed`,
-> `Needs validation` or `Deferred`; the Architecture Package itself is approved, but each
-> of those decisions becomes binding only as the phase that implements it lands.
+> ADRs 0001-0011 were written during the Architecture Package. Three of them - 0002, 0003
+> and 0005 - are now `Accepted`, because Phase 4 implemented them and the evidence exists.
+> The rest remain `Proposed`, `Needs validation` or `Deferred`: the Architecture Package is
+> approved, but each of those decisions becomes binding only as the phase that implements
+> it lands.
 >
-> ADRs 0012-0014 were raised *during* Phase 3, decided, implemented and verified by tests.
-> They are `Accepted` because the evidence exists: each names the passing tests that
-> confirm it.
+> ADRs 0012-0014 were raised during Phase 3 and 0015-0017 during Phase 4 - decided,
+> implemented and verified by tests. Each names the passing tests that confirm it.
 
 ## Why ADRs are mandatory here
 
@@ -63,10 +64,10 @@ Use [`0000-adr-template.md`](./0000-adr-template.md) as the starting point.
 | ADR | Title | Status | Spec ref | Date |
 |---|---|---|---|---|
 | [0001](./0001-agent-topology-consolidation.md) | Agent topology — 19 responsibilities into 12 nodes | `Proposed` | 4, 5, 6, 15 | 2026-09-04 |
-| [0002](./0002-orchestration-langgraph-vs-temporal.md) | Orchestration — LangGraph checkpointing vs Temporal | `Proposed` | 4, 12, 13 | 2026-09-04 |
-| [0003](./0003-tool-boundary-native-adapters-mcp-ready.md) | Tool boundary — native adapters behind an MCP-ready seam | `Proposed` | 7, 13, 14, 15, 20 | 2026-09-04 |
+| [0002](./0002-orchestration-langgraph-vs-temporal.md) | Orchestration — LangGraph checkpointing vs Temporal | **`Accepted`** | 4, 12, 13 | 2026-09-04 |
+| [0003](./0003-tool-boundary-native-adapters-mcp-ready.md) | Tool boundary — native adapters behind an MCP-ready seam | **`Accepted`** | 7, 13, 14, 15, 20 | 2026-09-04 |
 | [0004](./0004-postgresql-pgvector-primary-datastore.md) | PostgreSQL + pgvector as the single primary datastore | `Proposed` | 8, 13, 15 | 2026-09-04 |
-| [0005](./0005-llm-provider-abstraction.md) | LLM provider abstraction — thin internal interface, not LiteLLM | `Proposed` | 9, 10, 11, 13 | 2026-09-04 |
+| [0005](./0005-llm-provider-abstraction.md) | LLM provider abstraction — thin internal interface, not LiteLLM | **`Accepted`** | 9, 10, 11, 13 | 2026-09-04 |
 | [0006](./0006-redis-necessity.md) | Redis — not adopted in v1 | `Deferred` | 13 | 2026-09-04 |
 | [0007](./0007-eventing-message-broker-necessity.md) | Message broker (Kafka/NATS) — not adopted in v1 | `Deferred` | 12, 13 | 2026-09-04 |
 | [0008](./0008-rag-retrieval-strategy.md) | RAG retrieval — hybrid default, reranking only if measured | `Needs validation` | 8 | 2026-09-04 |
@@ -76,6 +77,9 @@ Use [`0000-adr-template.md`](./0000-adr-template.md) as the starting point.
 | [0012](./0012-native-postgresql-enum-types.md) | Native PostgreSQL ENUM types for closed vocabularies | **`Accepted`** | 12, 15, 20 | 2026-09-04 |
 | [0013](./0013-composite-tenant-foreign-keys.md) | Composite tenant-scoped foreign keys | **`Accepted`** | 15 | 2026-09-04 |
 | [0014](./0014-materialised-incident-status.md) | Materialised incident status, reconciled against the event log | **`Accepted`** | 12 | 2026-09-04 |
+| [0015](./0015-domain-owned-checkpointing.md) | Domain-owned checkpointing, not the LangGraph checkpointer | **`Accepted`** | 12 | 2026-09-07 |
+| [0016](./0016-deterministic-model-provider.md) | A deterministic model provider for Phase 4; no live provider yet | **`Accepted`** | 9, 10, 11, 14, 20 | 2026-09-07 |
+| [0017](./0017-read-only-capability-ceiling.md) | A read-only capability ceiling enforced in three independent places | **`Accepted`** | 6, 7, 15 | 2026-09-07 |
 
 ## Priority order for acceptance
 
@@ -85,13 +89,13 @@ contract, so they block Phase 3 onward; the rest can be accepted as their eviden
 | Priority | ADR | Blocks | Why this order |
 |---:|---|---|---|
 | 1 | 0011 Tenancy and authorization | Phase 3 (schema) | `tenant_id` and RLS touch every table; least reversible decision in the project |
-| 2 | 0001 Agent topology | Phase 4 | Determines what is built and how permissions are separated |
+| 2 | 0001 Agent topology | Phase 4 | Determines what is built and how permissions are separated. **Four of twelve nodes implemented in Phase 4.** |
 | 3 | 0004 Datastore | Phase 3 | Schema, indexing and retrieval all depend on it |
-| 4 | 0002 Orchestration | Phase 4 | Determines the durability contract nodes are written against |
-| 5 | 0003 Tool boundary | Phase 4 | Determines the registry and broker interfaces |
+| 4 | 0002 Orchestration | Phase 4 | **Accepted.** Durability implemented in our own code per its own crux clause; see ADR-0015 |
+| 5 | 0003 Tool boundary | Phase 4 | **Accepted.** Registry, `ToolProvider` seam and broker implemented; no MCP provider exists |
 | 6 | 0009 Memory tiers | Phase 6 | Shapes the knowledge and memory schema |
-| 7 | 0005 LLM abstraction | Phase 4 | Needed before the first model call is instrumented |
-| 8 | 0010 Observability tooling | Phase 4 | Trace schema must exist before nodes emit |
+| 7 | 0005 LLM abstraction | Phase 4 | **Accepted.** The port exists; the only adapter is deterministic (ADR-0016) |
+| 8 | 0010 Observability tooling | Phase 4 | OpenTelemetry spans and metrics emitted; no exporter configured until Phase 12 |
 | 9 | 0008 RAG retrieval | Phase 6, revisit Phase 11 | `Needs validation` — resolved by measurement, not debate |
 | 10 | 0006 Redis | Revisit Phase 15 | `Deferred` — trigger is a load measurement |
 | 11 | 0007 Message broker | Revisit Phase 15 | `Deferred` — trigger is a load measurement |
@@ -106,6 +110,14 @@ during implementation become ADRs rather than being made silently:
 | [0012](./0012-native-postgresql-enum-types.md) | Two safety check constraints (`risk_tier <> 'r3'`, external-event provenance) are only meaningful if the column cannot hold an unknown value | `TestEnumTypeParity`; migration round-trip verified |
 | [0013](./0013-composite-tenant-foreign-keys.md) | RLS controls what a session *sees*, not what a row *references*; a cross-tenant reference passes RLS | `TestCompositeForeignKeys`; `test_references_between_tenant_scoped_tables_carry_the_tenant` |
 | [0014](./0014-materialised-incident-status.md) | "Status is derived from the log" needed a physical answer that did not make the dashboard's main query unaffordable | `test_status_divergence_from_the_log_is_detected` |
+
+## Decisions raised by Phase 4
+
+| ADR | Discovered because | Evidence |
+|---|---|---|
+| [0015](./0015-domain-owned-checkpointing.md) | ADR-0002 required durability to be ours; a framework checkpointer cannot commit in the node's own transaction, nor reconcile against durable rows | `TestCheckpointing`, `TestResume` |
+| [0016](./0016-deterministic-model-provider.md) | Two nodes are model-backed, but nothing in this phase can evaluate a model's output — so a live provider would buy an unreadable signal at the cost of determinism | `test_planner.py`, `test_hypothesis.py`, `test_scenarios.py` |
+| [0017](./0017-read-only-capability-ceiling.md) | The remediation authorization path is Phase 8; a registered write tool before it would be a capability authorized by nothing | `TestRiskCeiling`, `TestRefusals`, negative-tested boundary validator |
 
 ## Candidate decisions still to be written
 

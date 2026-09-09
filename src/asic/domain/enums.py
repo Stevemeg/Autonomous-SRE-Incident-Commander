@@ -7,6 +7,12 @@ database refuse an unknown value rather than trusting every writer to validate f
 
 Adding a value is therefore a migration, which is exactly the change-control property the
 specification asks for.
+
+One section is explicitly exempt. The orchestration vocabularies at the end of this module
+describe *in-flight* execution - which phase the graph is in, which pipeline stage refused
+a request - and are persisted only inside JSONB checkpoints and span attributes, never as
+a column type. They live here so that there is one place to look for a closed vocabulary,
+and they are marked as non-persisted where they are defined.
 """
 
 from __future__ import annotations
@@ -625,3 +631,106 @@ class AuditEventType(StrEnum):
     TENANT_LIFECYCLE_CHANGED = "tenant_lifecycle.changed"
     DATA_EXPORTED = "data.exported"
     DATA_DELETED = "data.deleted"
+
+
+# --------------------------------------------------- orchestration (not persisted as
+# --------------------------------------------------- native PostgreSQL enum types)
+#
+# The vocabularies below describe execution in flight. They are written into JSONB
+# checkpoints, span attributes and event payloads, never into a typed column, so adding a
+# member here is not a migration. They are closed vocabularies all the same: a phase or a
+# broker stage invented at a call site would make routing and failure attribution
+# unanalysable.
+
+
+@unique
+class InvestigationPhase(StrEnum):
+    """Where the bounded investigation loop currently is.
+
+    Mirrors the ``Investigating`` composite state in
+    ``docs/architecture/failure-and-recovery.md`` section 2. Distinct from
+    :class:`IncidentStatus`, which is coarser and durable: an incident is ``INVESTIGATING``
+    throughout all of these.
+    """
+
+    INITIALISING = "initialising"
+    PLANNING = "planning"
+    COLLECTING = "collecting"
+    ANALYSING = "analysing"
+    TERMINATING = "terminating"
+    TERMINATED = "terminated"
+
+
+@unique
+class PlannerAction(StrEnum):
+    """The only three things a planning step may decide to do.
+
+    A closed set is the point. A planner that could emit a free-form next action would be
+    a planner that could emit an instruction, and the whole design rests on it emitting a
+    *selection* from a bounded menu instead.
+    """
+
+    COLLECT_EVIDENCE = "collect_evidence"
+    FORM_HYPOTHESIS = "form_hypothesis"
+    TERMINATE = "terminate"
+
+
+@unique
+class OperationClass(StrEnum):
+    """Retry classification from ``docs/architecture/failure-and-recovery.md`` section 1.
+
+    Every failure is classified before any retry decision is made, because the most common
+    durability defect in agent systems is retrying something that must not be retried.
+    """
+
+    #: No side effect; safely repeatable.
+    C1_PURE_READ = "c1_pure_read"
+    #: Repeatable under the same key; same end state.
+    C2_IDEMPOTENT_WRITE = "c2_idempotent_write"
+    #: Repetition changes the result. Reconcile, never retry.
+    C3_NON_IDEMPOTENT_WRITE = "c3_non_idempotent_write"
+    #: Timed out; may or may not have applied. Query actual state first.
+    C4_UNKNOWN_OUTCOME = "c4_unknown_outcome"
+    #: The operation worked and the answer is simply unwelcome. Never retried.
+    C5_SEMANTIC_FAILURE = "c5_semantic_failure"
+    #: The input is invalid. Repair once at most, or reject.
+    C6_DETERMINISTIC_REJECTION = "c6_deterministic_rejection"
+
+    @property
+    def is_retryable(self) -> bool:
+        return self in _RETRYABLE_CLASSES
+
+
+_RETRYABLE_CLASSES = frozenset({OperationClass.C1_PURE_READ, OperationClass.C2_IDEMPOTENT_WRITE})
+
+
+@unique
+class BrokerStage(StrEnum):
+    """The ordered pipeline every capability request passes through.
+
+    Recorded on every refusal so that "denied" always says *where* it was denied. A broker
+    that reports only a boolean cannot be audited, and cannot be debugged when a legitimate
+    request stops working.
+    """
+
+    REQUEST_VALIDATION = "request_validation"
+    TENANT_CONTEXT = "tenant_context"
+    CAPABILITY_RESOLUTION = "capability_resolution"
+    RISK_BOUNDARY = "risk_boundary"
+    ARGUMENT_VALIDATION = "argument_validation"
+    IDEMPOTENCY = "idempotency"
+    ADAPTER_INVOCATION = "adapter_invocation"
+    RESULT_VALIDATION = "result_validation"
+
+
+@unique
+class NodeOutcome(StrEnum):
+    """How one node execution ended. Every node ends in exactly one of these."""
+
+    COMPLETED = "completed"
+    #: Completed with reduced coverage because a source degraded (NFR-REL-07).
+    DEGRADED = "degraded"
+    #: A typed failure the coordinator can route around.
+    FAILED = "failed"
+    #: The run must stop; the termination reason says why.
+    TERMINAL = "terminal"

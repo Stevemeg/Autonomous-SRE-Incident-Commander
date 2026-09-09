@@ -56,6 +56,12 @@ BINARY_SUFFIXES = {
 }
 
 # Secret-shaped content. Each entry: (label, compiled pattern).
+#: A line carrying this marker is a deliberate synthetic secret - the fixtures that prove
+#: the redaction layer recognises a credential. The exemption is per line and must be
+#: written on the line itself, so every one of them is visible in review rather than
+#: hidden in a path allowlist that grows quietly.
+SECRET_FIXTURE_PRAGMA = "hygiene: synthetic-secret-fixture"
+
 SECRET_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     ("AWS access key id", re.compile(r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b")),
     (
@@ -187,6 +193,8 @@ def scan_content(path: Path, rel: str) -> list[str]:
     for lineno, line in enumerate(text.splitlines(), start=1):
         if len(line) > 4000:
             line = line[:4000]
+        if SECRET_FIXTURE_PRAGMA in line:
+            continue
         for label, pattern in SECRET_PATTERNS:
             match = pattern.search(line)
             if not match:

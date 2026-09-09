@@ -1,6 +1,8 @@
 # Observability Architecture
 
-- **Status:** Authored — Architecture Package (V3 §23 K). **Proposed; not implemented.**
+- **Status:** Authored — Architecture Package (V3 §23 K).
+  **Partially implemented:** the trace model, the span taxonomy and a subset of the metric
+  catalogue are emitted by the Phase 4 kernel. No exporter is configured; that is Phase 12.
 - **Master specification references:** Sections 9, 10, 11, 23(K)
 - **Related:** [`../evaluation/EVALUATION_ARCHITECTURE.md`](../evaluation/EVALUATION_ARCHITECTURE.md) · [`failure-and-recovery.md`](./failure-and-recovery.md)
 

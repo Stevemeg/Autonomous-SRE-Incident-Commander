@@ -8,30 +8,36 @@ approval, verifies outcomes, and preserves operational memory.
 
 ---
 
-> ## Project status: foundations built, no product behaviour yet
+> ## Project status: a bounded read-only investigation runs; nothing acts on infrastructure
 >
-> **No agent, no orchestration, no remediation, no API and no frontend exists.** What
-> exists is the ground they will stand on: the architecture package, and a domain model
-> and tenant-aware persistence layer that enforces the safety invariants at the database.
+> A simulated incident can now be investigated end to end through a typed, bounded,
+> tenant-aware orchestration graph — planning, evidence collection through a capability
+> broker, evidence-backed hypotheses, deterministic termination, durable checkpointing and
+> a full execution trace. **It is read-only: no capability above risk tier `RO` is
+> registered, and none can be until the policy gate exists.**
 >
 > | | |
 > |---|---|
-> | **Completed** | Phase 0 bootstrap · Phase 1 requirements · Phase 2 architecture · **Phase 3 domain model and persistence** |
-> | **In progress** | Nothing — awaiting approval to begin Phase 4 |
-> | **Next** | Phase 4 — agent state machine, planner, tool registry and orchestration |
-> | **Implemented product features** | None |
+> | **Completed** | Phase 0 bootstrap · Phase 1 requirements · Phase 2 architecture · Phase 3 domain model and persistence · **Phase 4 orchestration kernel** |
+> | **In progress** | Nothing — awaiting approval to begin Phase 5 |
+> | **Next** | Phase 5 — telemetry ingestion, alert correlation and incident lifecycle |
+> | **Remediation, integrations, API, frontend** | None. Deliberately absent, and structurally prevented |
 >
-> Phase 3 delivered 36 tables, 30 of them protected by PostgreSQL row-level security, a
-> deterministic incident state machine, an append-only event log with gapless sequencing,
-> and domain-level idempotency. **181 tests pass** (117 of them with no database required).
+> Phase 4 delivered five graph nodes under enforced contracts, a tool broker that is the
+> sole egress point, six deterministic simulators, eleven scenarios, budgets checked before
+> every step, at-least-once execution with effect-level idempotency, and OpenTelemetry spans
+> persisted alongside the work they describe. **433 tests pass** (246 of them with no
+> database required).
 >
 > **Start here:** [`docs/architecture/PROJECT_INITIATION_AND_ARCHITECTURE_PACKAGE.md`](docs/architecture/PROJECT_INITIATION_AND_ARCHITECTURE_PACKAGE.md)
-> — sections A–Q. Then [`docs/architecture/tenancy-and-rls.md`](docs/architecture/tenancy-and-rls.md)
-> for how tenant isolation survives an application bug.
+> — sections A–Q. Then [`docs/architecture/orchestration-kernel.md`](docs/architecture/orchestration-kernel.md)
+> for what the kernel does, what it deliberately does not, and what remains unmeasured.
 >
 > Section 20 of the specification forbids fake integrations, fabricated metrics and
 > placeholder production logic. This README states that a capability exists only once it
-> exists and has been validated. **No performance has been measured.**
+> exists and has been validated. **No performance has been measured, and no claim is made
+> about the quality of the system's reasoning** — the harness that could measure it is
+> Phase 11, and the only model provider wired today is a deterministic one.
 
 ---
 
@@ -51,10 +57,10 @@ people do.
 | Capability | Status |
 |---|---|
 | Intelligent alert correlation into coherent incidents | Not started |
-| Autonomous investigation across logs, metrics, traces, Kubernetes, deployments and configuration changes | Not started |
-| Ranked RCA hypotheses with evidence, confidence and counter-evidence | Not started |
-| Operational RAG over runbooks, service docs, known errors and postmortems | Not started |
-| Evidence-backed incident timeline reconstruction | Not started |
+| Autonomous investigation across logs, metrics, traces, Kubernetes, deployments and configuration changes | **Simulator-backed** — orchestration, authorization and the evidence path are built; no real adapter exists |
+| Ranked RCA hypotheses with evidence, confidence and counter-evidence | **Structure built** — citation integrity and the confidence ceiling are enforced in code; reasoning quality is unmeasured |
+| Operational RAG over runbooks, service docs, known errors and postmortems | Not started — a simulator-backed `knowledge.search` capability exists; there is no retrieval pipeline |
+| Evidence-backed incident timeline reconstruction | **Built** — a deterministic projection over the event log |
 | Risk-classified remediation planning | Not started |
 | Human approval before risky or irreversible actions | Not started |
 | Controlled remediation using permission-scoped tools only | Not started |
@@ -62,6 +68,9 @@ people do.
 | Slack/Teams collaboration and PagerDuty/Jira workflows | Not started |
 | Historical incident replay for testing and evaluation | Not started |
 | Governed operational memory and learning | Not started |
+
+Where a row says *built*, it means built against deterministic simulators and covered by
+tests — not exercised against production telemetry, which is Phase 10.
 
 ### Design commitments
 
@@ -112,17 +121,28 @@ If the two ever disagree, the `.docx` wins and the Markdown is the defect.
 │   │                    tool registry, safety policy, memory/RAG,
 │   │                    observability, data model/API, failure & recovery,
 │   │                    requirements traceability, CI/CD and infrastructure
-│   ├── adr/             14 Architecture Decision Records        (3 Accepted)
+│   ├── adr/             17 Architecture Decision Records        (6 Accepted)
 │   ├── security/        Threat model + repository checklist (active)
 │   └── evaluation/      Evaluation harness architecture
 ├── src/asic/
-│   ├── domain/          Vocabularies, incident state machine, events,
-│   │                    idempotency, safety guards      (no I/O, no database)
-│   └── db/              SQLAlchemy models, tenant session context, projections
-├── migrations/          Alembic: schema, then row-level security
+│   ├── domain/          Vocabularies, state machine, events, idempotency,
+│   │                    budgets, untrusted content      (no I/O, no database)
+│   ├── db/              SQLAlchemy models, tenant session context, projections
+│   ├── contracts/       Canonical graph state and enforced node contracts
+│   ├── tools/           Registry, capability resolution, the tool broker
+│   ├── simulators/      Deterministic scenarios     (explicit test infrastructure)
+│   ├── llm/             Model port, versioned prompts, deterministic provider
+│   ├── observability/   Tracing, metrics, audit, redaction
+│   └── orchestration/   Graph, nodes, kernel, checkpointing, termination
+├── migrations/          Alembic: schema, RLS, checkpoints, catalogue seed
 ├── tests/
 │   ├── domain/          Pure unit tests, no database required
-│   └── db/              Isolation, RLS, constraints, event model
+│   ├── contracts/       Contract enforcement
+│   ├── db/              Isolation, RLS, constraints, event model
+│   ├── tools/           Broker pipeline, refusals, idempotency, audit
+│   ├── orchestration/   Kernel, checkpoint/resume, planner bounds, tracing
+│   ├── security/        Prompt injection and escalation attempts
+│   └── e2e/             Every scenario against its declared expectation
 ├── scripts/             Repository tooling (spec verification, hygiene, doc validation)
 └── configs/             Configuration                            (intentionally empty)
 ```
@@ -144,14 +164,15 @@ where justified · Next.js + TypeScript · multi-provider LLM abstraction · Ope
 Prometheus · Grafana · Loki · Docker · Kubernetes · Terraform · GitHub Actions · pytest
 
 All eight technologies the specification flags as "evaluate rather than blindly add" have
-now been evaluated in ADRs. The recommendations — **none accepted yet** — are:
+been evaluated in ADRs. Three are now `Accepted` because Phase 4 implemented them; the rest
+stay open until the phase that would use them:
 
 | Technology | Recommendation | ADR |
 |---|---|---|
-| Temporal | Not adopted; LangGraph + PostgreSQL checkpointing instead. *A close call, recorded as close.* | [0002](docs/adr/0002-orchestration-langgraph-vs-temporal.md) |
-| MCP | Not adopted as transport; native adapters behind an MCP-ready seam | [0003](docs/adr/0003-tool-boundary-native-adapters-mcp-ready.md) |
+| Temporal | **Accepted, not adopted**: LangGraph owns the graph, durability is our own code | [0002](docs/adr/0002-orchestration-langgraph-vs-temporal.md), [0015](docs/adr/0015-domain-owned-checkpointing.md) |
+| MCP | **Accepted, not adopted** as transport; the `ToolProvider` seam exists and no MCP provider uses it | [0003](docs/adr/0003-tool-boundary-native-adapters-mcp-ready.md) |
 | Dedicated vector database | Not adopted; pgvector in the primary store | [0004](docs/adr/0004-postgresql-pgvector-primary-datastore.md) |
-| LiteLLM | Not adopted; thin internal provider interface | [0005](docs/adr/0005-llm-provider-abstraction.md) |
+| LiteLLM | **Accepted, not adopted**; the thin internal port is built, with a deterministic adapter | [0005](docs/adr/0005-llm-provider-abstraction.md), [0016](docs/adr/0016-deterministic-model-provider.md) |
 | Redis | Deferred, with measured adoption triggers | [0006](docs/adr/0006-redis-necessity.md) |
 | Kafka / NATS | Deferred, with measured adoption triggers | [0007](docs/adr/0007-eventing-message-broker-necessity.md) |
 | LangSmith / Arize Phoenix | Not adopted; OpenTelemetry-native, Phoenix in reserve | [0010](docs/adr/0010-observability-and-evaluation-tooling.md) |
@@ -171,9 +192,9 @@ section O.
 |---:|---|---|
 | 0 | Repository bootstrap and specification control | **Complete** |
 | 1 | Product requirements, personas, business metrics and competitive positioning | **Complete** |
-| 2 | Architecture, threat model, technology decisions and ADRs | **Complete — awaiting approval** |
+| 2 | Architecture, threat model, technology decisions and ADRs | **Complete** |
 | 3 | Domain model, PostgreSQL schema, tenancy and event model | **Complete** |
-| 4 | Agent state machine, planner, tool registry and orchestration | Not started |
+| 4 | Agent state machine, planner, tool registry and orchestration | **Complete** |
 | 5 | Telemetry ingestion, alert correlation and incident lifecycle | Not started |
 | 6 | RAG, operational knowledge and governed memory | Not started |
 | 7 | Investigation agents, hypothesis management and bounded reflection | Not started |
@@ -196,13 +217,28 @@ There is no application to run yet. The repository tooling requires only Python 
 no third-party dependencies:
 
 ```bash
-# Repository tooling - standard library only, no dependencies
+# Repository tooling. Standard library only, except the phase-boundary check, which imports
+# the capability catalogue so that it validates what the code will actually load.
 python scripts/verify_spec_transcription.py   # .md still matches the authoritative .docx
 python scripts/check_repo_hygiene.py          # secrets, credentials, generated files
 python scripts/validate_docs.py               # links, Mermaid, traceability, phase scope
 ```
 
 All three must pass before any commit.
+
+### Running a simulated investigation
+
+```bash
+export ASIC_MIGRATION_DATABASE_URL=postgresql+psycopg2://asic_owner:<password>@localhost:55432/asic
+export ASIC_DATABASE_URL=postgresql+psycopg2://<app_login>:<password>@localhost:55432/asic
+.venv/Scripts/python -m alembic upgrade head
+.venv/Scripts/python -m asic.orchestration.service --scenario SC-0001-checkout-latency-after-deploy
+```
+
+Seeding a demonstration tenant uses the administrative URL; the investigation itself runs as
+the application role under row-level security, exactly as it would in production. Every
+source is a deterministic simulator, and the run refuses to start if the deployment is
+marked production.
 
 ### Running the test suite
 
@@ -211,8 +247,8 @@ The pure-domain tests need nothing. The database tests need PostgreSQL with `pgv
 ```bash
 python -m venv .venv && .venv/Scripts/python -m pip install -e ".[dev]"
 
-# Domain tests only - no database
-.venv/Scripts/python -m pytest tests/domain
+# Tests that need no database
+.venv/Scripts/python -m pytest tests/domain tests/contracts
 
 # Full suite: start PostgreSQL, migrate, then run
 docker run -d --name asic-pg -e POSTGRES_PASSWORD=<choose> -e POSTGRES_USER=asic_owner     -e POSTGRES_DB=asic -p 55432:5432 pgvector/pgvector:pg16

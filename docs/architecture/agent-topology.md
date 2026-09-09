@@ -1,6 +1,10 @@
 # Agent Topology and State Machine
 
-- **Status:** Authored — Architecture Package (V3 §23 F). **Proposed; not implemented.** Formalised as [ADR-0001](../adr/0001-agent-topology-consolidation.md).
+- **Status:** Authored — Architecture Package (V3 §23 F). Formalised as [ADR-0001](../adr/0001-agent-topology-consolidation.md).
+  **Partially implemented:** G2, G3, G4 and G5 exist in the Phase 4 orchestration kernel
+  ([`orchestration-kernel.md`](./orchestration-kernel.md)); G1 is Phase 5, G6-G10 Phase 8,
+  G11-G12 later. G4 is implemented without a model call for now, which the kernel document
+  records and justifies.
 - **Master specification references:** Sections 4, 5, 12, 16, 23(F)
 - **Authoritative source:** [`../spec/MASTER_PROJECT_PROMPT_V3.md`](../spec/MASTER_PROJECT_PROMPT_V3.md)
 

@@ -50,6 +50,16 @@ from asic.db.models import (
 )
 from asic.domain.enums import IncidentSeverity, IncidentStatus, RiskTier
 
+# LangSmith arrives transitively through langchain-core. It is not adopted (ADR-0010) and
+# nothing in this project sends it anything, but a stray environment variable would turn a
+# test run into an outbound request. Disabled here, before anything imports langgraph.
+os.environ.setdefault("LANGSMITH_TRACING", "false")
+os.environ.setdefault("LANGCHAIN_TRACING_V2", "false")
+
+#: The orchestration-kernel fixtures live in their own module and are registered here so
+#: every suite shares one definition of the scenario fixture set.
+pytest_plugins = ("tests.kernel_fixtures",)
+
 TEST_URL_ENV = "ASIC_TEST_DATABASE_URL"
 
 #: Login role used by the application-role tests. Created by :func:`_ensure_test_app_role`

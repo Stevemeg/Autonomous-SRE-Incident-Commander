@@ -1,6 +1,8 @@
 # ADR-0005: Multi-provider LLM abstraction — thin internal interface, not LiteLLM
 
-- **Status:** Proposed
+- **Status:** Accepted — implemented in Phase 4 as `asic.llm.port.ModelProvider`. The only
+  adapter is deterministic; no provider SDK is a dependency
+  ([ADR-0016](./0016-deterministic-model-provider.md)).
 - **Date:** 2026-09-04
 - **Deciders:** Project owner (pending approval)
 - **Spec reference:** §9, §10, §11, §13

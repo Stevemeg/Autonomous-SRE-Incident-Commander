@@ -1,6 +1,10 @@
 # Failure and Recovery Design
 
-- **Status:** Authored — Architecture Package (V3 §23, durability model). **Proposed; not implemented.**
+- **Status:** Authored — Architecture Package (V3 §23, durability model).
+  **Partially implemented:** the retry classification, budgets, checkpointing, leasing and
+  resume-with-reconciliation exist for the read path
+  ([`orchestration-kernel.md`](./orchestration-kernel.md)). The remediation half - unknown
+  outcomes, compensation, approval waits - arrives with Phase 8.
 - **Master specification references:** Sections 5, 12, 16, 17
 - **Related:** [`remediation-safety-policy.md`](./remediation-safety-policy.md) · [`../adr/0002-orchestration-langgraph-vs-temporal.md`](../adr/0002-orchestration-langgraph-vs-temporal.md)
 

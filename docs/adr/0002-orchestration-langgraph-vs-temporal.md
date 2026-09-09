@@ -1,6 +1,8 @@
 # ADR-0002: Orchestration and workflow durability — LangGraph checkpointing vs Temporal
 
-- **Status:** Proposed
+- **Status:** Accepted — implemented in Phase 4. The durability clause is honoured by
+  [ADR-0015](./0015-domain-owned-checkpointing.md): the kernel owns checkpointing, leasing
+  and reconciliation, and no LangGraph checkpointer is attached.
 - **Date:** 2026-09-04
 - **Deciders:** Project owner (pending approval)
 - **Spec reference:** §4, §12, §13 of [`../spec/MASTER_PROJECT_PROMPT_V3.md`](../spec/MASTER_PROJECT_PROMPT_V3.md)

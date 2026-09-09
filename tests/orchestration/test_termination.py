@@ -1,0 +1,307 @@
+"""The termination rule set is ordered, total, and does not claim success.
+
+Master specification section 5 requires every run to end in one of five categories. These
+tests assert that it always ends in exactly one, that precedence is right, and - the point
+that matters most - that a confident hypothesis over thin or contradicted evidence is not
+escalated as an answer.
+"""
+
+from __future__ import annotations
+
+import itertools
+
+import pytest
+
+from asic.contracts.state import HypothesisRef, NodeFailureRef
+from asic.domain.budget import BudgetLedger, BudgetPolicy, BudgetState
+from asic.domain.enums import (
+    HypothesisStatus,
+    IncidentStatus,
+    NodeId,
+    PlannerAction,
+    TerminationReason,
+)
+from asic.orchestration.termination import (
+    MIN_ACTIONABLE_CONFIDENCE,
+    RULES,
+    TerminationInputs,
+    decide,
+)
+
+
+def _hypothesis(
+    *,
+    confidence: float = 0.9,
+    supporting: int = 3,
+    contradicting: int = 0,
+    rank: int = 1,
+    status: HypothesisStatus = HypothesisStatus.PROPOSED,
+) -> HypothesisRef:
+    return HypothesisRef(
+        hypothesis_id=f"h-{rank}",
+        rank=rank,
+        root_cause_class="bad_deployment",
+        confidence=confidence,
+        status=status,
+        supporting_evidence_count=supporting,
+        contradicting_evidence_count=contradicting,
+    )
+
+
+def _failure(*, recoverable: bool) -> NodeFailureRef:
+    return NodeFailureRef(
+        node_id=NodeId.G4_EVIDENCE_COLLECTOR,
+        node_version="1.0.0",
+        error_type="EvidenceUnavailable",
+        message="the log backend refused the query",
+        recoverable=recoverable,
+        occurred_at="2026-09-07T10:00:00+00:00",
+    )
+
+
+def _inputs(**overrides: object) -> TerminationInputs:
+    defaults: dict[str, object] = {
+        "budget": BudgetState.initial(),
+        "hypotheses": [],
+        "evidence_count": 0,
+        "failures": [],
+        "degraded_domains": [],
+        "attempted_domains": [],
+        "planner_action": None,
+        "open_gaps": [],
+    }
+    defaults.update(overrides)
+    return TerminationInputs(**defaults)  # type: ignore[arg-type]
+
+
+class TestTotality:
+    def test_the_final_rule_matches_unconditionally(self) -> None:
+        assert RULES[-1].matches(_inputs()) is True
+
+    def test_every_combination_of_inputs_yields_a_verdict(self) -> None:
+        # Exhaustive over the shape of the inputs, not over their values: the point is that
+        # no combination falls through the rule set.
+        budgets = [
+            BudgetState.initial(),
+            BudgetState(policy=BudgetPolicy(max_iterations=1), ledger=BudgetLedger(iterations=1)),
+        ]
+        hypothesis_sets: list[list[HypothesisRef]] = [
+            [],
+            [_hypothesis(confidence=0.9)],
+            [_hypothesis(confidence=0.2, supporting=1)],
+            [_hypothesis(confidence=0.9, contradicting=2)],
+        ]
+        failure_sets: list[list[NodeFailureRef]] = [
+            [],
+            [_failure(recoverable=True)],
+            [_failure(recoverable=False)],
+        ]
+        actions: list[PlannerAction | None] = [None, *PlannerAction]
+
+        for budget, hypotheses, failures, action in itertools.product(
+            budgets, hypothesis_sets, failure_sets, actions
+        ):
+            verdict = decide(
+                _inputs(
+                    budget=budget,
+                    hypotheses=hypotheses,
+                    failures=failures,
+                    planner_action=action,
+                    evidence_count=len(hypotheses) * 2,
+                    attempted_domains=["metrics", "logs"],
+                )
+            )
+            assert verdict.rule_id, "every verdict names the rule that produced it"
+            if verdict.should_terminate:
+                assert verdict.reason is not None
+                assert verdict.incident_status is not None
+
+    def test_a_terminal_verdict_always_carries_a_reason_and_a_status(self) -> None:
+        verdict = decide(_inputs(planner_action=PlannerAction.TERMINATE))
+        assert verdict.should_terminate
+        assert verdict.reason is TerminationReason.INSUFFICIENT_EVIDENCE
+        assert verdict.incident_status is IncidentStatus.UNCERTAIN
+
+
+class TestPrecedence:
+    def test_an_unrecoverable_failure_outranks_everything(self) -> None:
+        verdict = decide(
+            _inputs(
+                failures=[_failure(recoverable=False)],
+                budget=BudgetState(
+                    policy=BudgetPolicy(max_iterations=1), ledger=BudgetLedger(iterations=5)
+                ),
+                hypotheses=[_hypothesis()],
+                planner_action=PlannerAction.TERMINATE,
+            )
+        )
+        assert verdict.reason is TerminationReason.UNRECOVERABLE_FAILURE
+        assert verdict.incident_status is IncidentStatus.FAILED
+
+    def test_a_recoverable_failure_does_not_terminate_the_run(self) -> None:
+        verdict = decide(_inputs(failures=[_failure(recoverable=True)]))
+        assert verdict.should_terminate is False
+
+    def test_budget_exhaustion_outranks_a_strong_hypothesis(self) -> None:
+        verdict = decide(
+            _inputs(
+                budget=BudgetState(
+                    policy=BudgetPolicy(max_tool_calls=2), ledger=BudgetLedger(tool_calls=2)
+                ),
+                hypotheses=[_hypothesis()],
+                planner_action=PlannerAction.TERMINATE,
+                attempted_domains=["metrics", "logs"],
+                evidence_count=4,
+            )
+        )
+        assert verdict.reason is TerminationReason.BUDGET_EXHAUSTED
+        assert verdict.rule_id == "R3_budget_exhausted"
+
+    def test_wall_clock_exhaustion_is_reported_as_a_timeout(self) -> None:
+        verdict = decide(
+            _inputs(
+                budget=BudgetState(
+                    policy=BudgetPolicy(max_wall_clock_seconds=60),
+                    ledger=BudgetLedger(elapsed_seconds=61.0),
+                )
+            )
+        )
+        assert verdict.reason is TerminationReason.WALL_CLOCK_TIMEOUT
+        assert verdict.rule_id == "R2_wall_clock_timeout"
+
+
+class TestActionability:
+    def test_a_well_supported_hypothesis_is_escalated_to_a_human(self) -> None:
+        verdict = decide(
+            _inputs(
+                hypotheses=[_hypothesis(confidence=0.86, supporting=3)],
+                planner_action=PlannerAction.TERMINATE,
+                attempted_domains=["metrics", "logs", "deployments"],
+                evidence_count=3,
+            )
+        )
+        assert verdict.reason is TerminationReason.HUMAN_ESCALATION
+        assert verdict.incident_status is IncidentStatus.ESCALATED
+
+    def test_resolution_is_never_claimed(self) -> None:
+        # The read-only kernel cannot remediate and therefore cannot verify a fix. Claiming
+        # `resolved` would report an outcome the system did not produce.
+        statuses = set()
+        for confidence in (0.0, 0.3, 0.6, 0.99):
+            for supporting in (0, 1, 3):
+                for contradicting in (0, 2):
+                    verdict = decide(
+                        _inputs(
+                            hypotheses=[
+                                _hypothesis(
+                                    confidence=confidence,
+                                    supporting=supporting,
+                                    contradicting=contradicting,
+                                )
+                            ],
+                            planner_action=PlannerAction.TERMINATE,
+                            attempted_domains=["metrics", "logs"],
+                            evidence_count=supporting,
+                        )
+                    )
+                    if verdict.incident_status:
+                        statuses.add(verdict.incident_status)
+        assert IncidentStatus.RESOLVED not in statuses
+
+    def test_a_contradicted_hypothesis_is_not_actionable(self) -> None:
+        verdict = decide(
+            _inputs(
+                hypotheses=[_hypothesis(confidence=0.95, supporting=4, contradicting=1)],
+                planner_action=PlannerAction.TERMINATE,
+                attempted_domains=["metrics", "deployments"],
+                evidence_count=5,
+            )
+        )
+        assert verdict.reason is TerminationReason.INSUFFICIENT_EVIDENCE
+        assert verdict.rule_id == "R5_planner_terminated_without_conclusion"
+
+    def test_a_confident_hypothesis_on_one_record_is_not_actionable(self) -> None:
+        # Failure mode F4: a confident, plausible, wrong answer that nothing crashes on.
+        verdict = decide(
+            _inputs(
+                hypotheses=[_hypothesis(confidence=0.99, supporting=1)],
+                planner_action=PlannerAction.TERMINATE,
+                attempted_domains=["metrics"],
+                evidence_count=1,
+            )
+        )
+        assert verdict.reason is TerminationReason.INSUFFICIENT_EVIDENCE
+
+    def test_a_low_confidence_hypothesis_is_not_actionable(self) -> None:
+        verdict = decide(
+            _inputs(
+                hypotheses=[_hypothesis(confidence=MIN_ACTIONABLE_CONFIDENCE - 0.01, supporting=4)],
+                planner_action=PlannerAction.TERMINATE,
+                attempted_domains=["metrics", "logs"],
+                evidence_count=4,
+            )
+        )
+        assert verdict.reason is TerminationReason.INSUFFICIENT_EVIDENCE
+
+    def test_poor_domain_coverage_blocks_escalation_of_a_cause(self) -> None:
+        verdict = decide(
+            _inputs(
+                hypotheses=[_hypothesis(confidence=0.9, supporting=3)],
+                planner_action=PlannerAction.TERMINATE,
+                attempted_domains=["metrics", "logs", "traces", "deployments"],
+                degraded_domains=["logs", "traces", "deployments"],
+                evidence_count=3,
+            )
+        )
+        assert verdict.reason is TerminationReason.INSUFFICIENT_EVIDENCE
+
+    def test_a_rejected_hypothesis_does_not_count(self) -> None:
+        verdict = decide(
+            _inputs(
+                hypotheses=[
+                    _hypothesis(
+                        confidence=0.99,
+                        supporting=5,
+                        status=HypothesisStatus.REJECTED_UNSUPPORTED,
+                    )
+                ],
+                planner_action=PlannerAction.TERMINATE,
+                attempted_domains=["metrics", "logs"],
+                evidence_count=5,
+            )
+        )
+        assert verdict.reason is TerminationReason.INSUFFICIENT_EVIDENCE
+
+
+class TestContinuation:
+    def test_a_run_with_headroom_and_no_planner_verdict_continues(self) -> None:
+        verdict = decide(_inputs(planner_action=PlannerAction.COLLECT_EVIDENCE))
+        assert verdict.should_terminate is False
+        assert verdict.rule_id == "R6_continue"
+        assert verdict.reason is None
+
+    def test_forming_a_hypothesis_does_not_end_the_run(self) -> None:
+        verdict = decide(_inputs(planner_action=PlannerAction.FORM_HYPOTHESIS))
+        assert verdict.should_terminate is False
+
+
+class TestRuleSetShape:
+    def test_rule_ids_are_unique(self) -> None:
+        ids = [rule.rule_id for rule in RULES]
+        assert len(ids) == len(set(ids))
+
+    def test_the_rule_set_is_not_empty_and_ends_with_the_catch_all(self) -> None:
+        assert len(RULES) >= 2
+        assert RULES[-1].rule_id == "R6_continue"
+
+    def test_no_rule_before_the_last_matches_an_empty_input(self) -> None:
+        empty = _inputs()
+        for rule in RULES[:-1]:
+            assert rule.matches(empty) is False, f"{rule.rule_id} matched a fresh run"
+
+
+def test_decide_raises_if_the_rule_set_stops_being_total(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Removing the catch-all must fail loudly, not silently change what "continue" means."""
+    monkeypatch.setattr("asic.orchestration.termination.RULES", RULES[:-1])
+    with pytest.raises(AssertionError, match="required to be total"):
+        decide(_inputs())
