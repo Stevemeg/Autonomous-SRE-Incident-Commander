@@ -1,7 +1,7 @@
 """Autonomous SRE Incident Commander.
 
-Phase 3 scope: the domain model and tenant-aware persistence layer. No agents, no
-orchestration, no remediation execution, no external integrations, no web layer.
+Phase 5: tenant-aware telemetry ingestion, deterministic correlation and bounded
+read-only orchestration. No remediation, production integrations or web layer.
 """
 
-__version__ = "0.3.0"
+__version__ = "0.5.0"

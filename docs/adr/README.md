@@ -61,6 +61,10 @@ Use [`0000-adr-template.md`](./0000-adr-template.md) as the starting point.
 
 ## Index
 
+Phase 5 implementation decision: [ADR-0019](./0019-transactional-signal-ingestion.md),
+transactional ingestion and durable investigation requests. Proposed for milestone review;
+it adds no infrastructure and does not replace an accepted ADR.
+
 | ADR | Title | Status | Spec ref | Date |
 |---|---|---|---|---|
 | [0001](./0001-agent-topology-consolidation.md) | Agent topology — 19 responsibilities into 12 nodes | `Proposed` | 4, 5, 6, 15 | 2026-09-04 |

@@ -1,5 +1,9 @@
 # Observability Architecture
 
+Phase 5 adds bounded OTel ingestion/dispatch spans, stage counters and duration histograms.
+Its [telemetry contract](./telemetry-ingestion.md) distinguishes durable receipt decisions,
+execution traces and unexported stage spans. No dashboard or performance claim is added.
+
 - **Status:** Authored — Architecture Package (V3 §23 K).
   **Partially implemented:** the trace model, the span taxonomy and a subset of the metric
   catalogue are emitted by the Phase 4 kernel. No exporter is configured; that is Phase 12.

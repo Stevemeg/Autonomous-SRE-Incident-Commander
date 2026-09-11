@@ -3,7 +3,7 @@
 This directory holds every non-code artifact required by the master specification
 (section 16, "REQUIRED ARCHITECTURE/DOCUMENTATION").
 
-> **Current project stage: Phase 4 complete — the orchestration kernel.**
+> **Current project stage: Phase 5 complete — ingestion and incident correlation.**
 > A bounded, read-only, simulator-backed incident investigation runs end to end through a
 > typed graph with a capability broker, durable checkpointing and structured traces.
 > **No remediation, no external integration, no API and no frontend exists**, and no
@@ -40,6 +40,8 @@ area and points to the document that owns the detail.
 7. [`architecture/tenancy-and-rls.md`](./architecture/tenancy-and-rls.md) — how tenant isolation survives a bug.
 8. [`architecture/orchestration-kernel.md`](./architecture/orchestration-kernel.md) — what
    Phase 4 built, what it deliberately did not, and what remains unmeasured.
+9. [`architecture/telemetry-ingestion.md`](./architecture/telemetry-ingestion.md) — normalized
+   signals, durable receipts, correlation explanations and the recoverable investigation handoff.
 
 ### If you are reviewing for security
 

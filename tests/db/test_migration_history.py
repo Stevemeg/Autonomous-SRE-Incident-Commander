@@ -149,20 +149,20 @@ class TestPinnedListsMatchHistory:
         pinned = sorted(module.APPEND_ONLY_TABLES)
         assert pinned == phase_3_tables["append_only"]
 
-    def test_phase_4_added_exactly_one_tenant_scoped_table(
+    def test_phase_4_and_5_tenant_scoped_additions(
         self, phase_3_tables: dict[str, list[str]]
     ) -> None:
         # The corollary: everything 0003 no longer covers must be covered by a later
         # migration. Only `workflow_checkpoint` was added, and 0004 creates and protects it
         # in the same migration.
         added = tenant_scoped_tables() - set(phase_3_tables["tenant"])
-        assert added == {"workflow_checkpoint"}
+        assert added == {"workflow_checkpoint", "signal_receipt", "investigation_dispatch"}
 
-    def test_phase_4_added_exactly_one_append_only_table(
+    def test_phase_4_and_5_append_only_additions(
         self, phase_3_tables: dict[str, list[str]]
     ) -> None:
         added = append_only_tables() - set(phase_3_tables["append_only"])
-        assert added == {"workflow_checkpoint"}
+        assert added == {"workflow_checkpoint", "signal_receipt"}
 
 
 # ------------------------------------------------------------------- self-containment
@@ -314,6 +314,64 @@ def _table_names(url: str) -> set[str]:
 
 @requires_postgres
 class TestUpgradePaths:
+    def test_accepted_phase_4_head_upgrades_and_preserves_alerts(
+        self, throwaway_database: str
+    ) -> None:
+        from sqlalchemy.orm import Session
+
+        from asic.db.session import bind_tenant
+        from tests.conftest import make_tenant
+
+        config = _alembic_config(throwaway_database)
+        command.upgrade(config, "0005_seed_ro_catalogue")
+        engine = sa.create_engine(throwaway_database)
+        with Session(engine) as session, session.begin():
+            tenant = make_tenant(session, "phase4-upgrade-probe")
+            bind_tenant(session, tenant.id)
+            tenant_id = tenant.id
+            # Raw SQL describes the accepted historical schema, not current models.
+            alert_id = session.execute(
+                sa.text("""INSERT INTO alert
+                (tenant_id, source, source_fingerprint, idempotency_key, severity, status, title, started_at)
+                VALUES (:t, 'simulator', 'historical', :k, 'high', 'normalised', 'Historical alert', now())
+                RETURNING id"""),
+                {"t": tenant_id, "k": "a" * 64},
+            ).scalar_one()
+        command.upgrade(config, "head")
+        with engine.connect() as conn:
+            row = conn.execute(
+                sa.text("SELECT title, source_state FROM alert WHERE id=:i"), {"i": alert_id}
+            ).one()
+            assert row == ("Historical alert", None)
+        command.check(config)
+        engine.dispose()
+
+    def test_phase_5_history_blocks_downgrade(self, throwaway_database: str) -> None:
+        from sqlalchemy.orm import Session, sessionmaker
+
+        from asic.ingestion.contracts import ConnectorContext
+        from asic.ingestion.service import IngestionService
+        from tests.conftest import make_tenant
+
+        config = _alembic_config(throwaway_database)
+        command.upgrade(config, "head")
+        engine = sa.create_engine(throwaway_database)
+        factory = sessionmaker(engine, expire_on_commit=False)
+        with Session(engine) as session, session.begin():
+            tenant = make_tenant(session, "phase5-history-probe")
+            context = ConnectorContext(
+                tenant_id=tenant.id,
+                connector_id="fixture",
+                source="simulator",
+                service_id=uuid.uuid4(),
+                environment_id=uuid.uuid4(),
+            )
+        IngestionService(factory).ingest(context, b"malformed")
+        with pytest.raises(Exception, match="Phase 5 history exists"):
+            command.downgrade(config, "0005_seed_ro_catalogue")
+        assert "signal_receipt" in _table_names(throwaway_database)
+        engine.dispose()
+
     def test_a_clean_database_upgrades_to_head(self, throwaway_database: str) -> None:
         config = _alembic_config(throwaway_database)
         command.upgrade(config, "head")
@@ -342,7 +400,11 @@ class TestUpgradePaths:
 
         assert "workflow_checkpoint" in _table_names(throwaway_database)
         protected_after = _protected_tables(throwaway_database)
-        assert protected_after == protected_before | {"workflow_checkpoint"}
+        assert protected_after == protected_before | {
+            "workflow_checkpoint",
+            "signal_receipt",
+            "investigation_dispatch",
+        }
 
     def test_row_level_security_covers_every_tenant_scoped_table_after_upgrade(
         self, throwaway_database: str

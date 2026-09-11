@@ -1,5 +1,28 @@
 # Requirements Traceability Matrix
 
+## Phase 5 implementation evidence
+
+[Telemetry ingestion](./telemetry-ingestion.md) and `tests/ingestion` implement the
+deterministic ingestion/correlation/application portion of the following requirements.
+This does not claim that future transport authentication or production adapters exist.
+
+| Requirement | Implemented evidence and limits |
+|---|---|
+| FR-ING-01 | Connector-bound tenant/service/environment; spoofing tests. HTTP authentication remains Phase 9/10 |
+| FR-ING-03 | Delivery/occurrence identities, committed duplicate and concurrency tests |
+| FR-ING-04 | Canonical versioned envelope, simulator and Alertmanager-format fixture normalizers; future production sources deferred |
+| FR-ING-05 | Durable typed rejection receipts; append/DB failure propagates and rolls back, caller retries |
+| FR-COR-01 | Twelve-alert storm produces one incident under the v1 service/category/window policy |
+| FR-COR-02 | Pure deterministic correlation with an import-boundary test excluding model reasoning |
+| FR-COR-03 | Versioned positive/negative factors, candidate exclusions and persisted ambiguity decisions |
+| FR-COR-04 | Late occurrence joins by start-time anchor; source resolution does not terminate investigation |
+| FR-INC-04 | Incident events remain append-only; checkpoint/request handoff and existing lifecycle transitions tested |
+
+Additional coverage: application-role RLS and composite foreign keys, atomic rollback,
+source-state ordering, source text without authority, read-only trigger deduplication,
+pre-drive crash recovery, trace redaction and migration clean/accepted-head/round-trip/drift.
+No production scale or performance result is implied.
+
 - **Status:** Authored — Architecture Package. **Most requirements below are not implemented**; the note beneath says exactly which are, and on what evidence.
 - **Requirement definitions:** [`../prd/SRS.md`](../prd/SRS.md)
 - **Master specification:** [`../spec/MASTER_PROJECT_PROMPT_V3.md`](../spec/MASTER_PROJECT_PROMPT_V3.md)

@@ -46,6 +46,7 @@ from asic.contracts.state import (
 from asic.db.models.catalog import Environment, Service
 from asic.db.models.evaluation import BehaviourVersion, ExecutionTrace, TraceSpan
 from asic.db.models.incident import Alert, Incident, WorkflowRun
+from asic.db.models.ingestion import InvestigationDispatch
 from asic.db.projections import append_incident_event, apply_transition, project_timeline
 from asic.domain.budget import BudgetLedger, BudgetPolicy, BudgetState
 from asic.domain.clock import Clock, SystemClock
@@ -92,6 +93,10 @@ InterruptProbe = Callable[[str, int], None]
 
 class KernelInterrupted(RuntimeError):
     """Raised by an interrupt probe to simulate process death at a node boundary."""
+
+
+class DispatchAlreadyLinked(DomainError):
+    """A durable ingestion request already owns a run; dispatch must reconcile it."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -162,10 +167,26 @@ class InvestigationKernel:
         service_ids: list[uuid.UUID],
         fixture_refs: Mapping[str, Any] | None = None,
         random_seed: int | None = None,
+        dispatch_id: uuid.UUID | None = None,
     ) -> RunOutcome:
         """Open a run for an incident and drive it until it stops or is interrupted."""
         uow = UnitOfWork(self._session_factory, tenant_id=tenant_id)
         with uow as session:
+            dispatch = None
+            if dispatch_id is not None:
+                dispatch = session.scalar(
+                    sa.select(InvestigationDispatch)
+                    .where(
+                        InvestigationDispatch.tenant_id == tenant_id,
+                        InvestigationDispatch.id == dispatch_id,
+                        InvestigationDispatch.incident_id == incident_id,
+                    )
+                    .with_for_update()
+                )
+                if dispatch is None:
+                    raise DomainError("investigation request is not visible for this incident")
+                if dispatch.workflow_run_id is not None:
+                    raise DispatchAlreadyLinked("investigation request already has a run")
             incident = _load_incident(session, tenant_id=tenant_id, incident_id=incident_id)
             _assert_startable(incident)
             scope = load_incident_scope(
@@ -177,7 +198,7 @@ class InvestigationKernel:
             )
             _assert_behaviour_version(session, behaviour_version_id)
 
-            correlation_id = uuid.uuid4()
+            correlation_id = dispatch.correlation_id if dispatch is not None else uuid.uuid4()
             run_started_at = self._clock.now()
             run = WorkflowRun(
                 id=uuid.uuid4(),
@@ -192,6 +213,10 @@ class InvestigationKernel:
             )
             session.add(run)
             session.flush()
+
+            if dispatch is not None:
+                dispatch.workflow_run_id = run.id
+                dispatch.last_error = None
 
             trace_id = derive_trace_id(correlation_id)
             trace_row = ExecutionTrace(
@@ -235,6 +260,15 @@ class InvestigationKernel:
             )
             objective = _objective(session, incident, scope)
             state = _initial_state(identity, trace, objective, self._budget_policy)
+            # The initial checkpoint and run identity commit together. A process dying
+            # before _drive is now resumable, including the durable ingestion handoff.
+            CheckpointStore(clock=self._clock).write(
+                session,
+                state=state,
+                reason="run_started",
+                after_node=None,
+                budget=BudgetState.initial(self._budget_policy),
+            )
 
         context = RunContext(
             identity=identity, trace=trace, scope=scope, lease_owner=self._lease_owner
@@ -423,7 +457,7 @@ class InvestigationKernel:
         graph = build_graph(deps)
 
         executed: list[str] = []
-        written = 0
+        written = 0 if resumed else 1
         # Seed the elapsed total before the first node runs. A resumed run has already been
         # going for a while, and without this its first planning step would see a wall clock
         # of zero and take a step it had no time left for.
@@ -434,11 +468,10 @@ class InvestigationKernel:
         interrupted = False
 
         try:
-            uow.begin()
-            written += self._checkpoint(
-                deps, current, reason="run_started" if not resumed else "node_boundary", node=None
-            )
-            uow.commit()
+            if resumed:
+                uow.begin()
+                written += self._checkpoint(deps, current, reason="node_boundary", node=None)
+                uow.commit()
 
             uow.begin()
             for chunk in graph.stream(

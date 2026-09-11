@@ -15,7 +15,7 @@ and simulator-backed**. Nothing here mutates infrastructure, and nothing here ca
 | | |
 |---|---|
 | **Exists** | Typed graph state · five node contracts, enforced · a LangGraph graph with explicit routing · the tool registry, capability resolver and broker · deterministic simulators for six read domains · a versioned prompt set and a model port · budgets checked before every step · checkpointing and resume · execution traces and audit records · a deterministic terminator |
-| **Does not exist** | Remediation planning, the policy gate, approval, execution, verification · alert correlation and ingestion · RAG and governed memory · postmortems · external integrations · the HTTP surface · the frontend · the evaluation harness |
+| **Does not exist** | Remediation planning, the policy gate, approval, execution, verification · RAG and governed memory · postmortems · external integrations · the HTTP surface · the frontend · the evaluation harness |
 | **Not measured** | Latency, throughput, cost, reasoning quality. No performance figure appears in this document because none has been taken. |
 
 The read-only ceiling is a decision, not an omission: a write capability with no policy gate
@@ -40,7 +40,8 @@ flowchart LR
 ```
 
 Five graph nodes implementing four of the twelve approved components. `G1` alert
-correlation is Phase 5; `G6`–`G10` are the remediation path; `G11`–`G12` are post-incident.
+correlation is the deterministic Phase 5 [ingestion service](./telemetry-ingestion.md);
+`G6`–`G10` are the remediation path; `G11`–`G12` are post-incident.
 The coordinator contributes two nodes — entry routing and termination — under separate
 contracts, so the node that starts a run is not the node that can end it.
 
@@ -314,6 +315,11 @@ instead of invoking twice; a resumed run recomputes the same step sequence and t
 Calling this exactly-once would be a claim the design does not support.
 
 ### 10.2 One transaction per node
+
+Phase 5 closes the startup crash window: the initial checkpoint now commits in the same
+transaction as run creation. A durable ingestion request can optionally be linked there,
+carrying its correlation ID into the execution trace. Existing callers retain their entry
+point and outcome contract. A duplicate linked request is reconciled by the dispatcher.
 
 The kernel streams the graph and, at each node boundary, validates the update against the
 node's contract, flushes its spans, writes a checkpoint and commits — all in the transaction

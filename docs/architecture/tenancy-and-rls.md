@@ -1,5 +1,10 @@
 # Tenancy and Row-Level Security
 
+Phase 5 migration `0006_telemetry_ingestion` adds FORCE RLS and composite tenant foreign
+keys for `signal_receipt` and `investigation_dispatch`; receipts are append-only.
+The [ingestion contract](./telemetry-ingestion.md) binds each worker explicitly and keeps
+payload identity separate from the trusted connector context.
+
 - **Status:** **Implemented** in Phase 3 (`0003_tenant_isolation_rls`). Verified by `tests/db/test_tenant_isolation.py`.
 - **Master specification references:** Sections 15, 20
 - **Decision record:** [ADR-0011](../adr/0011-authentication-authorization-tenancy.md) · [ADR-0013](../adr/0013-composite-tenant-foreign-keys.md)

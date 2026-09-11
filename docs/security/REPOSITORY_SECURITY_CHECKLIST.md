@@ -1,5 +1,12 @@
 # Repository Quality and Security Checklist
 
+Before committing or pushing, inspect Git authors/committers and attribution trailers,
+AUTHORS/CONTRIBUTORS files, README credits and package author metadata. The human owner is
+the sole project contributor; implementation tools receive no author, committer or
+co-author credit. Correct local/unpushed attribution while preserving the owner's identity.
+Report attribution in shared history and obtain explicit approval before rewriting it.
+Preserve dependency licenses and factual provider references.
+
 > **Status: ACTIVE from Phase 0.** Unlike the other documents in this directory, this
 > checklist is in force now and applies to every commit and push.
 

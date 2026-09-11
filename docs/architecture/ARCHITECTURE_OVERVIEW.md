@@ -17,6 +17,7 @@ detail document wins** and this one is the defect.
 | Trace model and correlation identifiers | [`observability.md`](./observability.md) |
 | State machine, retries, recovery | [`failure-and-recovery.md`](./failure-and-recovery.md) |
 | Entities, invariants, API boundaries | [`data-model-and-api.md`](./data-model-and-api.md) |
+| Signal ingestion, correlation and lifecycle handoff | [`telemetry-ingestion.md`](./telemetry-ingestion.md) |
 | Threats, invariants, untrusted input | [`../security/THREAT_MODEL.md`](../security/THREAT_MODEL.md) |
 | Golden scenarios, judges, regression | [`../evaluation/EVALUATION_ARCHITECTURE.md`](../evaluation/EVALUATION_ARCHITECTURE.md) |
 | C4 context/container/component views | [`c4-diagrams.md`](./c4-diagrams.md) |

@@ -1,5 +1,9 @@
 # Failure and Recovery Design
 
+Phase 5 implements atomic ingestion failure/retry and investigation-request reconciliation.
+See [telemetry ingestion](./telemetry-ingestion.md) for malformed input, stale events,
+database rollback, ambiguity, candidate bounds and dispatch recovery behavior.
+
 - **Status:** Authored — Architecture Package (V3 §23, durability model).
   **Partially implemented:** the retry classification, budgets, checkpointing, leasing and
   resume-with-reconciliation exist for the read path

@@ -74,6 +74,7 @@ class InvestigationRequest:
     service_ids: tuple[uuid.UUID, ...]
     scenario_id: str | None = None
     random_seed: int | None = None
+    dispatch_id: uuid.UUID | None = None
 
 
 class InvestigationService:
@@ -116,6 +117,7 @@ class InvestigationService:
             service_ids=list(request.service_ids),
             fixture_refs=fixture_refs,
             random_seed=request.random_seed,
+            dispatch_id=request.dispatch_id,
         )
 
     def resume(self, *, tenant_id: uuid.UUID, workflow_run_id: uuid.UUID) -> RunOutcome:

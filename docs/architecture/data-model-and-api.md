@@ -1,5 +1,9 @@
 # Data Model and API Boundary
 
+Phase 5 adds delivery receipts, source-state projections and durable investigation requests;
+see [telemetry ingestion](./telemetry-ingestion.md) for the implemented contract. The HTTP
+surface below remains a Phase 9 design, not an authenticated endpoint implemented here.
+
 - **Status:** **Implemented in Phase 3.** The conceptual model below is realised as 36 tables in `src/asic/db/models/`, migrated by `migrations/versions/`, and verified by `tests/db/`. The API boundary in §7 remains **conceptual** — no endpoint is implemented.
 - **Master specification references:** Sections 8, 12, 13, 15, 16, 23(M)
 - **Related:** [`../security/THREAT_MODEL.md`](../security/THREAT_MODEL.md) · [`memory-and-rag.md`](./memory-and-rag.md)

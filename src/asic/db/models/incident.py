@@ -99,6 +99,12 @@ class Alert(Base, TenantScoped, TimestampMixin):
     #: Populated only when ``status = dead_lettered``. Never dropped silently (FR-ING-05).
     rejection_reason: Mapped[str | None] = mapped_column(sa.Text, nullable=True)
 
+    # Nullable for historical Phase 3/4 rows. Processing status retains its meaning.
+    source_state: Mapped[str | None] = mapped_column(sa.String(16))
+    source_observed_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
+    source_digest: Mapped[str | None] = mapped_column(sa.String(64))
+    correlation_category: Mapped[str | None] = mapped_column(sa.String(255))
+
     __table_args__ = (
         *tenant_identity_constraints("alert"),
         tenant_fk("service_id", "service", ondelete="RESTRICT", name="fk_alert_service"),
@@ -107,6 +113,7 @@ class Alert(Base, TenantScoped, TimestampMixin):
         ),
         tenant_fk("incident_id", "incident", ondelete="SET NULL", name="fk_alert_incident"),
         sa.UniqueConstraint("tenant_id", "idempotency_key", name="uq_alert_idempotency"),
+        sa.CheckConstraint("source_state IN ('firing', 'resolved')", name="known_source_state"),
         sa.CheckConstraint(
             "(status <> 'dead_lettered') OR (rejection_reason IS NOT NULL)",
             name="dead_letter_has_reason",

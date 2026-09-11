@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "asic"
-version = "0.4.0"
-description = "Autonomous SRE Incident Commander - orchestration kernel over a tenant-aware domain model"
+version = "0.5.0"
+description = "Autonomous SRE Incident Commander - deterministic telemetry ingestion and read-only investigation"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "UNLICENSED" }

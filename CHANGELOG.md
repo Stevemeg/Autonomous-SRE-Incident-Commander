@@ -22,6 +22,24 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added — Phase 5 telemetry ingestion and incident correlation
+
+- Added bounded canonical signal envelopes, simulator and Alertmanager-format fixture normalizers,
+  provenance-safe unknown metadata handling, timestamp/schema/structure validation and typed
+  rejection reasons.
+- Added append-only signal receipts and durable investigation dispatch requests with tenant RLS,
+  composite foreign keys, delivery/occurrence idempotency, source-state ordering and rollback-safe
+  transaction boundaries.
+- Added deterministic `service-category-window/1` correlation with persisted positive/negative
+  factors, ambiguity explanations, change-signal temporal association without causation claims,
+  severity escalation and source-resolution semantics.
+- Added explicit dispatcher integration to the accepted Phase 4 read-only kernel and atomic initial
+  checkpoint linkage, including lease-aware duplicate-worker recovery.
+- Added migration `0006_telemetry_ingestion`, Phase 5 architecture documentation, ADR-0019,
+  security/authorship audit guidance, boundary validation and database-backed scenario coverage.
+- Validated 523 tests against fresh PostgreSQL, plus strict typing, lint/format, clean/upgrade/
+  downgrade/drift migration checks, documentation/phase-boundary validation and repository hygiene.
+
 ### Fixed
 
 - **Migration history is a contract again.** Migration `0003` derived its table list from

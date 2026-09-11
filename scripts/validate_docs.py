@@ -72,7 +72,7 @@ UNMEASURED_CLAIM = re.compile(
     re.IGNORECASE,
 )
 
-# Phase 4 delivers the orchestration kernel: a read-only, simulator-backed investigation.
+# Phase 5 adds deterministic ingestion and correlation to the read-only investigation.
 # Anything belonging to a later, unapproved phase is a scope violation, and cheap to detect
 # mechanically. The list moves forward one phase at a time, deliberately: a boundary that
 # only ever loosens stops being a boundary.
@@ -83,6 +83,7 @@ ALLOWED_SOURCE_ROOTS = (
     "src/asic/contracts",
     "src/asic/db",
     "src/asic/domain",
+    "src/asic/ingestion",
     "src/asic/llm",
     "src/asic/observability",
     "src/asic/orchestration",
@@ -100,6 +101,9 @@ FORBIDDEN_PACKAGES = (
     "src/asic/adapters",
     "src/asic/evaluation",  # Phase 11 - harness
     "src/asic/remediation",  # Phase 8  - execution
+    "src/asic/rag",
+    "src/asic/memory",
+    "src/asic/retrieval",
     "frontend",  # Phase 9  - dashboard
     "web",
     "ui",
@@ -117,6 +121,7 @@ FORBIDDEN_IMPORTS = (
     "anthropic",
     "litellm",
     "temporalio",
+    "mcp",
     "kubernetes",
     "prometheus_api_client",
     "slack_sdk",
@@ -373,7 +378,7 @@ def check_responsibility_coverage(f: Findings) -> int:
 def check_phase_boundary(f: Findings) -> int:
     """Assert no later phase has started early.
 
-    Phase 4 is the orchestration kernel: typed contracts, a capability broker, deterministic
+    Phase 5 adds ingestion/correlation to typed contracts, a capability broker, deterministic
     simulators and a read-only investigation. Remediation execution, external integrations,
     the HTTP surface, the frontend and the evaluation harness are explicitly out of scope,
     and their absence is checkable rather than assertable.
@@ -504,7 +509,7 @@ def main() -> int:
     print(f"mermaid diagrams  : {blocks} checked")
     print(f"requirement IDs   : {defined} defined in SRS, {traced} referenced in matrix")
     print(f"spec section 4    : {responsibilities} responsibilities checked for disposition")
-    print(f"repository files  : {scanned} scanned against the Phase 4 boundary")
+    print(f"repository files  : {scanned} scanned against the Phase 5 boundary")
     print()
 
     order = [
@@ -512,7 +517,7 @@ def main() -> int:
         ("mermaid", "Mermaid structure"),
         ("traceability", "Requirement traceability"),
         ("coverage", "Specification coverage"),
-        ("phase", "Phase 4 scope boundary"),
+        ("phase", "Phase 5 scope boundary"),
         ("claims", "No unmeasured claims"),
     ]
 

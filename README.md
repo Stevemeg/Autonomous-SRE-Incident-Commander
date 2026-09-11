@@ -8,7 +8,7 @@ approval, verifies outcomes, and preserves operational memory.
 
 ---
 
-> ## Project status: a bounded read-only investigation runs; nothing acts on infrastructure
+> ## Project status: deterministic ingestion feeds bounded read-only investigation
 >
 > A simulated incident can now be investigated end to end through a typed, bounded,
 > tenant-aware orchestration graph — planning, evidence collection through a capability
@@ -18,16 +18,19 @@ approval, verifies outcomes, and preserves operational memory.
 >
 > | | |
 > |---|---|
-> | **Completed** | Phase 0 bootstrap · Phase 1 requirements · Phase 2 architecture · Phase 3 domain model and persistence · **Phase 4 orchestration kernel** |
-> | **In progress** | Nothing — awaiting approval to begin Phase 5 |
-> | **Next** | Phase 5 — telemetry ingestion, alert correlation and incident lifecycle |
+> | **Completed** | Phase 0 bootstrap · Phase 1 requirements · Phase 2 architecture · Phase 3 persistence · Phase 4 orchestration · **Phase 5 telemetry ingestion and correlation** |
+> | **In progress** | Nothing — Phase 5 is complete |
+> | **Next** | Phase 6 is not started; requires a separate instruction |
 > | **Remediation, integrations, API, frontend** | None. Deliberately absent, and structurally prevented |
 >
 > Phase 4 delivered five graph nodes under enforced contracts, a tool broker that is the
 > sole egress point, six deterministic simulators, eleven scenarios, budgets checked before
 > every step, at-least-once execution with effect-level idempotency, and OpenTelemetry spans
-> persisted alongside the work they describe. **468 tests pass** (266 of them with no
-> database required).
+> persisted alongside the work they describe. Phase 5 adds bounded normalization,
+> durable delivery decisions, explainable correlation, and a recoverable investigation
+> request. See [telemetry ingestion](docs/architecture/telemetry-ingestion.md) for its
+> guarantees, tests, and explicit limitations.
+> **523 tests pass** against the completed Phase 5 milestone, including the PostgreSQL suite.
 >
 > Which timeouts are *enforced* and which are merely declared is set out in
 > [`docs/architecture/orchestration-kernel.md`](docs/architecture/orchestration-kernel.md)
@@ -61,7 +64,7 @@ people do.
 
 | Capability | Status |
 |---|---|
-| Intelligent alert correlation into coherent incidents | Not started |
+| Intelligent alert correlation into coherent incidents | **Deterministic v1 built** — service, environment, category and fixed time window; no LLM correlation |
 | Autonomous investigation across logs, metrics, traces, Kubernetes, deployments and configuration changes | **Simulator-backed** — orchestration, authorization and the evidence path are built; no real adapter exists |
 | Ranked RCA hypotheses with evidence, confidence and counter-evidence | **Structure built** — citation integrity and the confidence ceiling are enforced in code; reasoning quality is unmeasured |
 | Operational RAG over runbooks, service docs, known errors and postmortems | Not started — a simulator-backed `knowledge.search` capability exists; there is no retrieval pipeline |
@@ -200,7 +203,7 @@ section O.
 | 2 | Architecture, threat model, technology decisions and ADRs | **Complete** |
 | 3 | Domain model, PostgreSQL schema, tenancy and event model | **Complete** |
 | 4 | Agent state machine, planner, tool registry and orchestration | **Complete** |
-| 5 | Telemetry ingestion, alert correlation and incident lifecycle | Not started |
+| 5 | Telemetry ingestion, alert correlation and incident lifecycle | **Complete** |
 | 6 | RAG, operational knowledge and governed memory | Not started |
 | 7 | Investigation agents, hypothesis management and bounded reflection | Not started |
 | 8 | Remediation planning, policy gates, human approval and verification | Not started |
