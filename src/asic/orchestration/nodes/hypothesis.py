@@ -57,6 +57,7 @@ from asic.domain.untrusted import UntrustedBlock
 from asic.llm.port import ModelRequest
 from asic.llm.prompts import HYPOTHESIS_PROMPT
 from asic.observability import metrics
+from asic.orchestration.alert_context import incident_alert_blocks
 from asic.orchestration.context import NodeDependencies
 
 SCHEMA_REPAIR_ATTEMPTS: Final[int] = 1
@@ -215,7 +216,11 @@ def _ask_model(
         "open_gaps": list(state.get("open_gaps", [])),
         "degraded_domains": sorted(state.get("degraded_domains", [])),
     }
-    untrusted = tuple(
+    untrusted = incident_alert_blocks(
+        deps.session,
+        tenant_id=deps.context.tenant_id,
+        incident_id=deps.context.incident_id,
+    ) + tuple(
         UntrustedBlock(
             source=f"{ref.domain.value}:{ref.evidence_id}",
             provenance=ref.provenance,

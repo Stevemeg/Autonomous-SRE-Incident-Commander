@@ -45,6 +45,7 @@ from asic.domain.clock import FrozenClock
 from asic.domain.enums import AlertSeverity, AlertStatus, IncidentSeverity, IncidentStatus
 from asic.domain.idempotency import alert_key
 from asic.llm.deterministic import DeterministicModelProvider
+from asic.llm.prompts import PROMPT_SET_VERSION
 from asic.simulators.provider import SimulatorProvider
 from asic.simulators.scenarios import PRIMARY_SCENARIO_ID, Scenario, scenario
 from asic.tools.capability import CapabilityResolver
@@ -210,7 +211,7 @@ def build_fixture(
         id=uuid.uuid4(),
         label=f"test-{slug}",
         code_version="0.4.0",
-        prompt_set_version="2026.09.07-1",
+        prompt_set_version=PROMPT_SET_VERSION,
         retriever_config_version="none",
         policy_version="none",
         tool_registry_version=CATALOGUE_VERSION,

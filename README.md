@@ -20,7 +20,7 @@ approval, verifies outcomes, and preserves operational memory.
 > |---|---|
 > | **Completed** | Phase 0 bootstrap · Phase 1 requirements · Phase 2 architecture · Phase 3 persistence · Phase 4 orchestration · **Phase 5 telemetry ingestion and correlation** |
 > | **In progress** | Nothing — Phase 5 is complete |
-> | **Next** | Phase 6 is not started; requires a separate instruction |
+> | **Next** | Phase 6 is blocked pending independent review of the Phase 5 corrections |
 > | **Remediation, integrations, API, frontend** | None. Deliberately absent, and structurally prevented |
 >
 > Phase 4 delivered five graph nodes under enforced contracts, a tool broker that is the
@@ -30,7 +30,8 @@ approval, verifies outcomes, and preserves operational memory.
 > durable delivery decisions, explainable correlation, and a recoverable investigation
 > request. See [telemetry ingestion](docs/architecture/telemetry-ingestion.md) for its
 > guarantees, tests, and explicit limitations.
-> **523 tests pass** against the completed Phase 5 milestone, including the PostgreSQL suite.
+> The repository gates include the full pytest suite against an unprivileged PostgreSQL role,
+> strict typing, lint/format, migration drift and documentation/security validation.
 >
 > Which timeouts are *enforced* and which are merely declared is set out in
 > [`docs/architecture/orchestration-kernel.md`](docs/architecture/orchestration-kernel.md)
@@ -64,7 +65,7 @@ people do.
 
 | Capability | Status |
 |---|---|
-| Intelligent alert correlation into coherent incidents | **Deterministic v1 built** — service, environment, category and fixed time window; no LLM correlation |
+| Intelligent alert correlation into coherent incidents | **Deterministic v2 built** — database-filtered service, environment, category and fixed time window with a stable tie-break; no LLM correlation |
 | Autonomous investigation across logs, metrics, traces, Kubernetes, deployments and configuration changes | **Simulator-backed** — orchestration, authorization and the evidence path are built; no real adapter exists |
 | Ranked RCA hypotheses with evidence, confidence and counter-evidence | **Structure built** — citation integrity and the confidence ceiling are enforced in code; reasoning quality is unmeasured |
 | Operational RAG over runbooks, service docs, known errors and postmortems | Not started — a simulator-backed `knowledge.search` capability exists; there is no retrieval pipeline |

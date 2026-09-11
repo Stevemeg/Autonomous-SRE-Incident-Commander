@@ -18,12 +18,18 @@ from asic.db.models import (
     Environment,
     Incident,
     IncidentEvent,
+    IncidentReopenCandidate,
     InvestigationDispatch,
     Service,
     SignalReceipt,
 )
 from asic.db.projections import append_incident_event
-from asic.db.session import apply_statement_timeouts, bind_tenant
+from asic.db.session import (
+    DEFAULT_INGESTION_LOCK_TIMEOUT_MS,
+    apply_lock_timeout,
+    apply_statement_timeouts,
+    bind_tenant,
+)
 from asic.domain.clock import Clock, SystemClock
 from asic.domain.enums import (
     ActorType,
@@ -35,6 +41,7 @@ from asic.domain.enums import (
 )
 from asic.ingestion.contracts import (
     ConnectorContext,
+    IngestionPolicy,
     IngestionRejected,
     NormalizedEnvelope,
     Normalizer,
@@ -52,8 +59,9 @@ from asic.ingestion.correlation import (
     Candidate,
     decide,
 )
+from asic.ingestion.locks import INGESTION_TENANT_LOCK_NAMESPACE, advisory_lock_key
 from asic.ingestion.normalizers import AlertmanagerFixtureNormalizer
-from asic.ingestion.telemetry import stage
+from asic.ingestion.telemetry import lock_wait, stage
 
 
 @dataclass(frozen=True)
@@ -74,6 +82,8 @@ class IngestionService:
         *,
         normalizers: Sequence[Normalizer] | None = None,
         clock: Clock | None = None,
+        policy: IngestionPolicy | None = None,
+        lock_timeout_ms: int = DEFAULT_INGESTION_LOCK_TIMEOUT_MS,
     ) -> None:
         if os.environ.get("ASIC_DEPLOYMENT_ENVIRONMENT", "").lower() in {"prod", "production"}:
             raise RuntimeError("Phase 5 fixture ingestion is unavailable in production deployments")
@@ -87,6 +97,8 @@ class IngestionService:
         if len(self.normalizers) != len(adapters):
             raise ValueError("duplicate normalizer source")
         self.clock = clock or SystemClock()
+        self.policy = policy or IngestionPolicy()
+        self.lock_timeout_ms = lock_timeout_ms
 
     def ingest(self, context: ConnectorContext, raw: bytes) -> IngestionResult:
         correlation_id = uuid4()
@@ -96,15 +108,18 @@ class IngestionService:
         ) as receipt_span:
             signal: Signal | None = None
             error: str | None = None
+            canonical: dict[str, Any] = {}
             adapter = self.normalizers.get(context.source)
+            ingested_at = self.clock.now()
             try:
                 with stage("normalization"):
                     if adapter is None:
                         raise IngestionRejected("unknown_source")
                     signal = adapter.normalize(parse_payload(raw), context)
+                    canonical = signal.canonical()
+                    self.policy.validate_observation_time(signal, ingested_at)
             except IngestionRejected as exc:
                 error = exc.code
-            canonical = signal.canonical() if signal else {}
             semantic = {k: v for k, v in canonical.items() if k != "source_event_id"}
             content_hash = (
                 digest([context.model_dump(mode="json"), semantic]) if signal else raw_hash
@@ -113,7 +128,7 @@ class IngestionService:
                 NormalizedEnvelope(
                     context=context,
                     signal=signal,
-                    ingested_at=self.clock.now(),
+                    ingested_at=ingested_at,
                     correlation_id=correlation_id,
                     normalizer_version=adapter.version,
                 ).model_dump(mode="json")
@@ -132,13 +147,22 @@ class IngestionService:
             with self.factory() as session, session.begin():
                 bind_tenant(session, context.tenant_id)
                 apply_statement_timeouts(session)
+                apply_lock_timeout(session, lock_timeout_ms=self.lock_timeout_ms)
                 # READ COMMITTED required: readers following a wait see the prior commit.
                 if session.scalar(sa.text("SHOW transaction_isolation")) != "read committed":
                     raise RuntimeError("ingestion_requires_read_committed")
-                lock = int.from_bytes(
-                    hashlib.sha256(context.tenant_id.bytes).digest()[:8], "big", signed=True
+                lock_domain, lock_tenant = advisory_lock_key(
+                    INGESTION_TENANT_LOCK_NAMESPACE, context.tenant_id
                 )
-                session.execute(sa.text("SELECT pg_advisory_xact_lock(:key)"), {"key": lock})
+                with lock_wait(
+                    INGESTION_TENANT_LOCK_NAMESPACE,
+                    tenant_id=str(context.tenant_id),
+                    correlation_id=str(correlation_id),
+                ):
+                    session.execute(
+                        sa.text("SELECT pg_advisory_xact_lock(:domain, :tenant)"),
+                        {"domain": lock_domain, "tenant": lock_tenant},
+                    )
                 with stage("deduplication"):
                     existing = session.scalar(
                         sa.select(SignalReceipt).where(
@@ -186,6 +210,12 @@ class IngestionService:
                             error = "unknown_service"
                         elif environment is None:
                             error = "invalid_environment"
+                retryable = error in {"unknown_service", "invalid_environment"}
+                if retryable:
+                    key = _retryable_delivery_key(key, content_hash, error or "catalogue")
+                    existing_retry = self._receipt(session, context.tenant_id, key)
+                    if existing_retry is not None:
+                        return self._result(existing_retry, duplicate=True)
                 receipt = SignalReceipt(
                     id=uuid4(),
                     tenant_id=context.tenant_id,
@@ -196,10 +226,16 @@ class IngestionService:
                     raw_digest=raw_hash,
                     correlation_id=correlation_id,
                     kind=signal.kind if signal else "invalid",
-                    outcome="rejected" if error else "accepted",
+                    outcome="retryable" if retryable else "rejected" if error else "accepted",
                     reason=error or "normalized",
                     envelope=normalized,
-                    decision={"policy_version": POLICY_VERSION},
+                    decision={
+                        "policy_version": POLICY_VERSION,
+                        "validation_policy_version": self.policy.version,
+                        "retry": "same delivery may be retried"
+                        if retryable
+                        else "committed outcome is idempotent",
+                    },
                 )
                 if error is None and signal is not None and adapter is not None:
                     receipt.service_id = context.service_id
@@ -210,6 +246,13 @@ class IngestionService:
                             self._alert(session, context, signal, receipt)
                     else:
                         receipt.reason = "change_recorded_not_causation"
+                if receipt.outcome == "retryable" and not retryable:
+                    receipt.delivery_key = _retryable_delivery_key(
+                        key, content_hash, receipt.reason
+                    )
+                    existing_retry = self._receipt(session, context.tenant_id, receipt.delivery_key)
+                    if existing_retry is not None:
+                        return self._result(existing_retry, duplicate=True)
                 with stage("persistence"):
                     session.add(receipt)
                     session.flush()
@@ -231,23 +274,41 @@ class IngestionService:
             receipt.correlation_id,
         )
 
+    @staticmethod
+    def _receipt(session: Session, tenant_id: UUID, delivery_key: str) -> SignalReceipt | None:
+        return session.scalar(
+            sa.select(SignalReceipt).where(
+                SignalReceipt.tenant_id == tenant_id,
+                SignalReceipt.delivery_key == delivery_key,
+            )
+        )
+
     def _alert(
         self, session: Session, context: ConnectorContext, signal: Signal, receipt: SignalReceipt
     ) -> None:
         key = occurrence_key(context, signal)
-        alert = session.scalar(
-            sa.select(Alert).where(
-                Alert.tenant_id == context.tenant_id,
-                sa.or_(
-                    Alert.idempotency_key == key,
-                    sa.and_(
-                        Alert.source == context.source,
-                        Alert.source_fingerprint == signal.fingerprint,
-                        Alert.started_at == signal.started_at,
+        alerts = list(
+            session.scalars(
+                sa.select(Alert)
+                .where(
+                    Alert.tenant_id == context.tenant_id,
+                    sa.or_(
+                        Alert.idempotency_key == key,
+                        sa.and_(
+                            Alert.source == context.source,
+                            Alert.source_fingerprint == signal.fingerprint,
+                            Alert.started_at == signal.started_at,
+                        ),
                     ),
-                ),
+                )
+                .limit(2)
             )
         )
+        if len(alerts) > 1:
+            receipt.outcome, receipt.reason = "rejected", "occurrence_invariant_violation"
+            receipt.decision.update({"occurrence_matches": "multiple", "action": "fail_closed"})
+            return
+        alert = alerts[0] if alerts else None
         if alert is not None:
             if (
                 alert.service_id != context.service_id
@@ -260,19 +321,39 @@ class IngestionService:
                 old = (
                     alert.source_observed_at,
                     alert.source_state == "resolved",
+                    _alert_severity_rank(alert.severity.value),
                     alert.source_digest or "",
                 )
                 new = (
                     signal.observed_at,
                     signal.state is SourceState.RESOLVED,
+                    _alert_severity_rank(signal.severity.value),
                     receipt.content_digest,
                 )
-                if new <= old:
+                retrying_unattached_firing = (
+                    alert.incident_id is None
+                    and signal.state is SourceState.FIRING
+                    and session.scalar(
+                        sa.select(
+                            sa.exists().where(
+                                SignalReceipt.tenant_id == context.tenant_id,
+                                SignalReceipt.alert_id == alert.id,
+                                SignalReceipt.outcome == "retryable",
+                                SignalReceipt.reason == "correlation_candidate_overflow",
+                            )
+                        )
+                    )
+                    is True
+                )
+                if new <= old and not retrying_unattached_firing:
                     receipt.outcome = "unchanged" if new == old else "stale"
                     receipt.reason = "equal_observation" if new == old else "out_of_order"
                     receipt.alert_id, receipt.incident_id = alert.id, alert.incident_id
                     receipt.decision.update(
-                        {"ordering": "observed_at,state_rank,digest", "winner": list(map(str, old))}
+                        {
+                            "ordering": "observed_at,state_rank,severity_rank,digest",
+                            "winner": list(map(str, old)),
+                        }
                     )
                     if alert.incident_id:
                         existing_incident = self._incident(
@@ -316,6 +397,54 @@ class IngestionService:
             if alert.incident_id
             else None
         )
+        if incident is not None and incident.terminated_at is not None:
+            receipt.incident_id = incident.id
+            receipt.decision.update(
+                {
+                    "result": "terminal_reopen_candidate"
+                    if signal.state is SourceState.FIRING
+                    else "terminal_source_resolution",
+                    "selected": str(incident.id),
+                    "terminal_status": incident.status.value,
+                    "policy_version": POLICY_VERSION,
+                    "reason": "automatic_reopen_forbidden",
+                }
+            )
+            self._event(
+                session,
+                incident,
+                receipt,
+                IncidentEventType.ALERT_RECEIVED,
+                {"envelope": receipt.envelope},
+                external=True,
+            )
+            self._event(
+                session,
+                incident,
+                receipt,
+                IncidentEventType.CORRELATION_DECIDED,
+                receipt.decision,
+            )
+            if signal.state is SourceState.FIRING:
+                receipt.reason = "terminal_reopen_candidate"
+                # The append-only candidate references this immutable decision. Flush the
+                # receipt first so PostgreSQL can enforce the composite FK immediately.
+                session.add(receipt)
+                session.flush()
+                session.add(
+                    IncidentReopenCandidate(
+                        id=uuid4(),
+                        tenant_id=context.tenant_id,
+                        incident_id=incident.id,
+                        alert_id=alert.id,
+                        receipt_id=receipt.id,
+                        requested_severity=_severity(signal),
+                        reason="new_firing_signal_after_terminal",
+                    )
+                )
+            else:
+                receipt.reason = "terminal_source_resolution_recorded"
+            return
         created = False
         attached = False
         if incident is None and signal.state is SourceState.FIRING:
@@ -324,6 +453,8 @@ class IngestionService:
                 IncidentEvent.payload["correlation_anchor"]["started_at"].astext,
                 sa.DateTime(timezone=True),
             )
+            anchor_service = IncidentEvent.payload["correlation_anchor"]["service_id"].astext
+            anchor_category = IncidentEvent.payload["correlation_anchor"]["category"].astext
             rows = session.execute(
                 sa.select(Incident, IncidentEvent.payload)
                 .join(
@@ -335,15 +466,29 @@ class IngestionService:
                 )
                 .where(
                     Incident.tenant_id == context.tenant_id,
+                    Incident.environment_id == context.environment_id,
+                    Incident.terminated_at.is_(None),
                     IncidentEvent.event_type == IncidentEventType.INCIDENT_OPENED,
+                    anchor_service == str(context.service_id),
+                    anchor_category == signal.category,
                     anchor_time >= signal.started_at - timedelta(seconds=WINDOW_SECONDS),
                     anchor_time <= signal.started_at + timedelta(seconds=WINDOW_SECONDS),
                 )
-                .order_by(Incident.id)
+                .order_by(anchor_time, Incident.id)
                 .limit(MAX_CANDIDATES + 1)
             ).all()
             if len(rows) > MAX_CANDIDATES:
-                raise IngestionRejected("candidate_limit_retry_after_review")
+                receipt.outcome = "retryable"
+                receipt.reason = "correlation_candidate_overflow"
+                receipt.decision = {
+                    "policy_version": POLICY_VERSION,
+                    "result": "overflow",
+                    "candidate_count_lower_bound": MAX_CANDIDATES + 1,
+                    "candidate_limit": MAX_CANDIDATES,
+                    "retry": "retry after relevant active candidate set is reduced",
+                    "action": "no correlation selected",
+                }
+                return
             candidates: list[Candidate] = []
             for row, payload in rows:
                 anchor = payload.get("correlation_anchor")
@@ -431,7 +576,6 @@ class IngestionService:
                     receipt,
                     IncidentEventType.INCIDENT_OPENED,
                     {
-                        "title": incident.title,
                         "severity": incident.severity.value,
                         "status": "detected",
                         "environment_id": str(context.environment_id),
@@ -513,7 +657,7 @@ class IngestionService:
         return session.scalars(
             sa.select(Incident)
             .where(Incident.tenant_id == tenant_id, Incident.id == incident_id)
-            .with_for_update()
+            .with_for_update(key_share=True)
             .execution_options(populate_existing=True)
         ).one()
 
@@ -550,3 +694,11 @@ def _severity(signal: Signal) -> IncidentSeverity:
         "low": IncidentSeverity.SEV4,
         "info": IncidentSeverity.SEV4,
     }[signal.severity.value]
+
+
+def _alert_severity_rank(value: str) -> int:
+    return {"info": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}[value]
+
+
+def _retryable_delivery_key(delivery_key: str, content_digest: str, reason: str) -> str:
+    return digest([delivery_key, content_digest, "retryable", reason])

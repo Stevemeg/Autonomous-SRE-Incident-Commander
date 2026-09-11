@@ -14,10 +14,12 @@ from asic.db.base import (
     Base,
     CreatedAtMixin,
     TenantScoped,
+    enum_column,
     tenant_fk,
     tenant_identity_constraints,
     uuid_pk,
 )
+from asic.domain.enums import IncidentSeverity
 
 
 class SignalReceipt(Base, TenantScoped, CreatedAtMixin):
@@ -58,7 +60,8 @@ class SignalReceipt(Base, TenantScoped, CreatedAtMixin):
         sa.UniqueConstraint("tenant_id", "delivery_key", name="uq_signal_receipt_delivery"),
         sa.CheckConstraint("kind IN ('alert', 'change', 'invalid')", name="known_kind"),
         sa.CheckConstraint(
-            "outcome IN ('accepted', 'rejected', 'stale', 'unchanged')", name="known_outcome"
+            "outcome IN ('accepted', 'rejected', 'retryable', 'stale', 'unchanged')",
+            name="known_outcome",
         ),
         sa.Index(
             "ix_signal_receipt_changes", "tenant_id", "environment_id", "service_id", "observed_at"
@@ -76,6 +79,9 @@ class InvestigationDispatch(Base, TenantScoped, CreatedAtMixin):
     workflow_run_id: Mapped[uuid.UUID | None] = mapped_column(pg.UUID(as_uuid=True))
     attempts: Mapped[int] = mapped_column(sa.Integer, nullable=False, server_default=sa.text("0"))
     last_error: Mapped[str | None] = mapped_column(sa.String(64))
+    status: Mapped[str] = mapped_column(
+        sa.String(16), nullable=False, server_default=sa.text("'pending'")
+    )
 
     __table_args__ = (
         *tenant_identity_constraints("investigation_dispatch"),
@@ -100,4 +106,33 @@ class InvestigationDispatch(Base, TenantScoped, CreatedAtMixin):
         sa.UniqueConstraint("tenant_id", "incident_id", name="uq_investigation_dispatch_incident"),
         sa.UniqueConstraint("tenant_id", "event_id", name="uq_investigation_dispatch_event"),
         sa.CheckConstraint("attempts >= 0", name="attempts_nonnegative"),
+        sa.CheckConstraint("status IN ('pending', 'terminal')", name="known_status"),
+    )
+
+
+class IncidentReopenCandidate(Base, TenantScoped, CreatedAtMixin):
+    """Append-only request for human review of a signal after terminal disposition."""
+
+    __tablename__ = "incident_reopen_candidate"
+    __append_only__ = True
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    incident_id: Mapped[uuid.UUID] = mapped_column(pg.UUID(as_uuid=True), nullable=False)
+    alert_id: Mapped[uuid.UUID] = mapped_column(pg.UUID(as_uuid=True), nullable=False)
+    receipt_id: Mapped[uuid.UUID] = mapped_column(pg.UUID(as_uuid=True), nullable=False)
+    requested_severity: Mapped[IncidentSeverity] = mapped_column(
+        enum_column(IncidentSeverity, "incident_severity"), nullable=False
+    )
+    reason: Mapped[str] = mapped_column(sa.String(64), nullable=False)
+
+    __table_args__ = (
+        *tenant_identity_constraints("incident_reopen_candidate"),
+        tenant_fk(
+            "incident_id", "incident", ondelete="RESTRICT", name="fk_reopen_candidate_incident"
+        ),
+        tenant_fk("alert_id", "alert", ondelete="RESTRICT", name="fk_reopen_candidate_alert"),
+        tenant_fk(
+            "receipt_id", "signal_receipt", ondelete="RESTRICT", name="fk_reopen_candidate_receipt"
+        ),
+        sa.UniqueConstraint("tenant_id", "receipt_id", name="uq_reopen_candidate_receipt"),
     )

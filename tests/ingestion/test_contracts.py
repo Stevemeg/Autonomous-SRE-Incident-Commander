@@ -5,15 +5,19 @@ from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import pytest
+import sqlalchemy as sa
+from sqlalchemy.dialects import postgresql
 
 from asic.ingestion.contracts import (
     ConnectorContext,
+    IngestionPolicy,
     IngestionRejected,
     SimulatorNormalizer,
     occurrence_key,
     parse_payload,
 )
 from asic.ingestion.correlation import Candidate, decide
+from asic.ingestion.locks import INGESTION_TENANT_LOCK_NAMESPACE, advisory_lock_key
 
 
 def context() -> ConnectorContext:
@@ -113,7 +117,9 @@ def test_correlation_explains_match_nonmatch_window_and_ambiguity() -> None:
     assert len(result["considered"][1]["reasons"]) == 5
     second = Candidate(uuid4(), ctx.environment_id, ctx.service_id, "latency", now, True)
     ambiguous = decide([first, second], **kwargs)
-    assert ambiguous["selected"] is None and ambiguous["result"] == "ambiguous"
+    assert ambiguous["result"] == "join"
+    assert ambiguous["reason"] == "deterministic_tie_break"
+    assert ambiguous["selected"] == min(str(first.incident_id), str(second.incident_id))
     assert result["policy_version"] and result["window_seconds"] == 900
 
 
@@ -135,6 +141,81 @@ def test_alertmanager_fixture_maps_source_specific_fields() -> None:
     assert signal.severity.value == "medium" and signal.state.value == "resolved"
     assert signal.metadata["unknown"]["generatorURL"] == "fixture:rule-1"
     assert signal.resolved_at is not None
+
+
+@pytest.mark.parametrize(
+    "timestamp",
+    [
+        "0001-01-01T00:00:00Z",
+        "0001-01-01T00:00:00+14:00",
+        "1999-12-31T23:59:59Z",
+        "2100-01-01T00:00:00Z",
+        "9999-12-31T23:59:59Z",
+        "9999-12-31T23:59:59-12:00",
+    ],
+)
+def test_unsupported_timestamp_boundaries_are_typed(timestamp: str) -> None:
+    with pytest.raises(IngestionRejected, match="unsupported_timestamp"):
+        SimulatorNormalizer().normalize(
+            parse_payload(payload(started_at=timestamp, observed_at=timestamp)), context()
+        )
+
+
+def test_timestamp_normalization_is_utc_and_boundaries_are_explicit() -> None:
+    signal = SimulatorNormalizer().normalize(
+        parse_payload(
+            payload(
+                started_at="2000-01-01T14:00:00+14:00",
+                observed_at="2099-12-31T11:59:59-12:00",
+            )
+        ),
+        context(),
+    )
+    assert signal.started_at == datetime(2000, 1, 1, tzinfo=UTC)
+    assert signal.observed_at == datetime(2099, 12, 31, 23, 59, 59, tzinfo=UTC)
+
+
+@pytest.mark.parametrize(
+    "delta,accepted",
+    [
+        (timedelta(minutes=4, seconds=59), True),
+        (timedelta(minutes=5), True),
+        (timedelta(minutes=5, microseconds=1), False),
+        (timedelta(days=365), False),
+    ],
+)
+def test_future_skew_policy_has_an_inclusive_five_minute_boundary(
+    delta: timedelta, accepted: bool
+) -> None:
+    now = datetime(2026, 9, 11, 8, tzinfo=UTC)
+    observed = now + delta
+    signal = SimulatorNormalizer().normalize(
+        parse_payload(
+            payload(
+                started_at=now.isoformat(),
+                observed_at=observed.isoformat(),
+            )
+        ),
+        context(),
+    )
+    if accepted:
+        IngestionPolicy().validate_observation_time(signal, now)
+    else:
+        with pytest.raises(IngestionRejected, match="future_observation"):
+            IngestionPolicy().validate_observation_time(signal, now)
+
+
+def test_advisory_lock_keys_are_namespaced() -> None:
+    tenant_id = uuid4()
+    ingestion = advisory_lock_key(INGESTION_TENANT_LOCK_NAMESPACE, tenant_id)
+    another_domain = advisory_lock_key("asic.some-future-lock.v1", tenant_id)
+    assert ingestion[0] != another_domain[0]
+    assert ingestion != another_domain
+
+
+def test_non_key_update_lock_compiles_to_postgresql_no_key_update() -> None:
+    statement = sa.select(sa.literal(1)).with_for_update(key_share=True)
+    assert str(statement.compile(dialect=postgresql.dialect())).endswith("FOR NO KEY UPDATE")
 
 
 def test_fixture_ingestion_refuses_production(monkeypatch: pytest.MonkeyPatch) -> None:

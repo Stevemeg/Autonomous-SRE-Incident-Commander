@@ -9,17 +9,18 @@ This does not claim that future transport authentication or production adapters 
 | Requirement | Implemented evidence and limits |
 |---|---|
 | FR-ING-01 | Connector-bound tenant/service/environment; spoofing tests. HTTP authentication remains Phase 9/10 |
-| FR-ING-03 | Delivery/occurrence identities, committed duplicate and concurrency tests |
+| FR-ING-03 | Delivery/occurrence identities, permanent vs retryable receipts, committed duplicate and real-contention tests |
 | FR-ING-04 | Canonical versioned envelope, simulator and Alertmanager-format fixture normalizers; future production sources deferred |
-| FR-ING-05 | Durable typed rejection receipts; append/DB failure propagates and rolls back, caller retries |
-| FR-COR-01 | Twelve-alert storm produces one incident under the v1 service/category/window policy |
+| FR-ING-05 | Durable typed rejection/overflow receipts; unsafe timestamps cannot poison source state; append/DB failure propagates |
+| FR-COR-01 | Twelve-alert storm and repeated ambiguous bridges converge under deterministic v2 |
 | FR-COR-02 | Pure deterministic correlation with an import-boundary test excluding model reasoning |
-| FR-COR-03 | Versioned positive/negative factors, candidate exclusions and persisted ambiguity decisions |
+| FR-COR-03 | SQL relevance before bound; versioned factors, candidate exclusions and persisted tie-break decisions |
 | FR-COR-04 | Late occurrence joins by start-time anchor; source resolution does not terminate investigation |
-| FR-INC-04 | Incident events remain append-only; checkpoint/request handoff and existing lifecycle transitions tested |
+| FR-INC-04 | Incident events remain append-only; terminal updates create human reopen candidates without lifecycle mutation |
 
 Additional coverage: application-role RLS and composite foreign keys, atomic rollback,
-source-state ordering, source text without authority, read-only trigger deduplication,
+source-state ordering, persisted source text through real prompt renderers without authority,
+terminal dispatch, read-only trigger deduplication,
 pre-drive crash recovery, trace redaction and migration clean/accepted-head/round-trip/drift.
 No production scale or performance result is implied.
 

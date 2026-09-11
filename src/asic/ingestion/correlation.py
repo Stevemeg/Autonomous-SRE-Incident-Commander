@@ -7,7 +7,7 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-POLICY_VERSION = "service-category-window/1"
+POLICY_VERSION = "service-category-window/2"
 WINDOW_SECONDS = 900
 MAX_CANDIDATES = 256
 
@@ -64,20 +64,35 @@ def decide(
         )
         for c in candidates
     ]
-    matches = sorted({c["incident_id"] for c in considered if c["matched"]})
+    matches = sorted(
+        (c for c in considered if c["matched"]),
+        key=lambda item: (
+            abs((datetime.fromisoformat(item["anchor_started_at"]) - started_at).total_seconds()),
+            item["incident_id"],
+        ),
+    )
+    selected = matches[0]["incident_id"] if matches else None
     return {
         "policy_version": POLICY_VERSION,
         "window_seconds": WINDOW_SECONDS,
-        "candidate_scope": "same tenant; opening anchor within +/- window; bounded candidates",
+        "candidate_scope": (
+            "same tenant, environment, service, category and active state; opening anchor "
+            "within +/- window; predicates applied before the bound"
+        ),
         "outside_window": "excluded by fixed anchor-time predicate",
         "unanchored_incidents": "excluded: no ingestion correlation anchor",
         "cross_tenant": "excluded by authenticated context and RLS",
         "considered": considered,
-        "selected": matches[0] if len(matches) == 1 else None,
-        "result": "join" if len(matches) == 1 else "ambiguous" if matches else "new",
+        "selected": selected,
+        "result": "join" if matches else "new",
         "reason": "unique_match"
         if len(matches) == 1
-        else "multiple_matches"
+        else "deterministic_tie_break"
         if matches
         else "no_match",
+        "tie_break": {
+            "method": "minimum_absolute_anchor_delta_then_incident_uuid",
+            "ordered_matches": [item["incident_id"] for item in matches],
+            "winner": selected,
+        },
     }

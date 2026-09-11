@@ -31,7 +31,7 @@ from asic.domain.enums import NodeId
 from asic.domain.untrusted import UntrustedBlock, render_untrusted
 
 #: Version of the prompt set as a whole. Recorded on ``behaviour_version``.
-PROMPT_SET_VERSION: Final[str] = "2026.09.07-1"
+PROMPT_SET_VERSION: Final[str] = "2026.09.11-2"
 
 
 @dataclass(frozen=True, slots=True)
@@ -157,7 +157,7 @@ Rules:
 
 PLANNER_PROMPT: Final = PromptTemplate(
     prompt_id="investigation_planner",
-    version="1.0.0",
+    version="1.1.0",
     node_id=NodeId.G3_INVESTIGATION_PLANNER,
     instructions=_PLANNER_INSTRUCTIONS,
     required_context=("objective", "available_domains", "covered_domains", "budget_remaining"),
@@ -165,7 +165,7 @@ PLANNER_PROMPT: Final = PromptTemplate(
 
 HYPOTHESIS_PROMPT: Final = PromptTemplate(
     prompt_id="hypothesis_engine",
-    version="1.0.0",
+    version="1.1.0",
     node_id=NodeId.G5_HYPOTHESIS_ENGINE,
     instructions=_HYPOTHESIS_INSTRUCTIONS,
     required_context=("objective", "evidence_index"),

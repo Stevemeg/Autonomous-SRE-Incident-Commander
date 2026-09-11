@@ -24,7 +24,11 @@ from asic.db.models.incident import (
     TimelineEvent,
     WorkflowRun,
 )
-from asic.db.models.ingestion import InvestigationDispatch, SignalReceipt
+from asic.db.models.ingestion import (
+    IncidentReopenCandidate,
+    InvestigationDispatch,
+    SignalReceipt,
+)
 from asic.db.models.investigation import (
     Evidence,
     Hypothesis,
@@ -110,6 +114,7 @@ __all__ = [
     "HypothesisEvidence",
     "Incident",
     "IncidentEvent",
+    "IncidentReopenCandidate",
     "InvestigationDispatch",
     "InvestigationStep",
     "KnowledgeChunk",

@@ -2,6 +2,8 @@
 
 Phase 5 migration `0006_telemetry_ingestion` adds FORCE RLS and composite tenant foreign
 keys for `signal_receipt` and `investigation_dispatch`; receipts are append-only.
+Correction migration `0007_phase5_hardening` applies the same protections to append-only
+`incident_reopen_candidate` rows.
 The [ingestion contract](./telemetry-ingestion.md) binds each worker explicitly and keeps
 payload identity separate from the trusted connector context.
 
@@ -189,7 +191,8 @@ A cache is a second store with **no row-level security**. A key that omits the t
 cross-tenant read, and the database backstop does not apply. Every key goes through:
 
 ```python
-TenantContext.cache_key("incident", incident_id)   # -> "t:<tenant>:incident:<id>"
+TenantContext.cache_key("incident", incident_id)
+# -> "t:<tenant>:incident:<id>"
 ```
 
 ### 8.2 Background jobs

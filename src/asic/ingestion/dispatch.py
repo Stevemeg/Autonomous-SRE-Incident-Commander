@@ -9,10 +9,11 @@ from uuid import UUID
 import sqlalchemy as sa
 from sqlalchemy.orm import Session
 
-from asic.db.models import Alert, InvestigationDispatch, WorkflowRun
+from asic.db.models import Alert, Incident, InvestigationDispatch, WorkflowRun
 from asic.db.session import TenantContext, apply_statement_timeouts, bind_tenant
 from asic.domain.enums import WorkflowRunStatus
 from asic.domain.errors import DomainError, LeaseNotHeld
+from asic.domain.incident_state import is_terminal
 from asic.ingestion.telemetry import stage
 from asic.orchestration.kernel import DispatchAlreadyLinked
 from asic.orchestration.service import InvestigationRequest, InvestigationService
@@ -54,6 +55,22 @@ class InvestigationDispatcher:
                 )
                 if request is None:
                     raise DomainError("investigation request not visible")
+                if request.status == "terminal":
+                    return DispatchResult(request_id, request.workflow_run_id, "terminal")
+                incident_status = session.scalar(
+                    sa.select(Incident.status).where(
+                        Incident.tenant_id == context.tenant_id,
+                        Incident.id == request.incident_id,
+                    )
+                )
+                if incident_status is None:
+                    raise DomainError("dispatch incident not visible")
+                if is_terminal(incident_status):
+                    request.attempts += 1
+                    request.status = "terminal"
+                    request.last_error = "terminal_incident"
+                    trigger_span.set_attribute("dispatch.outcome", "terminal")
+                    return DispatchResult(request_id, request.workflow_run_id, "terminal")
                 request.attempts += 1
                 incident_id = request.incident_id
                 trigger_span.set_attribute("incident_id", str(incident_id))
@@ -118,12 +135,23 @@ class InvestigationDispatcher:
                 # Store a safe code, never an exception message containing SQL or source data.
                 with self.factory() as session, session.begin():
                     bind_tenant(session, context.tenant_id)
-                    session.execute(
-                        sa.update(InvestigationDispatch)
+                    request = session.scalars(
+                        sa.select(InvestigationDispatch)
                         .where(
                             InvestigationDispatch.tenant_id == context.tenant_id,
                             InvestigationDispatch.id == request_id,
                         )
-                        .values(last_error="trigger_failed")
+                        .with_for_update()
+                    ).one()
+                    incident_status = session.scalar(
+                        sa.select(Incident.status).where(
+                            Incident.tenant_id == context.tenant_id,
+                            Incident.id == request.incident_id,
+                        )
                     )
+                    if incident_status is not None and is_terminal(incident_status):
+                        request.status = "terminal"
+                        request.last_error = "terminal_incident"
+                        return DispatchResult(request_id, request.workflow_run_id, "terminal")
+                    request.last_error = "trigger_failed"
                 raise

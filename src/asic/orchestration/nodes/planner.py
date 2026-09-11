@@ -58,6 +58,7 @@ from asic.domain.errors import BudgetExhausted, ModelProviderError, SchemaViolat
 from asic.llm.port import ModelRequest
 from asic.llm.prompts import PLANNER_PROMPT
 from asic.observability import metrics
+from asic.orchestration.alert_context import incident_alert_blocks
 from asic.orchestration.context import NodeDependencies
 from asic.tools.catalogue import DOMAIN_CAPABILITY
 
@@ -253,7 +254,14 @@ def _ask_model(
             prompt_id=PLANNER_PROMPT.prompt_id,
             prompt_version=PLANNER_PROMPT.version,
             prompt_hash=PLANNER_PROMPT.content_hash,
-            prompt_text=PLANNER_PROMPT.render(context=context),
+            prompt_text=PLANNER_PROMPT.render(
+                context=context,
+                untrusted=incident_alert_blocks(
+                    deps.session,
+                    tenant_id=deps.context.tenant_id,
+                    incident_id=deps.context.incident_id,
+                ),
+            ),
             metadata={
                 "workflow_run_id": deps.context.identity.workflow_run_id,
                 "attempt": str(attempt + 1),

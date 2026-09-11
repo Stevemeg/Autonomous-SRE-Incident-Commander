@@ -95,7 +95,10 @@ def append_incident_event(
     locked_high_water = session.execute(
         sa.select(Incident.event_sequence_high_water)
         .where(Incident.id == incident.id, Incident.tenant_id == incident.tenant_id)
-        .with_for_update()
+        # Only the high-water mark and other non-key columns change. FOR NO KEY UPDATE
+        # preserves serialization while remaining compatible with FK KEY SHARE locks held
+        # by Phase 4 child-row inserts.
+        .with_for_update(key_share=True)
     ).scalar_one()
 
     next_sequence = locked_high_water + 1

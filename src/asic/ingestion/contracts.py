@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import UTC, datetime
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from typing import Annotated, Any, Literal, Protocol
 from uuid import UUID
@@ -18,10 +19,32 @@ from pydantic import (
     field_validator,
     model_validator,
 )
+from pydantic_core import PydanticCustomError
 
 from asic.domain.enums import AlertSeverity
 
 Text = Annotated[str, Field(min_length=1, max_length=255, pattern=r"^[^\x00-\x1f]+$")]
+
+MIN_SUPPORTED_TIMESTAMP = datetime(2000, 1, 1, tzinfo=UTC)
+MAX_SUPPORTED_TIMESTAMP = datetime(2100, 1, 1, tzinfo=UTC)
+
+
+@dataclass(frozen=True, slots=True)
+class IngestionPolicy:
+    """Versioned bounds applied after source normalization and before state changes."""
+
+    version: str = "signal-validation/2"
+    allowed_future_skew: timedelta = timedelta(minutes=5)
+    minimum_timestamp: datetime = MIN_SUPPORTED_TIMESTAMP
+    maximum_timestamp: datetime = MAX_SUPPORTED_TIMESTAMP
+
+    def validate_observation_time(self, signal: Signal, ingested_at: datetime) -> None:
+        try:
+            latest = ingested_at.astimezone(UTC) + self.allowed_future_skew
+        except (OverflowError, ValueError) as exc:
+            raise IngestionRejected("unsupported_ingestion_time") from exc
+        if signal.observed_at > latest:
+            raise IngestionRejected("future_observation")
 
 
 class IngestionRejected(ValueError):
@@ -78,6 +101,24 @@ class Signal(BaseModel):
         if value is not None and not isinstance(value, (str, datetime)):
             raise ValueError("timestamps require explicit timezone-bearing representations")
         return value
+
+    @field_validator("started_at", "observed_at", "resolved_at")
+    @classmethod
+    def supported_timestamp(cls, value: datetime | None) -> datetime | None:
+        if value is None:
+            return None
+        try:
+            normalized = value.astimezone(UTC)
+        except (OverflowError, ValueError) as exc:
+            raise PydanticCustomError(
+                "unsupported_timestamp", "timestamp cannot be represented in UTC"
+            ) from exc
+        if not MIN_SUPPORTED_TIMESTAMP <= normalized < MAX_SUPPORTED_TIMESTAMP:
+            raise PydanticCustomError(
+                "unsupported_timestamp",
+                "timestamp is outside the supported operational range",
+            )
+        return normalized
 
     @model_validator(mode="after")
     def timestamps(self) -> Signal:
@@ -203,7 +244,12 @@ class SimulatorNormalizer:
                 update={"metadata": {"source": signal.metadata, "unknown": extras}}
             )
         except ValidationError as exc:
-            raise IngestionRejected("invalid_signal") from exc
+            code = (
+                "unsupported_timestamp"
+                if any(error["type"] == "unsupported_timestamp" for error in exc.errors())
+                else "invalid_signal"
+            )
+            raise IngestionRejected(code) from exc
 
 
 def occurrence_key(context: ConnectorContext, signal: Signal) -> str:

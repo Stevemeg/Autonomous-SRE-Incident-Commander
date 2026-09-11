@@ -156,13 +156,18 @@ class TestPinnedListsMatchHistory:
         # migration. Only `workflow_checkpoint` was added, and 0004 creates and protects it
         # in the same migration.
         added = tenant_scoped_tables() - set(phase_3_tables["tenant"])
-        assert added == {"workflow_checkpoint", "signal_receipt", "investigation_dispatch"}
+        assert added == {
+            "workflow_checkpoint",
+            "signal_receipt",
+            "investigation_dispatch",
+            "incident_reopen_candidate",
+        }
 
     def test_phase_4_and_5_append_only_additions(
         self, phase_3_tables: dict[str, list[str]]
     ) -> None:
         added = append_only_tables() - set(phase_3_tables["append_only"])
-        assert added == {"workflow_checkpoint", "signal_receipt"}
+        assert added == {"workflow_checkpoint", "signal_receipt", "incident_reopen_candidate"}
 
 
 # ------------------------------------------------------------------- self-containment
@@ -314,6 +319,19 @@ def _table_names(url: str) -> set[str]:
 
 @requires_postgres
 class TestUpgradePaths:
+    def test_accepted_phase_5_head_upgrades_and_correction_round_trips(
+        self, throwaway_database: str
+    ) -> None:
+        config = _alembic_config(throwaway_database)
+        command.upgrade(config, "0006_telemetry_ingestion")
+        assert "incident_reopen_candidate" not in _table_names(throwaway_database)
+        command.upgrade(config, "head")
+        assert "incident_reopen_candidate" in _table_names(throwaway_database)
+        command.downgrade(config, "0006_telemetry_ingestion")
+        assert "incident_reopen_candidate" not in _table_names(throwaway_database)
+        command.upgrade(config, "head")
+        command.check(config)
+
     def test_accepted_phase_4_head_upgrades_and_preserves_alerts(
         self, throwaway_database: str
     ) -> None:
@@ -404,7 +422,26 @@ class TestUpgradePaths:
             "workflow_checkpoint",
             "signal_receipt",
             "investigation_dispatch",
+            "incident_reopen_candidate",
         }
+
+    def test_accepted_phase_5_head_upgrades_to_correction_head(
+        self, throwaway_database: str
+    ) -> None:
+        config = _alembic_config(throwaway_database)
+        command.upgrade(config, "0006_telemetry_ingestion")
+        assert "incident_reopen_candidate" not in _table_names(throwaway_database)
+        command.upgrade(config, "head")
+        assert "incident_reopen_candidate" in _table_names(throwaway_database)
+        engine = sa.create_engine(throwaway_database)
+        try:
+            with engine.connect() as conn:
+                assert (
+                    conn.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one()
+                    == "0007_phase5_hardening"
+                )
+        finally:
+            engine.dispose()
 
     def test_row_level_security_covers_every_tenant_scoped_table_after_upgrade(
         self, throwaway_database: str

@@ -22,6 +22,20 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed — Phase 5 independent-review corrections
+
+- Kept persisted source titles, labels, annotations, correlation identifiers and metadata in
+  bounded untrusted prompt blocks; orchestration objectives now use only generated intent and
+  catalogue-resolved structural identity.
+- Applied every relevance predicate before the production 256-candidate bound, made overflow a
+  durable retryable outcome, and changed ambiguity to a versioned nearest-anchor/UUID tie-break.
+- Added explicit timestamp range and future-skew policies, catalogue-retry semantics, severity
+  tie ordering, fail-closed occurrence lookup, terminal reopen candidates and terminal dispatch.
+- Namespaced advisory locks, measured lock waits separately, and changed non-key incident writers
+  to `FOR NO KEY UPDATE` so Phase 4 FK inserts do not block unrelated ingestion.
+- Added forward migration `0007_phase5_hardening` and expanded unprivileged PostgreSQL tests for
+  production-sized bounds, real contention, terminal lifecycle behavior and real prompt rendering.
+
 ### Added — Phase 5 telemetry ingestion and incident correlation
 
 - Added bounded canonical signal envelopes, simulator and Alertmanager-format fixture normalizers,
@@ -30,15 +44,13 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Added append-only signal receipts and durable investigation dispatch requests with tenant RLS,
   composite foreign keys, delivery/occurrence idempotency, source-state ordering and rollback-safe
   transaction boundaries.
-- Added deterministic `service-category-window/1` correlation with persisted positive/negative
+- Added deterministic correlation with persisted positive/negative
   factors, ambiguity explanations, change-signal temporal association without causation claims,
   severity escalation and source-resolution semantics.
 - Added explicit dispatcher integration to the accepted Phase 4 read-only kernel and atomic initial
   checkpoint linkage, including lease-aware duplicate-worker recovery.
 - Added migration `0006_telemetry_ingestion`, Phase 5 architecture documentation, ADR-0019,
   security/authorship audit guidance, boundary validation and database-backed scenario coverage.
-- Validated 523 tests against fresh PostgreSQL, plus strict typing, lint/format, clean/upgrade/
-  downgrade/drift migration checks, documentation/phase-boundary validation and repository hygiene.
 
 ### Fixed
 

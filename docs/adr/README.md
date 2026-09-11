@@ -62,8 +62,9 @@ Use [`0000-adr-template.md`](./0000-adr-template.md) as the starting point.
 ## Index
 
 Phase 5 implementation decision: [ADR-0019](./0019-transactional-signal-ingestion.md),
-transactional ingestion and durable investigation requests. Proposed for milestone review;
-it adds no infrastructure and does not replace an accepted ADR.
+transactional ingestion and durable investigation requests. Accepted after the Phase 5
+contention, trust-boundary and correlation corrections; it adds no infrastructure and does
+not replace an accepted ADR.
 
 | ADR | Title | Status | Spec ref | Date |
 |---|---|---|---|---|
@@ -138,5 +139,5 @@ them does not exist. Recorded so the scope is visible.
 | C4 | Frontend scope and framework commitment beyond Next.js baseline | 13 | Phase 9 |
 | C5 | Kubernetes deployment topology and Terraform module boundaries | 13, 16 | Phase 14 |
 | C6 | Embedding model selection and re-index strategy | 8 | Phase 6 — needs the retrieval evaluation set |
-| C7 | Alert correlation algorithm (deterministic signal weighting) | 3, 4 | Phase 5 — needs an alert corpus |
+| C7 | Weighted/graph alert correlation beyond deterministic v2 | 3, 4 | Later — requires an alert corpus and evaluation evidence |
 | C8 | Data-retention automation and partition management | 15 | Phase 13 |

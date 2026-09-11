@@ -933,7 +933,10 @@ def _objective(
     window_end = incident.opened_at
     window_start = window_end - timedelta(hours=1)
     return InvestigationObjective(
-        statement=f"Determine the cause of: {incident.title}",
+        statement=(
+            "Determine the cause of the operational condition recorded for "
+            f"incident {incident.reference} ({incident.id})."
+        ),
         service_names=scope.service_names,
         environment_name=environment.name,
         window_start=window_start.astimezone(UTC).isoformat(),

@@ -55,6 +55,10 @@ TEST_DATABASE_URL_ENV: Final[str] = "ASIC_TEST_DATABASE_URL"
 #: failure. A statement that takes longer than this is not a slow query, it is a stuck one.
 DEFAULT_STATEMENT_TIMEOUT_MS: Final[int] = 10_000
 
+#: Ingestion lock acquisition is bounded independently of statement execution. A lock
+#: timeout asks the at-least-once caller to retry; it does not fabricate a receipt.
+DEFAULT_INGESTION_LOCK_TIMEOUT_MS: Final[int] = 1_000
+
 #: Server-side ceiling on how long a transaction may sit idle before PostgreSQL terminates
 #: the session. It must exceed the longest node timeout, because a node legitimately holds
 #: its transaction open across a model call while the database sees nothing happening -
@@ -160,6 +164,13 @@ def apply_statement_timeouts(
             f"SET LOCAL idle_in_transaction_session_timeout = {int(idle_in_transaction_timeout_ms)}"
         )
     )
+
+
+def apply_lock_timeout(session: Session, *, lock_timeout_ms: int) -> None:
+    """Apply a transaction-local PostgreSQL lock wait ceiling."""
+    if lock_timeout_ms < 0:
+        raise ValueError("lock timeout must be non-negative milliseconds")
+    session.execute(sa.text(f"SET LOCAL lock_timeout = {int(lock_timeout_ms)}"))
 
 
 def clear_tenant(session: Session) -> None:
