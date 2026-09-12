@@ -1,6 +1,6 @@
 # ADR-0004: PostgreSQL + pgvector as the single primary datastore
 
-- **Status:** Proposed
+- **Status:** Accepted — pgvector implemented Phase 6 (`knowledge_chunk.embedding`, HNSW index, exact cosine search over a pre-filtered candidate set)
 - **Date:** 2026-09-04
 - **Deciders:** Project owner (pending approval)
 - **Spec reference:** §8, §13, §15

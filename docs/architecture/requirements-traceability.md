@@ -24,6 +24,28 @@ terminal dispatch, read-only trigger deduplication,
 pre-drive crash recovery, trace redaction and migration clean/accepted-head/round-trip/drift.
 No production scale or performance result is implied.
 
+## Phase 6 implementation evidence
+
+[`memory-and-rag.md`](./memory-and-rag.md) and `tests/knowledge`, `tests/memory`,
+`tests/security/test_knowledge_prompt_injection.py` implement the operational-knowledge,
+retrieval and governed-memory portion of the following requirements. Ranking quality,
+reranking, and semantic-similarity strength are architecture-validation measurements
+against a twelve-document golden corpus, not production benchmarks.
+
+| Requirement | Implemented evidence and limits |
+|---|---|
+| FR-KNW-01 | `KnowledgeIngestionService`: canonicalize → structure-aware chunk → deterministic embed → transactional commit; idempotent re-ingestion (identical content re-import writes nothing); typed rejection for oversized/invalid/empty documents. One source type (imported document text) is exercised; connector-specific fetch is out of scope for Phase 6 |
+| FR-KNW-02 | `KnowledgeRetriever`'s single disposition CTE filters by service/environment/document-type *before* ranking; `tests/knowledge/test_retrieval_db.py::TestScopeAndAuthorization` proves wrong-service and wrong-environment scope yield zero results, not a wrong one |
+| FR-KNW-03 | ACL evaluated in the same pre-ranking CTE; `test_acl_label_hides_the_document_without_the_clearance` and the golden-corpus unauthorized-rate test (`TestUnauthorizedAndStaleRatesAreZero`, measured 0 unauthorized hits across the probe set) confirm zero out-of-scope exposure; mutation-tested (see completion report) — forcing the ACL predicate to `TRUE` makes both tests fail |
+| FR-KNW-04 | [ADR-0008](../adr/0008-rag-retrieval-strategy.md) status raised to Accepted on this evidence: hybrid (lexical + vector, versioned RRF fusion) is the only mode shipped; no reranker exists in the codebase — there is nothing to have "enabled only on a measured improvement" because no measurement has shown a need |
+| FR-KNW-05 | Supersede-then-insert under a per-source advisory lock plus a partial unique index (`uq_knowledge_document_current_source`) enforce INV-14; `TestVersioning` in `test_ingestion_db.py` proves old chunk text survives supersession and content returning to an earlier state creates a new version rather than reusing one; retrieval and replay both prefer current and can reproduce a historical version exactly |
+| FR-KNW-06 | `tests/knowledge/test_retrieval_evaluation.py`: ten-document, fifteen-query golden corpus. Measured this run: recall@5 = 1.000, precision@5 = 0.867, MRR = 1.000 over the nine gradeable queries (exact-lexical, semantic-paraphrase, ambiguous excluded from the average by design). These are architecture-validation numbers on a small, deliberately separable corpus — not a claim about any other corpus or a production benchmark |
+| FR-KNW-07 | `tests/security/test_knowledge_prompt_injection.py` ingests a document containing fake SYSTEM headers, an "ignore all previous instructions" payload, a forged citation, and forged `<<<UNTRUSTED_DATA...UNTRUSTED_DATA>>>` fence markers, then runs it through the real broker → real manifest verification → real `HYPOTHESIS_PROMPT.render()`. Confirmed: the hostile text is retrievable (detection is a signal, never a filter) and confined to the untrusted section; the forged fence markers are neutralised so exactly one real fence renders; the forged citation does not resolve |
+| FR-MEM-01 | `MemoryCategory` (five values) enforced by `asic.memory.policy.evaluate()`: `working_state`/`incident_history`/`model_inference` are refused outright (T1/T2/T3 are not writable through this path at all — T3 already has its own append-only path); only `operational_knowledge` and `verified_outcome` can become a proposal, each requiring a different reference shape |
+| FR-MEM-02 | `MemoryEntry.promotion_id` is NOT NULL under the `governed_entry` check constraint (NOT VALID, applies to new rows); `TestMemoryIsNotDirectlyWritable` proves a direct INSERT bypassing `MemoryGovernanceService.decide()` is rejected by the database itself, not merely by application code |
+| FR-MEM-03 | `support_count()` counts independent incidents; the policy and the entry-construction code do not special-case `support_count == 1` into automatic promotion — every promotion, single-incident or not, still requires the same human decision. No auto-promotion path exists to guard against |
+| FR-MEM-04 | `MemoryGovernanceService.decide()`: human-only, not-the-proposer, permission-checked (`memory.promotion.decide`, seeded by migration `0008`), re-evaluates the policy at decision time; every decision — approve, decline, and every rejection at propose time — is recorded in the append-only `memory_write_decision` table. Mutation-tested: disabling the VERIFIED-verdict requirement in `evaluate()` makes `test_only_a_verified_verdict_counts` fail for both `not_verified` and `inconclusive` |
+
 - **Status:** Authored — Architecture Package. **Most requirements below are not implemented**; the note beneath says exactly which are, and on what evidence.
 - **Requirement definitions:** [`../prd/SRS.md`](../prd/SRS.md)
 - **Master specification:** [`../spec/MASTER_PROJECT_PROMPT_V3.md`](../spec/MASTER_PROJECT_PROMPT_V3.md)

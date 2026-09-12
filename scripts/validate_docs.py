@@ -72,10 +72,10 @@ UNMEASURED_CLAIM = re.compile(
     re.IGNORECASE,
 )
 
-# Phase 5 adds deterministic ingestion and correlation to the read-only investigation.
-# Anything belonging to a later, unapproved phase is a scope violation, and cheap to detect
-# mechanically. The list moves forward one phase at a time, deliberately: a boundary that
-# only ever loosens stops being a boundary.
+# Phase 6 adds governed operational knowledge, retrieval and memory to the read-only
+# investigation. Anything belonging to a later, unapproved phase is a scope violation, and
+# cheap to detect mechanically. The list moves forward one phase at a time, deliberately: a
+# boundary that only ever loosens stops being a boundary.
 
 #: Source trees that may contain implementation at the current phase.
 ALLOWED_SOURCE_ROOTS = (
@@ -84,7 +84,9 @@ ALLOWED_SOURCE_ROOTS = (
     "src/asic/db",
     "src/asic/domain",
     "src/asic/ingestion",
+    "src/asic/knowledge",
     "src/asic/llm",
+    "src/asic/memory",
     "src/asic/observability",
     "src/asic/orchestration",
     "src/asic/simulators",
@@ -101,9 +103,12 @@ FORBIDDEN_PACKAGES = (
     "src/asic/adapters",
     "src/asic/evaluation",  # Phase 11 - harness
     "src/asic/remediation",  # Phase 8  - execution
+    "src/asic/agents",  # Phase 7  - specialised investigation agents
+    # Phase 6 lives in knowledge/ and memory/. A parallel retrieval tree would be a second
+    # path to content that bypasses the governed one.
     "src/asic/rag",
-    "src/asic/memory",
     "src/asic/retrieval",
+    "src/asic/vector",
     "frontend",  # Phase 9  - dashboard
     "web",
     "ui",
@@ -135,6 +140,20 @@ FORBIDDEN_IMPORTS = (
     "langsmith",
     "langchain_openai",
     "langchain_anthropic",
+    # Phase 6: PostgreSQL + pgvector is the store (ADR-0004); reranking is off unless
+    # measured (ADR-0008); embeddings go through asic.knowledge.embedding.
+    "pinecone",
+    "weaviate",
+    "qdrant_client",
+    "pymilvus",
+    "chromadb",
+    "faiss",
+    "lancedb",
+    "llama_index",
+    "sentence_transformers",
+    "cohere",
+    "voyageai",
+    "phoenix",
 )
 
 #: Frontend and infrastructure languages, none of which belong to this phase.
@@ -378,7 +397,8 @@ def check_responsibility_coverage(f: Findings) -> int:
 def check_phase_boundary(f: Findings) -> int:
     """Assert no later phase has started early.
 
-    Phase 5 adds ingestion/correlation to typed contracts, a capability broker, deterministic
+    Phase 6 adds governed knowledge, retrieval and memory to ingestion/correlation, typed
+    contracts, a capability broker, deterministic
     simulators and a read-only investigation. Remediation execution, external integrations,
     the HTTP surface, the frontend and the evaluation harness are explicitly out of scope,
     and their absence is checkable rather than assertable.
@@ -509,7 +529,7 @@ def main() -> int:
     print(f"mermaid diagrams  : {blocks} checked")
     print(f"requirement IDs   : {defined} defined in SRS, {traced} referenced in matrix")
     print(f"spec section 4    : {responsibilities} responsibilities checked for disposition")
-    print(f"repository files  : {scanned} scanned against the Phase 5 boundary")
+    print(f"repository files  : {scanned} scanned against the Phase 6 boundary")
     print()
 
     order = [
@@ -517,7 +537,7 @@ def main() -> int:
         ("mermaid", "Mermaid structure"),
         ("traceability", "Requirement traceability"),
         ("coverage", "Specification coverage"),
-        ("phase", "Phase 5 scope boundary"),
+        ("phase", "Phase 6 scope boundary"),
         ("claims", "No unmeasured claims"),
     ]
 

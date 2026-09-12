@@ -502,6 +502,94 @@ class PostmortemStatus(StrEnum):
     PUBLISHED = "published"
 
 
+@unique
+class KnowledgeSourceStatus(StrEnum):
+    """Whether a knowledge source may be served at all.
+
+    ``revoked`` and ``deleted`` both withdraw content from every read path, including
+    replay of past retrievals; ``deleted`` additionally records that the source is gone
+    rather than merely withdrawn. Physical purge is retention automation (C8), not this.
+    """
+
+    ACTIVE = "active"
+    REVOKED = "revoked"
+    DELETED = "deleted"
+
+
+@unique
+class KnowledgeVersionState(StrEnum):
+    """Lifecycle of one immutable document version (INV-14)."""
+
+    CURRENT = "current"
+    SUPERSEDED = "superseded"
+    REVOKED = "revoked"
+
+
+@unique
+class KnowledgeContentFormat(StrEnum):
+    MARKDOWN = "markdown"
+    TEXT = "text"
+    HTML = "html"
+
+
+@unique
+class KnowledgeIngestionOutcome(StrEnum):
+    #: A new immutable version with chunks and embeddings was committed.
+    CREATED = "created"
+    #: The content equals the current version; nothing new was written or embedded.
+    UNCHANGED = "unchanged"
+    #: Deterministic refusal - malformed, oversized, unsupported or out of policy.
+    REJECTED = "rejected"
+    #: A dependency failed (embedding timeout, provider error). Retrying may succeed.
+    FAILED = "failed"
+
+
+@unique
+class RetrievalPrincipalKind(StrEnum):
+    """Who a retrieval was performed for. Established by trusted wiring, never by text."""
+
+    INVESTIGATION = "investigation"
+    USER = "user"
+    SERVICE = "service"
+
+
+@unique
+class MemoryCategory(StrEnum):
+    """The five categories a durable-memory write request is classified into.
+
+    Only two can ever become durable memory, and both only through a human-approved
+    promotion. The others are named so a request for them is refused *by category* rather
+    than by accident: working state already lives in the workflow, incident history is
+    derived from the append-only event log, and model inferences are not retained.
+    """
+
+    WORKING_STATE = "working_state"
+    OPERATIONAL_KNOWLEDGE = "operational_knowledge"
+    INCIDENT_HISTORY = "incident_history"
+    VERIFIED_OUTCOME = "verified_outcome"
+    MODEL_INFERENCE = "model_inference"
+
+
+@unique
+class MemoryVerificationStatus(StrEnum):
+    #: Backed by a verification record whose verdict was ``verified``.
+    VERIFIED = "verified"
+    #: Anything else, however it was approved. Approval is not verification.
+    UNVERIFIED = "unverified"
+
+
+@unique
+class MemoryDecisionOutcome(StrEnum):
+    #: A write request passed policy and became a proposal awaiting a human.
+    PROPOSED = "proposed"
+    #: A write request failed policy and produced nothing.
+    REJECTED = "rejected"
+    #: A human approved a proposal and a memory entry was written.
+    APPROVED = "approved"
+    #: A human declined a proposal.
+    DECLINED = "declined"
+
+
 # ------------------------------------------------------------ evaluation and tracing
 
 

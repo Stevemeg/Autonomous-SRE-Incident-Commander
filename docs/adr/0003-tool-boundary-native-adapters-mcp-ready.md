@@ -2,7 +2,13 @@
 
 - **Status:** Accepted — implemented in Phase 4. The broker depends on the `ToolProvider`
   protocol; the only implementation is the deterministic simulator. No MCP provider exists,
-  and none of §5.4's adoption triggers has been met.
+  and none of §5.4's adoption triggers has been met. Phase 6 adds the first **native**
+  (non-simulator) `ToolProvider`: `asic.knowledge.provider.KnowledgeStoreProvider`, serving
+  `knowledge.search` / `read.knowledge` from PostgreSQL. This is a straightforward
+  application of the existing decision, not a new one — knowledge retrieval reaches an
+  investigation through this provider and the broker, and through nothing else; there is no
+  second, uncontrolled egress path for retrieved content. See
+  [`../architecture/memory-and-rag.md`](../architecture/memory-and-rag.md) §2.3.
 - **Date:** 2026-09-04
 - **Deciders:** Project owner (pending approval)
 - **Spec reference:** §7, §13, §14, §15, §20 of [`../spec/MASTER_PROJECT_PROMPT_V3.md`](../spec/MASTER_PROJECT_PROMPT_V3.md)

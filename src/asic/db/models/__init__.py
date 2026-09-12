@@ -38,8 +38,13 @@ from asic.db.models.investigation import (
 from asic.db.models.knowledge import (
     KnowledgeChunk,
     KnowledgeDocument,
+    KnowledgeIngestion,
+    KnowledgeRetrieval,
+    KnowledgeRetrievalResult,
+    KnowledgeSource,
     MemoryEntry,
     MemoryPromotion,
+    MemoryWriteDecision,
     Postmortem,
 )
 from asic.db.models.orchestration import WorkflowCheckpoint
@@ -119,8 +124,13 @@ __all__ = [
     "InvestigationStep",
     "KnowledgeChunk",
     "KnowledgeDocument",
+    "KnowledgeIngestion",
+    "KnowledgeRetrieval",
+    "KnowledgeRetrievalResult",
+    "KnowledgeSource",
     "MemoryEntry",
     "MemoryPromotion",
+    "MemoryWriteDecision",
     "Permission",
     "PolicyDecision",
     "Postmortem",

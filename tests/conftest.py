@@ -108,7 +108,14 @@ def owner_engine(database_url: str) -> Iterator[Engine]:
 #: Global catalogue tables the test role may seed. In production the application role has
 #: no INSERT here; these grants exist so a test can build its fixtures and exercise them
 #: inside one transaction, which is what keeps tests isolated by rollback.
-_TEST_ONLY_SEED_TABLES = ("tenant", "tool_definition", "behaviour_version", "role", "permission")
+_TEST_ONLY_SEED_TABLES = (
+    "tenant",
+    "tool_definition",
+    "behaviour_version",
+    "role",
+    "permission",
+    "role_permission",
+)
 
 
 @pytest.fixture(scope="session")

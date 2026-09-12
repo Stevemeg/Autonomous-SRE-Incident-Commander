@@ -1,8 +1,10 @@
 # Memory and RAG Architecture
 
-- **Status:** Authored — Architecture Package (V3 §23 H). **Proposed; not implemented.**
+- **Status:** Implemented — Phase 6 (`feat: establish governed operational rag and memory`). T1–T3 as designed
+  in Phase 3–5; T4 (operational knowledge) and T5 (verified outcomes) implemented this
+  phase. See §7 for what is deliberately deferred.
 - **Master specification references:** Sections 8, 10, 15, 23(H)
-- **Related:** [`tool-registry.md`](./tool-registry.md) §6 (provenance) · [`data-model-and-api.md`](./data-model-and-api.md)
+- **Related:** [`tool-registry.md`](./tool-registry.md) §6 (provenance) · [`data-model-and-api.md`](./data-model-and-api.md) · [ADR-0004](../adr/0004-postgresql-pgvector-primary-datastore.md) · [ADR-0008](../adr/0008-rag-retrieval-strategy.md) · [ADR-0009](../adr/0009-memory-architecture-tiers.md)
 
 ---
 
@@ -25,8 +27,16 @@ creates a specific, nameable failure.
 > **Nothing is promoted upward without an explicit, recorded, human-approved transition.**
 
 T1 → T3 happens at incident close, mechanically, append-only. T3 → T5 and T3 → T4 require
-a G12 proposal and a human approval record. There is no automatic path from "this worked
+a proposal and a human approval record. There is no automatic path from "this worked
 once" to "this is what we do" (§10, SI-12).
+
+**Implementation note:** the proposal/approval mechanism is `asic.memory.service.
+MemoryGovernanceService` — a deterministic service called directly, not the `G12_MEMORY_
+CURATOR` orchestration node. `G12_MEMORY_CURATOR` exists as a reserved `NodeId` value but
+is not wired into any graph in this phase; nothing currently *proposes* a promotion
+automatically. `propose()`/`decide()` are available for a future node, an operator tool, or
+a human-facing workflow to call — Phase 6 builds the governance the promotion must satisfy,
+not the trigger that initiates one.
 
 ```mermaid
 flowchart LR
@@ -87,6 +97,20 @@ can compare them.
 behaviour change (§10, FR-EVL-09) requiring a re-index and a re-run of retrieval
 evaluation — not a config edit.
 
+**Implementation.** `asic.knowledge.canonical.canonicalize()` is the sanitiser (NFC
+normalisation, control/format-character stripping, HTML-to-text with active content
+dropped, injection-pattern scan as a recorded signal); `asic.knowledge.chunking.
+chunk_document()` is the structure-aware chunker (heading/fence/table/list-aware, falling
+back to bounded window-with-overlap, recording which strategy produced each chunk);
+`asic.knowledge.embedding.EmbeddingService` wraps a swappable `EmbeddingProvider`, with
+`DeterministicEmbeddingProvider` (hashed tokens plus a small versioned concept table) as
+the test/evaluation provider — explicitly not a semantic model and making no quality claim
+of its own; `asic.knowledge.ingestion.KnowledgeIngestionService` is the transactional
+pipeline, serialising one source's version history under a per-source PostgreSQL advisory
+lock so the supersede-then-insert sequence cannot race. One source type — an imported
+document's title/body/format — is implemented; connector-specific fetch (git, wiki,
+ticketing) is out of scope for this phase.
+
 ### 2.2 Metadata
 
 | Field | Purpose |
@@ -135,11 +159,30 @@ retrieval and reranking "where justified". Justification means measurement:
 Shipping a reranker by default would be exactly the résumé-keyword adoption §20 forbids.
 The retrieval evaluation set (§5 below) exists so this stays a measurement, not an opinion.
 
+**Implementation.** `asic.knowledge.retrieval.KnowledgeRetriever.retrieve()` runs the whole
+filter-then-search sequence as one SQL statement (`_RETRIEVAL_SQL`): a CTE classifies every
+chunk's *disposition* — `unauthorized` / `inactive_source` / `revoked_version` /
+`not_yet_effective` / `superseded` / `stale` / `embedding_model_mismatch` / `eligible` —
+before lexical (`websearch_to_tsquery` + `ts_rank_cd`) or vector (exact cosine, pre-filtered)
+search ever runs, so an out-of-scope chunk cannot influence ranking even indirectly. Fusion
+is reciprocal rank fusion (`FusionPolicy`, `k=60`, versioned as part of the retrieval policy
+identifier). No reranker or query-expansion code exists in the codebase — there is nothing
+to enable, consistent with "disabled until measured to help."
+
 ### 2.4 Citations
 
 Every retrieved chunk returns with `document_id`, `chunk_id`, `document_version`,
 `source_uri`, `source_updated_at` and the retrieval score. A human can re-derive it; the
 Postmortem Author's uncited claims are stripped against exactly these IDs (G11).
+
+**Implementation.** A citation is the token `knowledge:<retrieval_id>/<chunk_id>@
+<version_id>`, valid only if that exact chunk was returned by that exact retrieval —
+resolution (`asic.knowledge.citations.resolve_citation()`) joins through the append-only
+`knowledge_retrieval_result` table, not merely through the chunk table, so a token cannot
+be minted for content that was never retrieved and a model cannot fabricate one that
+resolves. `asic.knowledge.retrieval.replay_retrieval()` reconstructs exactly what a past
+retrieval returned — including superseded content, as it stood then — while withholding
+content whose source has since been revoked or deleted.
 
 ---
 
@@ -183,6 +226,22 @@ The distinction that matters: detection is a **signal**, structure is the **defe
 system whose injection protection is a pattern list is one novel phrasing away from failure.
 A system where retrieved text has no path to the authorization type is not.
 
+**Implementation.** Retrieved content reaches a model prompt only through `asic.
+orchestration.knowledge_context.knowledge_evidence_blocks()`, which renders each citation
+as an `asic.domain.untrusted.UntrustedBlock` (provenance `RETRIEVED`, which cannot confer
+authority — `UntrustedBlock.__post_init__` raises `ProvenanceViolation` for any block whose
+provenance does confer it) and `PromptTemplate.render()` fences every block behind
+`<<<UNTRUSTED_DATA ... UNTRUSTED_DATA>>>` markers, neutralising any marker-like text found
+*inside* retrieved content first so a document cannot forge a fence close and inject a
+second, attacker-labelled block. `tests/security/test_knowledge_prompt_injection.py`
+exercises this through the real broker, the real `KnowledgeStoreProvider`, real manifest
+verification and the real `HYPOTHESIS_PROMPT` template — not a sanitiser unit test — with a
+document containing a fake `SYSTEM:` header, an "ignore all previous instructions" payload,
+a forged citation and forged fence markers. Also load-bearing: a provider's retrieval
+manifest is untrusted input in its own right — `knowledge_context.validate_manifest()`
+re-checks tenant, correlation id, the broker's own idempotency key, and every result's
+chunk/version/source/content-hash against the database before anything is recorded.
+
 ### 4.1 Threats we accept
 
 Recorded honestly rather than claimed away:
@@ -216,6 +275,19 @@ The evaluation set pairs realistic incident information-gaps with expert-labelle
 chunks, and is versioned alongside the knowledge corpus so retrieval changes are compared
 against a fixed target.
 
+**Implementation and measured evidence.** `tests/knowledge/test_retrieval_evaluation.py`
+is a ten-document, fifteen-query golden corpus covering exact-lexical, semantic-paraphrase,
+ambiguous, wrong-service, no-result, unauthorized, stale, revoked, superseded/competing-
+version and injected-document cases. Measured on the run that produced this document:
+recall@5 = 1.000, precision@5 = 0.867, MRR = 1.000 over the nine gradeable queries (the
+ambiguous query is deliberately excluded from the average — it has no single correct
+answer and is graded on citation soundness instead); unauthorized-rate and stale-rate were
+both measured at zero across their probe sets, and are asserted as exact-zero security
+properties rather than folded into the quality average. This is architecture validation on
+a small, deliberately separable corpus built with the deterministic test embedding
+provider — it is not a claim about recall against any other corpus, embedding model, or
+production-scale document set.
+
 ---
 
 ## 6. Context assembly (T2)
@@ -237,3 +309,37 @@ Three properties follow: assembly is **deterministic** (same state ⇒ same cont
 replay is meaningful); **current evidence outranks history** by construction of the budget;
 and **untrusted content is capped and dropped first** under pressure, so budget exhaustion
 degrades toward the trusted end of the spectrum rather than away from it.
+
+---
+
+## 7. Implementation status and deferred items
+
+Built and tested this phase, against a real PostgreSQL database under the unprivileged
+application role: `KnowledgeSource`/`KnowledgeDocument`/`KnowledgeChunk` versioning and
+idempotent ingestion; structure-aware chunking; a swappable embedding provider with a
+deterministic test implementation; hybrid (lexical + vector) retrieval with authorization
+evaluated before ranking; stable, forgery-resistant citations; replay of historical
+retrievals; the `MemoryCategory`/`MemoryKind` write-governance policy and
+`MemoryGovernanceService` propose/decide flow; structural (not merely prompt-based)
+resistance to memory poisoning and prompt injection; a retrieval evaluation harness with
+measured numbers; observability spans and bounded-cardinality metrics for ingestion,
+retrieval and memory decisions; and full RLS/append-only/immutability enforcement verified
+under the application role, not the schema owner.
+
+Deliberately not built in this phase (Phase 7+ scope per the implementation brief):
+
+- No reranker or query-expansion stage — ADR-0008 keeps hybrid-only as Accepted; nothing
+  measured has shown a need for either.
+- No specialized investigation agents and no `G12_MEMORY_CURATOR` orchestration node —
+  `MemoryGovernanceService.propose()` exists for a future caller; nothing calls it
+  automatically yet.
+- No connector-specific ingestion (git, wiki, ticketing fetch) — only the ingest-a-document
+  API is implemented; a caller supplies title/body/format directly.
+- No remediation planning, policy execution, approval implementation, executor or
+  verification executor — Phase 6 is retrieval and memory *governance*, not action.
+- No production integrations or frontend.
+- The `knowledge.search` catalogue row seeded by migration `0005` still declares
+  `provider_kind = simulator` — a pre-existing ADR-0018 defect (migrations must not read
+  the live catalogue module, but `0005` does) recorded as deferred Phase 5 finding R-0x and
+  deliberately not touched in this phase; the broker selects providers by capability
+  match, not by this label, so behaviour is unaffected.

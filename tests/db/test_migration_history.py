@@ -149,25 +149,40 @@ class TestPinnedListsMatchHistory:
         pinned = sorted(module.APPEND_ONLY_TABLES)
         assert pinned == phase_3_tables["append_only"]
 
-    def test_phase_4_and_5_tenant_scoped_additions(
+    def test_phase_4_through_6_tenant_scoped_additions(
         self, phase_3_tables: dict[str, list[str]]
     ) -> None:
         # The corollary: everything 0003 no longer covers must be covered by a later
-        # migration. Only `workflow_checkpoint` was added, and 0004 creates and protects it
-        # in the same migration.
+        # migration. `tenant_scoped_tables()` reads the current models, so this set is
+        # every tenant-scoped table added since Phase 3 - Phase 4/5's four, plus Phase 6's
+        # five new knowledge/memory tables (`knowledge_document`, `knowledge_chunk`,
+        # `memory_entry` and `memory_promotion` are Phase 3 tables that 0008 only extends).
         added = tenant_scoped_tables() - set(phase_3_tables["tenant"])
         assert added == {
             "workflow_checkpoint",
             "signal_receipt",
             "investigation_dispatch",
             "incident_reopen_candidate",
+            "knowledge_source",
+            "knowledge_ingestion",
+            "knowledge_retrieval",
+            "knowledge_retrieval_result",
+            "memory_write_decision",
         }
 
-    def test_phase_4_and_5_append_only_additions(
+    def test_phase_4_through_6_append_only_additions(
         self, phase_3_tables: dict[str, list[str]]
     ) -> None:
         added = append_only_tables() - set(phase_3_tables["append_only"])
-        assert added == {"workflow_checkpoint", "signal_receipt", "incident_reopen_candidate"}
+        assert added == {
+            "workflow_checkpoint",
+            "signal_receipt",
+            "incident_reopen_candidate",
+            "knowledge_ingestion",
+            "knowledge_retrieval",
+            "knowledge_retrieval_result",
+            "memory_write_decision",
+        }
 
 
 # ------------------------------------------------------------------- self-containment
@@ -423,22 +438,26 @@ class TestUpgradePaths:
             "signal_receipt",
             "investigation_dispatch",
             "incident_reopen_candidate",
+            "knowledge_source",
+            "knowledge_ingestion",
+            "knowledge_retrieval",
+            "knowledge_retrieval_result",
+            "memory_write_decision",
         }
 
-    def test_accepted_phase_5_head_upgrades_to_correction_head(
-        self, throwaway_database: str
-    ) -> None:
+    def test_accepted_phase_5_head_upgrades_to_current_head(self, throwaway_database: str) -> None:
         config = _alembic_config(throwaway_database)
         command.upgrade(config, "0006_telemetry_ingestion")
         assert "incident_reopen_candidate" not in _table_names(throwaway_database)
         command.upgrade(config, "head")
         assert "incident_reopen_candidate" in _table_names(throwaway_database)
+        assert "knowledge_source" in _table_names(throwaway_database)
         engine = sa.create_engine(throwaway_database)
         try:
             with engine.connect() as conn:
                 assert (
                     conn.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one()
-                    == "0007_phase5_hardening"
+                    == "0008_knowledge_memory"
                 )
         finally:
             engine.dispose()

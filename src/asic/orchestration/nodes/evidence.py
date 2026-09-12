@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import uuid
 from collections.abc import Mapping
 from typing import Any, Final
@@ -55,6 +56,7 @@ from asic.domain.enums import (
 from asic.domain.errors import BudgetExhausted, DomainError
 from asic.domain.untrusted import scan_structure
 from asic.observability import metrics
+from asic.orchestration import knowledge_context
 from asic.orchestration.context import NodeDependencies
 from asic.tools.broker import CapabilityRequest, ToolResult
 from asic.tools.catalogue import capability_for_domain
@@ -121,7 +123,7 @@ def evidence_node(deps: NodeDependencies) -> Any:
                 node_id=NodeId.G4_EVIDENCE_COLLECTOR,
                 capability=capability_for_domain(domain),
                 service_name=_service_for(deps, domain),
-                arguments=_arguments_for(domain, deps),
+                arguments=_arguments_for(domain, deps, decision.gap),
                 incident_id=deps.context.incident_id,
                 correlation_id=deps.context.correlation_id,
                 investigation_step_id=uuid.UUID(step_ref.step_id) if step_ref else None,
@@ -159,7 +161,46 @@ def evidence_node(deps: NodeDependencies) -> Any:
                 )
                 return _degrade(contract, state, deps, domain, step_ref, charged, reason=reason)
 
-            evidence_ref = _persist_evidence(deps, domain, decision.gap, result, step_ref)
+            # Knowledge results arrive with a provider manifest. It is untrusted input:
+            # verified against the database before anything is recorded, and refused -
+            # degrading the domain - if any claim in it does not hold.
+            verified: knowledge_context.VerifiedRetrieval | None = None
+            if domain is EvidenceDomain.KNOWLEDGE:
+                try:
+                    verified = knowledge_context.validate_manifest(
+                        deps.session,
+                        tenant_id=deps.context.tenant_id,
+                        correlation_id=deps.context.correlation_id,
+                        result=result,
+                    )
+                except knowledge_context.KnowledgeManifestInvalid as exc:
+                    span.fail(exc.code)
+                    return _degrade(
+                        contract,
+                        state,
+                        deps,
+                        domain,
+                        step_ref,
+                        charged,
+                        reason=f"knowledge retrieval could not be verified: {exc.code}",
+                    )
+
+            evidence_ref = _persist_evidence(deps, domain, decision.gap, result, step_ref, verified)
+            if verified is not None:
+                knowledge_context.record_manifest(
+                    deps.session,
+                    verified,
+                    tenant_id=deps.context.tenant_id,
+                    incident_id=deps.context.incident_id,
+                    workflow_run_id=deps.context.workflow_run_id,
+                    tool_execution_id=result.tool_execution_id,
+                    evidence_id=uuid.UUID(evidence_ref.evidence_id),
+                )
+                span.set_decision(
+                    retrieval_id=str(verified.retrieval_id),
+                    retrieved_citations=list(verified.citations),
+                    retrieval_replayed=verified.replayed,
+                )
             span.evidence_refs.append(uuid.UUID(evidence_ref.evidence_id))
             span.confidence = evidence_ref.quality_score
 
@@ -198,7 +239,7 @@ def _service_for(deps: NodeDependencies, domain: EvidenceDomain) -> str:
     return names[0]
 
 
-def _arguments_for(domain: EvidenceDomain, deps: NodeDependencies) -> dict[str, Any]:
+def _arguments_for(domain: EvidenceDomain, deps: NodeDependencies, gap: str) -> dict[str, Any]:
     """Non-scope arguments for one domain.
 
     Scope arguments are deliberately absent: supplying one is rejected by the descriptor,
@@ -219,7 +260,21 @@ def _arguments_for(domain: EvidenceDomain, deps: NodeDependencies) -> dict[str, 
         return dict(window)
     if domain is EvidenceDomain.KUBERNETES_STATE:
         return {"include_events": True}
-    return {"topic": objective.statement[:200], "limit": 5}
+    return {"topic": _knowledge_topic(gap, objective.statement), "limit": 5}
+
+
+_CONTROL_CHARACTERS: Final = re.compile(r"[\x00-\x1f\x7f]+")
+
+
+def _knowledge_topic(gap: str, fallback: str) -> str:
+    """The planner's declared information need is the retrieval query.
+
+    It may be model-authored text, and that is acceptable here: a query is not authority.
+    What is retrieved is decided by the tenant, scope and clearances the broker and the
+    knowledge provider resolve - never by the words of the query.
+    """
+    topic = " ".join(_CONTROL_CHARACTERS.sub(" ", gap).split())[:200].strip()
+    return topic or fallback[:200]
 
 
 def _persist_evidence(
@@ -228,22 +283,31 @@ def _persist_evidence(
     gap: str,
     result: ToolResult,
     step_ref: StepRef | None,
+    verified: knowledge_context.VerifiedRetrieval | None = None,
 ) -> EvidenceRef:
     """Write the evidence row and return the reference the graph state carries."""
     payload = dict(result.payload)
     items = _items(domain, payload)
     flags = result.injection_flags or scan_structure(payload)
+    if verified is not None:
+        flags = tuple(sorted({*flags, *verified.injection_flags}))
     digest = _digest(payload)
     quality = _quality(items, degraded=False)
 
     content: dict[str, Any] = {
         "headline": _headline(domain, items),
         "items": items,
+        # The retrieval manifest is recorded in its own tables; it is not copied here.
         "envelope": {
-            key: value for key, value in payload.items() if key not in _COLLECTION_KEY.values()
+            key: value
+            for key, value in payload.items()
+            if key not in _COLLECTION_KEY.values() and key != "retrieval"
         },
     }
     citation = {**dict(result.citation), "content_digest": digest, "gap": gap}
+    if verified is not None:
+        citation["retrieval_id"] = str(verified.retrieval_id)
+        citation["citations"] = list(verified.citations)
 
     if result.tool_execution_id is None:  # pragma: no cover - broker always sets it
         raise DomainError(

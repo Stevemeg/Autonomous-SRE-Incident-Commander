@@ -22,6 +22,61 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added — Phase 6 operational knowledge, RAG and governed memory
+
+- Added versioned, idempotent knowledge ingestion (`KnowledgeSource`/`KnowledgeDocument`/
+  `KnowledgeChunk`): deterministic canonicalization and structure-aware chunking, a
+  swappable embedding provider with a deterministic test implementation, and a
+  supersede-then-insert commit sequence serialized per source under a PostgreSQL advisory
+  lock so concurrent imports of the same document never race. A routine re-import cannot
+  change a source's access policy — that requires a separate, audited operation.
+- Added authorization-first hybrid retrieval (`KnowledgeRetriever`): one SQL statement
+  classifies every chunk's disposition — unauthorized, inactive source, revoked, not yet
+  effective, superseded, stale, or embedding-model mismatch — before lexical and vector
+  search ever run, so out-of-scope content cannot influence ranking. Reciprocal rank
+  fusion is versioned as part of the retrieval policy; reranking is not implemented.
+- Added stable, forgery-resistant citations (`knowledge:<retrieval_id>/<chunk_id>@
+  <version_id>`), resolvable only against the append-only retrieval-result table that
+  produced them, and exact replay of historical retrievals that reproduces what was
+  actually seen at the time, withholding content whose access has since been withdrawn.
+- Registered `knowledge.search` as the first native (non-simulator) Tool Broker provider
+  (`KnowledgeStoreProvider`), so retrieved knowledge reaches an investigation through the
+  same broker as every other capability, with no second egress path.
+- Added governed memory writes (`MemoryGovernanceService`): a deterministic policy decides
+  what may become a proposal — `working_state`/`incident_history`/`model_inference` are
+  refused outright; `verified_outcome` requires an actual `VERIFIED` verification record;
+  `operational_knowledge` requires a closed incident. A human who is not the proposer, and
+  who holds `memory.promotion.decide`, must approve before anything durable is written; the
+  database itself refuses a `memory_entry` lacking a promotion or carrying SYSTEM/HUMAN
+  provenance, independent of the application code.
+- Added structural (not merely prompt-based) resistance to memory poisoning and prompt
+  injection: retrieved content reaches a model only as a fenced `RETRIEVED`-provenance
+  block whose fence markers neutralise any forged marker text found inside the content
+  first, and a provider's retrieval manifest is re-verified against the database — tenant,
+  correlation id, idempotency key, and every result's chunk/version/source/content-hash —
+  before anything is recorded. Verified against the real broker, the real provider, real
+  manifest verification and the real hypothesis prompt template with a document containing
+  a fake SYSTEM header, an instruction-override payload, a forged citation and forged fence
+  markers (`tests/security/test_knowledge_prompt_injection.py`).
+- Added a ten-document, fifteen-query retrieval evaluation corpus
+  (`tests/knowledge/test_retrieval_evaluation.py`) covering exact-lexical, semantic-
+  paraphrase, ambiguous, wrong-service, no-result, unauthorized, stale, revoked and
+  competing-version cases. Measured on this corpus: recall@5 = 1.000, precision@5 = 0.867,
+  MRR = 1.000 over nine gradeable queries; unauthorized-rate and stale-rate both zero.
+  Architecture validation on a small, deliberately separable corpus — not a production
+  benchmark, and not a claim about any other corpus or embedding model.
+- Added migration `0008_knowledge_memory`: five new tables, RLS and append-only grants
+  identical in shape to every other tenant-scoped table, `NOT VALID` check constraints
+  retrofitting governance onto the pre-existing `knowledge_document`/`knowledge_chunk`/
+  `memory_entry`/`memory_promotion` tables without breaking rows written before this phase,
+  and a literal `UPDATABLE_COLUMNS` grant restricting the application role to lifecycle
+  columns only on tables it may no longer freely rewrite.
+- Deferred, and recorded as deferred rather than silently absent: a reranker (no measured
+  evidence justifies one — ADR-0008), the `G12_MEMORY_CURATOR` orchestration node and any
+  automatic promotion trigger (`MemoryGovernanceService.propose()`/`decide()` exist for a
+  future caller), and connector-specific ingestion fetch (git/wiki/ticketing) — only the
+  ingest-a-document API is implemented this phase.
+
 ### Fixed — Phase 5 independent-review corrections
 
 - Kept persisted source titles, labels, annotations, correlation identifiers and metadata in

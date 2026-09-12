@@ -1,6 +1,6 @@
 # ADR-0009: Memory architecture — five separated tiers with human-gated promotion
 
-- **Status:** Proposed
+- **Status:** Accepted — T1–T3 implemented Phase 3–5; T4/T5 write governance (`MemoryGovernanceService`, `MemoryCategory`/`MemoryKind`) implemented Phase 6. See [`../architecture/memory-and-rag.md`](../architecture/memory-and-rag.md) §7 for what remains deferred (the G12 trigger, reranking)
 - **Date:** 2026-09-04
 - **Deciders:** Project owner (pending approval)
 - **Spec reference:** §8, §10

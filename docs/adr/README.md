@@ -71,12 +71,12 @@ not replace an accepted ADR.
 | [0001](./0001-agent-topology-consolidation.md) | Agent topology — 19 responsibilities into 12 nodes | `Proposed` | 4, 5, 6, 15 | 2026-09-04 |
 | [0002](./0002-orchestration-langgraph-vs-temporal.md) | Orchestration — LangGraph checkpointing vs Temporal | **`Accepted`** | 4, 12, 13 | 2026-09-04 |
 | [0003](./0003-tool-boundary-native-adapters-mcp-ready.md) | Tool boundary — native adapters behind an MCP-ready seam | **`Accepted`** | 7, 13, 14, 15, 20 | 2026-09-04 |
-| [0004](./0004-postgresql-pgvector-primary-datastore.md) | PostgreSQL + pgvector as the single primary datastore | `Proposed` | 8, 13, 15 | 2026-09-04 |
+| [0004](./0004-postgresql-pgvector-primary-datastore.md) | PostgreSQL + pgvector as the single primary datastore | **`Accepted`** | 8, 13, 15 | 2026-09-04 |
 | [0005](./0005-llm-provider-abstraction.md) | LLM provider abstraction — thin internal interface, not LiteLLM | **`Accepted`** | 9, 10, 11, 13 | 2026-09-04 |
 | [0006](./0006-redis-necessity.md) | Redis — not adopted in v1 | `Deferred` | 13 | 2026-09-04 |
 | [0007](./0007-eventing-message-broker-necessity.md) | Message broker (Kafka/NATS) — not adopted in v1 | `Deferred` | 12, 13 | 2026-09-04 |
-| [0008](./0008-rag-retrieval-strategy.md) | RAG retrieval — hybrid default, reranking only if measured | `Needs validation` | 8 | 2026-09-04 |
-| [0009](./0009-memory-architecture-tiers.md) | Memory architecture — five tiers, human-gated promotion | `Proposed` | 8, 10 | 2026-09-04 |
+| [0008](./0008-rag-retrieval-strategy.md) | RAG retrieval — hybrid default, reranking only if measured | **`Accepted`** (hybrid v1; reranking still unbuilt) | 8 | 2026-09-04 |
+| [0009](./0009-memory-architecture-tiers.md) | Memory architecture — five tiers, human-gated promotion | **`Accepted`** | 8, 10 | 2026-09-04 |
 | [0010](./0010-observability-and-evaluation-tooling.md) | Observability tooling — OTel-native, not LangSmith or Phoenix | `Proposed` | 9, 10, 11, 13 | 2026-09-04 |
 | [0011](./0011-authentication-authorization-tenancy.md) | Authentication, authorization and tenancy model | `Proposed` | 15 | 2026-09-04 |
 | [0012](./0012-native-postgresql-enum-types.md) | Native PostgreSQL ENUM types for closed vocabularies | **`Accepted`** | 12, 15, 20 | 2026-09-04 |
@@ -99,10 +99,10 @@ contract, so they block Phase 3 onward; the rest can be accepted as their eviden
 | 3 | 0004 Datastore | Phase 3 | Schema, indexing and retrieval all depend on it |
 | 4 | 0002 Orchestration | Phase 4 | **Accepted.** Durability implemented in our own code per its own crux clause; see ADR-0015 |
 | 5 | 0003 Tool boundary | Phase 4 | **Accepted.** Registry, `ToolProvider` seam and broker implemented; no MCP provider exists |
-| 6 | 0009 Memory tiers | Phase 6 | Shapes the knowledge and memory schema |
+| 6 | 0009 Memory tiers | Phase 6 | **Accepted.** T4/T5 write governance implemented; the promotion trigger (G12) remains deferred |
 | 7 | 0005 LLM abstraction | Phase 4 | **Accepted.** The port exists; the only adapter is deterministic (ADR-0016) |
 | 8 | 0010 Observability tooling | Phase 4 | OpenTelemetry spans and metrics emitted; no exporter configured until Phase 12 |
-| 9 | 0008 RAG retrieval | Phase 6, revisit Phase 11 | `Needs validation` — resolved by measurement, not debate |
+| 9 | 0008 RAG retrieval | Phase 6, revisit Phase 11 | **Accepted.** Hybrid v1 implemented and measured; reranking A/B still not run |
 | 10 | 0006 Redis | Revisit Phase 15 | `Deferred` — trigger is a load measurement |
 | 11 | 0007 Message broker | Revisit Phase 15 | `Deferred` — trigger is a load measurement |
 

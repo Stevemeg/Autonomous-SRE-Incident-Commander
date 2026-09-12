@@ -59,6 +59,7 @@ from asic.llm.prompts import HYPOTHESIS_PROMPT
 from asic.observability import metrics
 from asic.orchestration.alert_context import incident_alert_blocks
 from asic.orchestration.context import NodeDependencies
+from asic.orchestration.knowledge_context import knowledge_evidence_blocks
 
 SCHEMA_REPAIR_ATTEMPTS: Final[int] = 1
 
@@ -216,10 +217,17 @@ def _ask_model(
         "open_gaps": list(state.get("open_gaps", [])),
         "degraded_domains": sorted(state.get("degraded_domains", [])),
     }
-    untrusted = incident_alert_blocks(
-        deps.session,
-        tenant_id=deps.context.tenant_id,
-        incident_id=deps.context.incident_id,
+    # Retrieved knowledge is operational data like any other: fenced, labelled RETRIEVED,
+    # bounded, and withheld if access was withdrawn after it was retrieved.
+    untrusted = (
+        incident_alert_blocks(
+            deps.session,
+            tenant_id=deps.context.tenant_id,
+            incident_id=deps.context.incident_id,
+        )
+        + knowledge_evidence_blocks(
+            deps.session, tenant_id=deps.context.tenant_id, evidence=evidence
+        )
     ) + tuple(
         UntrustedBlock(
             source=f"{ref.domain.value}:{ref.evidence_id}",

@@ -8,19 +8,21 @@ approval, verifies outcomes, and preserves operational memory.
 
 ---
 
-> ## Project status: deterministic ingestion feeds bounded read-only investigation
+> ## Project status: investigation is now backed by governed operational knowledge and memory
 >
-> A simulated incident can now be investigated end to end through a typed, bounded,
+> A simulated incident can be investigated end to end through a typed, bounded,
 > tenant-aware orchestration graph — planning, evidence collection through a capability
-> broker, evidence-backed hypotheses, deterministic termination, durable checkpointing and
-> a full execution trace. **It is read-only: no capability above risk tier `RO` is
-> registered, and none can be until the policy gate exists.**
+> broker (now including read-only retrieval over an operational knowledge base),
+> evidence-backed hypotheses, deterministic termination, durable checkpointing and a full
+> execution trace. **It is still read-only in effect: no capability above risk tier `RO` is
+> registered, and none can be until the policy gate exists. Phase 6 adds a governed write
+> path for durable operational memory, gated by human approval — it is not remediation.**
 >
 > | | |
 > |---|---|
-> | **Completed** | Phase 0 bootstrap · Phase 1 requirements · Phase 2 architecture · Phase 3 persistence · Phase 4 orchestration · **Phase 5 telemetry ingestion and correlation** |
-> | **In progress** | Nothing — Phase 5 is complete |
-> | **Next** | Phase 6 is blocked pending independent review of the Phase 5 corrections |
+> | **Completed** | Phase 0 bootstrap · Phase 1 requirements · Phase 2 architecture · Phase 3 persistence · Phase 4 orchestration · Phase 5 telemetry ingestion and correlation · **Phase 6 operational knowledge, RAG and governed memory** |
+> | **In progress** | Nothing — Phase 6 is complete |
+> | **Next** | Not yet scoped |
 > | **Remediation, integrations, API, frontend** | None. Deliberately absent, and structurally prevented |
 >
 > Phase 4 delivered five graph nodes under enforced contracts, a tool broker that is the
@@ -28,8 +30,12 @@ approval, verifies outcomes, and preserves operational memory.
 > every step, at-least-once execution with effect-level idempotency, and OpenTelemetry spans
 > persisted alongside the work they describe. Phase 5 adds bounded normalization,
 > durable delivery decisions, explainable correlation, and a recoverable investigation
-> request. See [telemetry ingestion](docs/architecture/telemetry-ingestion.md) for its
-> guarantees, tests, and explicit limitations.
+> request. Phase 6 adds versioned knowledge ingestion, authorization-first hybrid
+> retrieval, forgery-resistant citations, and a governed memory write path where a human
+> — never a model, never storage alone — decides what becomes durable. See
+> [telemetry ingestion](docs/architecture/telemetry-ingestion.md) and
+> [memory and RAG](docs/architecture/memory-and-rag.md) for guarantees, tests, and explicit
+> limitations.
 > The repository gates include the full pytest suite against an unprivileged PostgreSQL role,
 > strict typing, lint/format, migration drift and documentation/security validation.
 >
@@ -205,7 +211,7 @@ section O.
 | 3 | Domain model, PostgreSQL schema, tenancy and event model | **Complete** |
 | 4 | Agent state machine, planner, tool registry and orchestration | **Complete** |
 | 5 | Telemetry ingestion, alert correlation and incident lifecycle | **Complete** |
-| 6 | RAG, operational knowledge and governed memory | Not started |
+| 6 | RAG, operational knowledge and governed memory | **Complete** |
 | 7 | Investigation agents, hypothesis management and bounded reflection | Not started |
 | 8 | Remediation planning, policy gates, human approval and verification | Not started |
 | 9 | Backend APIs and frontend incident-command dashboard | Not started |

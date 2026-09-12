@@ -3,12 +3,16 @@
 This directory holds every non-code artifact required by the master specification
 (section 16, "REQUIRED ARCHITECTURE/DOCUMENTATION").
 
-> **Current project stage: Phase 5 complete — ingestion and incident correlation.**
-> A bounded, read-only, simulator-backed incident investigation runs end to end through a
-> typed graph with a capability broker, durable checkpointing and structured traces.
+> **Current project stage: Phase 6 complete — operational knowledge, RAG and governed
+> memory.** A bounded, read-only, simulator-backed incident investigation runs end to end
+> through a typed graph with a capability broker, durable checkpointing and structured
+> traces, and can now retrieve versioned operational knowledge — authorization-first,
+> citation-backed — through the same broker as every other capability. A governed memory
+> write path lets a human, never a model and never storage alone, promote a verified
+> outcome or an operational fact into durable memory.
 > **No remediation, no external integration, no API and no frontend exists**, and no
 > capability above risk tier `RO` is registered. No metric anywhere in this directory is a
-> measurement.
+> measurement beyond what is explicitly labelled as measured on a stated corpus.
 
 ## Start here
 

@@ -31,7 +31,7 @@ from asic.domain.enums import NodeId
 from asic.domain.untrusted import UntrustedBlock, render_untrusted
 
 #: Version of the prompt set as a whole. Recorded on ``behaviour_version``.
-PROMPT_SET_VERSION: Final[str] = "2026.09.11-2"
+PROMPT_SET_VERSION: Final[str] = "2026.09.11-3"
 
 
 @dataclass(frozen=True, slots=True)
@@ -165,7 +165,8 @@ PLANNER_PROMPT: Final = PromptTemplate(
 
 HYPOTHESIS_PROMPT: Final = PromptTemplate(
     prompt_id="hypothesis_engine",
-    version="1.1.0",
+    # 1.2.0: retrieved knowledge chunks are rendered as fenced untrusted blocks (Phase 6).
+    version="1.2.0",
     node_id=NodeId.G5_HYPOTHESIS_ENGINE,
     instructions=_HYPOTHESIS_INSTRUCTIONS,
     required_context=("objective", "evidence_index"),
