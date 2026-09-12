@@ -136,7 +136,7 @@ If the two ever disagree, the `.docx` wins and the Markdown is the defect.
 │   │                    tool registry, safety policy, memory/RAG,
 │   │                    observability, data model/API, failure & recovery,
 │   │                    requirements traceability, CI/CD and infrastructure
-│   ├── adr/             18 Architecture Decision Records        (7 Accepted)
+│   ├── adr/             19 Architecture Decision Records       (14 Accepted)
 │   ├── security/        Threat model + repository checklist (active)
 │   └── evaluation/      Evaluation harness architecture
 ├── src/asic/

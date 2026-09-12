@@ -210,7 +210,11 @@ class IngestionService:
                             error = "unknown_service"
                         elif environment is None:
                             error = "invalid_environment"
-                retryable = error in {"unknown_service", "invalid_environment"}
+                retryable = error in {
+                    "unknown_service",
+                    "invalid_environment",
+                    "future_observation",
+                }
                 if retryable:
                     key = _retryable_delivery_key(key, content_hash, error or "catalogue")
                     existing_retry = self._receipt(session, context.tenant_id, key)
@@ -286,6 +290,8 @@ class IngestionService:
     def _alert(
         self, session: Session, context: ConnectorContext, signal: Signal, receipt: SignalReceipt
     ) -> None:
+        projection_update = True
+        projection_decision: dict[str, Any] | None = None
         key = occurrence_key(context, signal)
         alerts = list(
             session.scalars(
@@ -340,33 +346,43 @@ class IngestionService:
                                 SignalReceipt.alert_id == alert.id,
                                 SignalReceipt.outcome == "retryable",
                                 SignalReceipt.reason == "correlation_candidate_overflow",
+                                SignalReceipt.content_digest == receipt.content_digest,
+                                SignalReceipt.observed_at == signal.observed_at,
                             )
                         )
                     )
                     is True
                 )
-                if new <= old and not retrying_unattached_firing:
-                    receipt.outcome = "unchanged" if new == old else "stale"
-                    receipt.reason = "equal_observation" if new == old else "out_of_order"
-                    receipt.alert_id, receipt.incident_id = alert.id, alert.incident_id
-                    receipt.decision.update(
-                        {
-                            "ordering": "observed_at,state_rank,severity_rank,digest",
-                            "winner": list(map(str, old)),
-                        }
-                    )
-                    if alert.incident_id:
-                        existing_incident = self._incident(
-                            session, context.tenant_id, alert.incident_id
-                        )
-                        self._event(
-                            session,
-                            existing_incident,
-                            receipt,
-                            IncidentEventType.ALERT_SUPPRESSED,
-                            {"reason": receipt.reason, "decision": receipt.decision},
-                        )
-                    return
+                if new <= old:
+                    projection_update = False
+                    projection_decision = {
+                        "ordering": "observed_at,state_rank,severity_rank,digest",
+                        "winner": list(map(str, old)),
+                        "candidate": list(map(str, new)),
+                        "projection_update": "skipped",
+                        "reason": "pending_correlation_retry"
+                        if retrying_unattached_firing
+                        else "equal_observation"
+                        if new == old
+                        else "out_of_order",
+                    }
+                    if not retrying_unattached_firing:
+                        receipt.outcome = "unchanged" if new == old else "stale"
+                        receipt.reason = "equal_observation" if new == old else "out_of_order"
+                        receipt.alert_id, receipt.incident_id = alert.id, alert.incident_id
+                        receipt.decision.update(projection_decision)
+                        if alert.incident_id:
+                            existing_incident = self._incident(
+                                session, context.tenant_id, alert.incident_id
+                            )
+                            self._event(
+                                session,
+                                existing_incident,
+                                receipt,
+                                IncidentEventType.ALERT_SUPPRESSED,
+                                {"reason": receipt.reason, "decision": receipt.decision},
+                            )
+                        return
         else:
             alert = Alert(
                 id=uuid4(),
@@ -383,14 +399,15 @@ class IngestionService:
                 received_at=self.clock.now(),
             )
             session.add(alert)
-        alert.source_state = signal.state.value
-        alert.source_observed_at = signal.observed_at
-        alert.source_digest = receipt.content_digest
-        alert.correlation_category = signal.category
-        alert.title, alert.severity = signal.title, signal.severity
-        alert.labels, alert.annotations = signal.labels, signal.annotations
-        alert.resolved_at = signal.resolved_at
-        session.flush()
+        if projection_update:
+            alert.source_state = signal.state.value
+            alert.source_observed_at = signal.observed_at
+            alert.source_digest = receipt.content_digest
+            alert.correlation_category = signal.category
+            alert.title, alert.severity = signal.title, signal.severity
+            alert.labels, alert.annotations = signal.labels, signal.annotations
+            alert.resolved_at = signal.resolved_at
+            session.flush()
         receipt.alert_id = alert.id
         incident = (
             self._incident(session, context.tenant_id, alert.incident_id)
@@ -427,12 +444,16 @@ class IngestionService:
             )
             if signal.state is SourceState.FIRING:
                 receipt.reason = "terminal_reopen_candidate"
-                # The append-only candidate references this immutable decision. Flush the
-                # receipt first so PostgreSQL can enforce the composite FK immediately.
-                session.add(receipt)
-                session.flush()
-                session.add(
-                    IncidentReopenCandidate(
+                existing_candidate = session.scalar(
+                    sa.select(IncidentReopenCandidate).where(
+                        IncidentReopenCandidate.tenant_id == context.tenant_id,
+                        IncidentReopenCandidate.incident_id == incident.id,
+                        IncidentReopenCandidate.alert_id == alert.id,
+                        IncidentReopenCandidate.status == "open",
+                    )
+                )
+                if existing_candidate is None:
+                    candidate = IncidentReopenCandidate(
                         id=uuid4(),
                         tenant_id=context.tenant_id,
                         incident_id=incident.id,
@@ -440,8 +461,30 @@ class IngestionService:
                         receipt_id=receipt.id,
                         requested_severity=_severity(signal),
                         reason="new_firing_signal_after_terminal",
+                        status="open",
                     )
-                )
+                    candidate_decision = {
+                        "id": str(candidate.id),
+                        "status": "created",
+                        "policy_version": "one-open-per-incident-alert/1",
+                    }
+                else:
+                    candidate = None
+                    candidate_decision = {
+                        "id": str(existing_candidate.id),
+                        "status": "deduplicated",
+                        "policy_version": "one-open-per-incident-alert/1",
+                    }
+                # The append-only candidate references this immutable decision. Record the
+                # candidate link in the receipt before its first flush, then insert the child.
+                receipt.decision = {
+                    **receipt.decision,
+                    "reopen_candidate": candidate_decision,
+                }
+                session.add(receipt)
+                session.flush()
+                if candidate is not None:
+                    session.add(candidate)
             else:
                 receipt.reason = "terminal_source_resolution_recorded"
             return
@@ -488,6 +531,8 @@ class IngestionService:
                     "retry": "retry after relevant active candidate set is reduced",
                     "action": "no correlation selected",
                 }
+                if projection_decision is not None:
+                    receipt.decision["observation_projection"] = projection_decision
                 return
             candidates: list[Candidate] = []
             for row, payload in rows:
@@ -513,12 +558,42 @@ class IngestionService:
                 started_at=signal.started_at,
             )
             receipt.decision = decision
-            if decision["selected"]:
-                incident = self._incident(session, context.tenant_id, UUID(decision["selected"]))
-                # Row lock refreshed status. A concurrent lifecycle termination cannot join.
-                if incident.terminated_at is not None:
-                    decision.update(selected=None, result="new", reason="candidate_terminated")
-                    incident = None
+            if projection_decision is not None:
+                decision["observation_projection"] = projection_decision
+            ranking_winner = decision["selected"]
+            ordered_matches = decision["tie_break"]["ordered_matches"]
+            commit_eligibility: list[dict[str, str | bool]] = []
+            incident = None
+            for candidate_id in ordered_matches:
+                candidate_incident = self._incident(
+                    session,
+                    context.tenant_id,
+                    UUID(candidate_id),
+                    commit_eligibility_lock=True,
+                )
+                eligible = candidate_incident.terminated_at is None
+                commit_eligibility.append(
+                    {
+                        "incident_id": candidate_id,
+                        "eligible": eligible,
+                        "reason": "active_at_commit"
+                        if eligible
+                        else "terminated_before_attachment",
+                    }
+                )
+                if eligible:
+                    incident = candidate_incident
+                    break
+            selected_at_commit = str(incident.id) if incident is not None else None
+            decision["ranking_selected"] = ranking_winner
+            decision["commit_eligibility"] = commit_eligibility
+            decision["selected"] = selected_at_commit
+            decision["tie_break"]["ranking_winner"] = ranking_winner
+            decision["tie_break"]["winner"] = selected_at_commit
+            if selected_at_commit is None and ordered_matches:
+                decision.update(result="new", reason="ranked_candidates_ineligible_at_commit")
+            elif selected_at_commit != ranking_winner:
+                decision.update(result="join", reason="commit_time_fallback")
             if incident is None:
                 with stage("incident_create"):
                     incident = Incident(
@@ -653,13 +728,22 @@ class IngestionService:
             )
 
     @staticmethod
-    def _incident(session: Session, tenant_id: UUID, incident_id: UUID) -> Incident:
-        return session.scalars(
-            sa.select(Incident)
-            .where(Incident.tenant_id == tenant_id, Incident.id == incident_id)
-            .with_for_update(key_share=True)
-            .execution_options(populate_existing=True)
-        ).one()
+    def _incident(
+        session: Session,
+        tenant_id: UUID,
+        incident_id: UUID,
+        *,
+        commit_eligibility_lock: bool = False,
+    ) -> Incident:
+        statement = sa.select(Incident).where(
+            Incident.tenant_id == tenant_id, Incident.id == incident_id
+        )
+        statement = (
+            statement.with_for_update()
+            if commit_eligibility_lock
+            else statement.with_for_update(key_share=True)
+        )
+        return session.scalars(statement.execution_options(populate_existing=True)).one()
 
     @staticmethod
     def _event(

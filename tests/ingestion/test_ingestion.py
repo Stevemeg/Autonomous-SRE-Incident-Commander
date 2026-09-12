@@ -5,6 +5,7 @@ from concurrent.futures import TimeoutError as FuturesTimeoutError
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from threading import Barrier, Event
+from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
@@ -79,7 +80,7 @@ class CapturingModel:
         return self.delegate.complete(request)
 
 
-def seed_correlation_candidates(setup: Setup, *, count: int, service_id: UUID) -> None:
+def seed_correlation_candidates(setup: Setup, *, count: int, service_id: UUID) -> list[UUID]:
     anchor = datetime(2026, 9, 11, 8, tzinfo=UTC)
     with setup.factory() as session, session.begin():
         bind_tenant(session, setup.context.tenant_id)
@@ -124,6 +125,7 @@ def seed_correlation_candidates(setup: Setup, *, count: int, service_id: UUID) -
                 for incident in incidents
             ]
         )
+        return [incident.id for incident in incidents]
 
 
 @pytest.fixture
@@ -392,6 +394,46 @@ def test_phase4_investigation_handoff_and_duplicate_workers(setup: Setup) -> Non
         )
 
 
+def test_successful_dispatch_replay_preserves_success_audit_state(setup: Setup) -> None:
+    ingested = setup.service.ingest(
+        setup.context, payload(source_event_id="dispatch-success-replay")
+    )
+    with setup.factory() as session:
+        bind_tenant(session, setup.context.tenant_id)
+        request_id = session.scalars(
+            sa.select(InvestigationDispatch.id).where(
+                InvestigationDispatch.incident_id == ingested.incident_id
+            )
+        ).one()
+    case = scenario(PRIMARY_SCENARIO_ID)
+    clock = FrozenClock(start=datetime(2026, 9, 11, 8, 5, tzinfo=UTC))
+    dispatcher = InvestigationDispatcher(
+        setup.factory,
+        InvestigationService(
+            session_factory=setup.factory,
+            providers=[SimulatorProvider(case, clock=clock)],
+            model=DeterministicModelProvider(case),
+            clock=clock,
+            budget_policy=case.budget,
+        ),
+    )
+    first = dispatcher.dispatch(
+        TenantContext(setup.context.tenant_id), request_id, setup.behaviour_id
+    )
+    replay = dispatcher.dispatch(
+        TenantContext(setup.context.tenant_id), request_id, setup.behaviour_id
+    )
+    assert first.run_id is not None and replay.run_id == first.run_id
+    assert replay.status in {"completed", "failed", "suspended"}
+    with setup.factory() as session:
+        bind_tenant(session, setup.context.tenant_id)
+        request = session.get(InvestigationDispatch, request_id)
+        assert request is not None
+        assert request.status == "completed"
+        assert request.last_error is None
+        assert request.attempts == 1
+
+
 def test_concurrent_resolution_and_firing_converge(setup: Setup) -> None:
     initial = setup.service.ingest(setup.context, payload())
     barrier = Barrier(2)
@@ -643,7 +685,7 @@ def test_handoff_crash_before_drive_has_checkpoint_and_resumes_same_run(
         request = session.get(InvestigationDispatch, request_id)
         assert request is not None and request.workflow_run_id is not None
         run_id = request.workflow_run_id
-        assert request.last_error == "trigger_failed"
+        assert request.status == "completed" and request.last_error is None
         assert session.scalar(sa.select(sa.func.count()).select_from(WorkflowCheckpoint)) == 1
     assert dispatcher.dispatch(ctx, request_id, setup.behaviour_id).status == "busy"
     clock.advance(901)
@@ -855,7 +897,7 @@ def test_future_observation_is_durable_and_does_not_poison_source_state(setup: S
             observed_at="2099-12-31T23:59:59Z",
         ),
     )
-    assert rejected.outcome == "rejected" and rejected.reason == "future_observation"
+    assert rejected.outcome == "retryable" and rejected.reason == "future_observation"
     resolved = setup.service.ingest(
         setup.context,
         payload(
@@ -872,6 +914,37 @@ def test_future_observation_is_durable_and_does_not_poison_source_state(setup: S
         receipt = session.get(SignalReceipt, rejected.receipt_id)
         assert alert is not None and alert.source_state == "resolved"
         assert receipt is not None and receipt.envelope["signal"]["severity"] == "critical"
+
+
+def test_future_observation_succeeds_once_when_the_clock_catches_up(setup: Setup) -> None:
+    raw = payload(
+        source_event_id="future-clock-catchup",
+        observed_at="2026-09-11T10:06:00Z",
+    )
+    early = setup.service.ingest(setup.context, raw)
+    repeated_early = setup.service.ingest(setup.context, raw)
+    assert early.outcome == "retryable" and early.reason == "future_observation"
+    assert repeated_early.duplicate and repeated_early.receipt_id == early.receipt_id
+
+    assert isinstance(setup.service.clock, FrozenClock)
+    setup.service.clock.advance(60)
+    accepted = setup.service.ingest(setup.context, raw)
+    duplicate = setup.service.ingest(setup.context, raw)
+    assert accepted.outcome == "accepted" and accepted.receipt_id != early.receipt_id
+    assert duplicate.duplicate and duplicate.receipt_id == accepted.receipt_id
+    with setup.factory() as session:
+        bind_tenant(session, setup.context.tenant_id)
+        committed = session.get(SignalReceipt, accepted.receipt_id)
+        assert committed is not None
+        receipts = list(
+            session.scalars(
+                sa.select(SignalReceipt).where(
+                    SignalReceipt.connector_id == setup.context.connector_id,
+                    SignalReceipt.content_digest == committed.content_digest,
+                )
+            )
+        )
+    assert sorted(row.outcome for row in receipts) == ["accepted", "retryable"]
 
 
 def test_unsupported_timestamp_is_a_durable_idempotent_rejection(setup: Setup) -> None:
@@ -959,6 +1032,82 @@ def test_irrelevant_candidates_do_not_consume_the_production_bound(setup: Setup)
     assert result.outcome == "accepted" and result.incident_id is not None
 
 
+def test_ranked_winner_terminating_before_attachment_falls_through(
+    setup: Setup, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from asic.db.projections import apply_transition
+    from asic.ingestion import service as ingestion_service_module
+    from asic.ingestion.correlation import Candidate
+    from asic.ingestion.correlation import decide as pure_decide
+
+    candidate_ids = seed_correlation_candidates(setup, count=2, service_id=setup.context.service_id)
+    expected_ranking_winner = min(candidate_ids, key=str)
+    expected_fallback = max(candidate_ids, key=str)
+    ranked = Event()
+    terminated = Event()
+
+    def pause_after_ranking(
+        candidates: list[Candidate],
+        *,
+        environment_id: UUID,
+        service_id: UUID,
+        category: str,
+        started_at: datetime,
+    ) -> dict[str, Any]:
+        decision = pure_decide(
+            candidates,
+            environment_id=environment_id,
+            service_id=service_id,
+            category=category,
+            started_at=started_at,
+        )
+        assert decision["selected"] == str(expected_ranking_winner)
+        ranked.set()
+        assert terminated.wait(timeout=10)
+        return decision
+
+    monkeypatch.setattr(ingestion_service_module, "decide", pause_after_ranking)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(
+            setup.service.ingest,
+            setup.context,
+            payload(source_event_id="candidate-terminates-during-correlation"),
+        )
+        assert ranked.wait(timeout=10)
+        try:
+            with setup.factory() as session, session.begin():
+                bind_tenant(session, setup.context.tenant_id)
+                winner = session.get(Incident, expected_ranking_winner)
+                assert winner is not None
+                apply_transition(
+                    session,
+                    incident=winner,
+                    target=IncidentStatus.ESCALATED,
+                    actor_type=ActorType.SYSTEM,
+                    source="test",
+                    correlation_id=uuid4(),
+                    termination_reason=TerminationReason.HUMAN_ESCALATION,
+                )
+        finally:
+            terminated.set()
+        result = future.result(timeout=10)
+
+    assert result.incident_id == expected_fallback
+    with setup.factory() as session:
+        bind_tenant(session, setup.context.tenant_id)
+        receipt = session.get(SignalReceipt, result.receipt_id)
+        assert receipt is not None
+        assert receipt.decision["ranking_selected"] == str(expected_ranking_winner)
+        assert receipt.decision["selected"] == str(expected_fallback)
+        assert receipt.decision["tie_break"]["winner"] == str(expected_fallback)
+        assert receipt.decision["reason"] == "commit_time_fallback"
+        assert receipt.decision["commit_eligibility"][0] == {
+            "incident_id": str(expected_ranking_winner),
+            "eligible": False,
+            "reason": "terminated_before_attachment",
+        }
+
+
 def test_relevant_candidate_overflow_has_a_durable_retryable_receipt(setup: Setup) -> None:
     assert MAX_CANDIDATES == 256
     seed_correlation_candidates(
@@ -997,6 +1146,106 @@ def test_relevant_candidate_overflow_has_a_durable_retryable_receipt(setup: Setu
     assert accepted.outcome == "accepted" and accepted.incident_id is not None
     assert committed_duplicate.duplicate
     assert committed_duplicate.receipt_id == accepted.receipt_id
+
+
+def test_overflow_retry_never_regresses_a_newer_resolution_and_commits_once(
+    setup: Setup,
+) -> None:
+    from asic.db.projections import apply_transition
+
+    candidate_ids = seed_correlation_candidates(
+        setup, count=MAX_CANDIDATES + 1, service_id=setup.context.service_id
+    )
+    firing_raw = payload(source_event_id="overflow-old-firing")
+    overflow = setup.service.ingest(setup.context, firing_raw)
+    resolution = setup.service.ingest(
+        setup.context,
+        payload(
+            source_event_id="overflow-new-resolution",
+            state="resolved",
+            observed_at="2026-09-11T08:05:00Z",
+            resolved_at="2026-09-11T08:05:00Z",
+        ),
+    )
+    duplicate_retry = setup.service.ingest(setup.context, firing_raw)
+    assert overflow.outcome == "retryable"
+    assert resolution.outcome == "accepted"
+    assert duplicate_retry.duplicate and duplicate_retry.receipt_id == overflow.receipt_id
+    with setup.factory() as session:
+        bind_tenant(session, setup.context.tenant_id)
+        alert = session.get(Alert, overflow.alert_id)
+        assert alert is not None
+        assert alert.source_state == "resolved"
+        assert alert.source_observed_at == datetime(2026, 9, 11, 8, 5, tzinfo=UTC)
+
+    with setup.factory() as session, session.begin():
+        bind_tenant(session, setup.context.tenant_id)
+        candidate = session.get(Incident, candidate_ids[0])
+        assert candidate is not None
+        apply_transition(
+            session,
+            incident=candidate,
+            target=IncidentStatus.ESCALATED,
+            actor_type=ActorType.SYSTEM,
+            source="test",
+            correlation_id=uuid4(),
+            termination_reason=TerminationReason.HUMAN_ESCALATION,
+        )
+
+    accepted = setup.service.ingest(setup.context, firing_raw)
+    assert accepted.outcome == "accepted" and accepted.incident_id is not None
+    with setup.factory() as session:
+        bind_tenant(session, setup.context.tenant_id)
+        alert = session.get(Alert, overflow.alert_id)
+        assert alert is not None
+        assert alert.source_state == "resolved"
+        assert alert.source_observed_at == datetime(2026, 9, 11, 8, 5, tzinfo=UTC)
+        before = (
+            session.scalar(sa.select(sa.func.count()).select_from(SignalReceipt)),
+            session.scalar(sa.select(sa.func.count()).select_from(IncidentEvent)),
+        )
+    committed_duplicate = setup.service.ingest(setup.context, firing_raw)
+    assert committed_duplicate.duplicate
+    assert committed_duplicate.receipt_id == accepted.receipt_id
+    with setup.factory() as session:
+        bind_tenant(session, setup.context.tenant_id)
+        after = (
+            session.scalar(sa.select(sa.func.count()).select_from(SignalReceipt)),
+            session.scalar(sa.select(sa.func.count()).select_from(IncidentEvent)),
+        )
+    assert after == before
+
+
+def test_overflow_does_not_let_an_older_critical_observation_bypass_ordering(
+    setup: Setup,
+) -> None:
+    seed_correlation_candidates(
+        setup, count=MAX_CANDIDATES + 1, service_id=setup.context.service_id
+    )
+    overflow = setup.service.ingest(
+        setup.context,
+        payload(
+            source_event_id="overflow-newer-high",
+            observed_at="2026-09-11T08:03:00Z",
+            severity="high",
+        ),
+    )
+    older = setup.service.ingest(
+        setup.context,
+        payload(
+            source_event_id="overflow-older-critical",
+            observed_at="2026-09-11T08:02:00Z",
+            severity="critical",
+        ),
+    )
+    assert overflow.outcome == "retryable"
+    assert older.outcome == "stale" and older.reason == "out_of_order"
+    with setup.factory() as session:
+        bind_tenant(session, setup.context.tenant_id)
+        alert = session.get(Alert, overflow.alert_id)
+        assert alert is not None
+        assert alert.source_observed_at == datetime(2026, 9, 11, 8, 3, tzinfo=UTC)
+        assert alert.severity.value == "high"
 
 
 @pytest.mark.parametrize(
@@ -1069,6 +1318,94 @@ def test_terminal_incident_creates_reopen_candidate_without_mutating_lifecycle(
         assert alert is not None and alert.source_state == "resolved"
         assert session.scalar(sa.select(sa.func.count()).select_from(IncidentReopenCandidate)) == 1
         assert session.scalar(sa.select(sa.func.count()).select_from(InvestigationDispatch)) == 1
+
+
+def test_repeated_and_concurrent_terminal_firings_share_one_open_reopen_candidate(
+    setup: Setup,
+) -> None:
+    from asic.db.projections import apply_transition
+
+    initial = setup.service.ingest(setup.context, payload(source_event_id="reopen-dedupe-initial"))
+    with setup.factory() as session, session.begin():
+        bind_tenant(session, setup.context.tenant_id)
+        incident = session.get(Incident, initial.incident_id)
+        assert incident is not None
+        apply_transition(
+            session,
+            incident=incident,
+            target=IncidentStatus.ESCALATED,
+            actor_type=ActorType.SYSTEM,
+            source="test",
+            correlation_id=uuid4(),
+            termination_reason=TerminationReason.HUMAN_ESCALATION,
+        )
+
+    sequential = [
+        setup.service.ingest(
+            setup.context,
+            payload(
+                source_event_id=f"reopen-dedupe-{minute}",
+                observed_at=f"2026-09-11T08:0{minute}:00Z",
+            ),
+        )
+        for minute in (3, 4, 5)
+    ]
+    assert all(result.reason == "terminal_reopen_candidate" for result in sequential)
+
+    barrier = Barrier(2)
+
+    def deliver(minute: int) -> None:
+        barrier.wait(timeout=10)
+        setup.service.ingest(
+            setup.context,
+            payload(
+                source_event_id=f"reopen-concurrent-{minute}",
+                observed_at=f"2026-09-11T08:0{minute}:00Z",
+            ),
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        list(pool.map(deliver, (6, 7)))
+
+    with setup.factory() as session:
+        bind_tenant(session, setup.context.tenant_id)
+        candidates = list(
+            session.scalars(
+                sa.select(IncidentReopenCandidate).where(
+                    IncidentReopenCandidate.incident_id == initial.incident_id,
+                    IncidentReopenCandidate.alert_id == initial.alert_id,
+                    IncidentReopenCandidate.status == "open",
+                )
+            )
+        )
+        decisions = list(
+            session.scalars(
+                sa.select(SignalReceipt.decision).where(
+                    SignalReceipt.id.in_([result.receipt_id for result in sequential])
+                )
+            )
+        )
+    assert len(candidates) == 1
+    assert [decision["reopen_candidate"]["status"] for decision in decisions].count("created") == 1
+    assert [decision["reopen_candidate"]["status"] for decision in decisions].count(
+        "deduplicated"
+    ) == 2
+    with setup.factory() as session:
+        bind_tenant(session, setup.context.tenant_id)
+        session.add(
+            IncidentReopenCandidate(
+                id=uuid4(),
+                tenant_id=setup.context.tenant_id,
+                incident_id=initial.incident_id,
+                alert_id=initial.alert_id,
+                receipt_id=sequential[1].receipt_id,
+                requested_severity=IncidentSeverity.SEV2,
+                reason="database_backstop_probe",
+                status="open",
+            )
+        )
+        with pytest.raises(sa.exc.IntegrityError, match="uq_reopen_candidate_open_incident_alert"):
+            session.flush()
 
 
 def test_terminal_dispatch_becomes_permanently_terminal(setup: Setup) -> None:

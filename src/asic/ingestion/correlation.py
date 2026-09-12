@@ -7,7 +7,7 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-POLICY_VERSION = "service-category-window/2"
+POLICY_VERSION = "service-category-window/3"
 WINDOW_SECONDS = 900
 MAX_CANDIDATES = 256
 

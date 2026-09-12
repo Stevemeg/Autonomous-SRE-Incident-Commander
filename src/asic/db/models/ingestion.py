@@ -106,7 +106,7 @@ class InvestigationDispatch(Base, TenantScoped, CreatedAtMixin):
         sa.UniqueConstraint("tenant_id", "incident_id", name="uq_investigation_dispatch_incident"),
         sa.UniqueConstraint("tenant_id", "event_id", name="uq_investigation_dispatch_event"),
         sa.CheckConstraint("attempts >= 0", name="attempts_nonnegative"),
-        sa.CheckConstraint("status IN ('pending', 'terminal')", name="known_status"),
+        sa.CheckConstraint("status IN ('pending', 'completed', 'terminal')", name="known_status"),
     )
 
 
@@ -124,6 +124,9 @@ class IncidentReopenCandidate(Base, TenantScoped, CreatedAtMixin):
         enum_column(IncidentSeverity, "incident_severity"), nullable=False
     )
     reason: Mapped[str] = mapped_column(sa.String(64), nullable=False)
+    status: Mapped[str] = mapped_column(
+        sa.String(16), nullable=False, server_default=sa.text("'open'")
+    )
 
     __table_args__ = (
         *tenant_identity_constraints("incident_reopen_candidate"),
@@ -135,4 +138,13 @@ class IncidentReopenCandidate(Base, TenantScoped, CreatedAtMixin):
             "receipt_id", "signal_receipt", ondelete="RESTRICT", name="fk_reopen_candidate_receipt"
         ),
         sa.UniqueConstraint("tenant_id", "receipt_id", name="uq_reopen_candidate_receipt"),
+        sa.CheckConstraint("status IN ('open', 'superseded')", name="known_status"),
+        sa.Index(
+            "uq_reopen_candidate_open_incident_alert",
+            "tenant_id",
+            "incident_id",
+            "alert_id",
+            unique=True,
+            postgresql_where=sa.text("status = 'open'"),
+        ),
     )

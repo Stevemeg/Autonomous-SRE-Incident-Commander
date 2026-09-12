@@ -57,36 +57,46 @@ class InvestigationDispatcher:
                     raise DomainError("investigation request not visible")
                 if request.status == "terminal":
                     return DispatchResult(request_id, request.workflow_run_id, "terminal")
-                incident_status = session.scalar(
-                    sa.select(Incident.status).where(
-                        Incident.tenant_id == context.tenant_id,
-                        Incident.id == request.incident_id,
+                run_id = request.workflow_run_id
+                if run_id is None:
+                    incident_status = session.scalar(
+                        sa.select(Incident.status).where(
+                            Incident.tenant_id == context.tenant_id,
+                            Incident.id == request.incident_id,
+                        )
                     )
-                )
-                if incident_status is None:
-                    raise DomainError("dispatch incident not visible")
-                if is_terminal(incident_status):
+                    if incident_status is None:
+                        raise DomainError("dispatch incident not visible")
+                    if is_terminal(incident_status):
+                        request.attempts += 1
+                        request.status = "terminal"
+                        request.last_error = "terminal_incident"
+                        trigger_span.set_attribute("dispatch.outcome", "terminal")
+                        return DispatchResult(request_id, None, "terminal")
                     request.attempts += 1
-                    request.status = "terminal"
-                    request.last_error = "terminal_incident"
-                    trigger_span.set_attribute("dispatch.outcome", "terminal")
-                    return DispatchResult(request_id, request.workflow_run_id, "terminal")
-                request.attempts += 1
+                else:
+                    # A linked workflow is the committed dispatch outcome. Later incident
+                    # termination must not rewrite that success as an error.
+                    request.status = "completed"
+                    request.last_error = None
                 incident_id = request.incident_id
                 trigger_span.set_attribute("incident_id", str(incident_id))
                 trigger_span.set_attribute("correlation_id", str(request.correlation_id))
-                service_ids = tuple(
-                    session.scalars(
-                        sa.select(Alert.service_id)
-                        .where(
-                            Alert.tenant_id == context.tenant_id,
-                            Alert.incident_id == incident_id,
-                            Alert.service_id.is_not(None),
+                service_ids = (
+                    tuple(
+                        session.scalars(
+                            sa.select(Alert.service_id)
+                            .where(
+                                Alert.tenant_id == context.tenant_id,
+                                Alert.incident_id == incident_id,
+                                Alert.service_id.is_not(None),
+                            )
+                            .distinct()
                         )
-                        .distinct()
                     )
+                    if run_id is None
+                    else ()
                 )
-                run_id = request.workflow_run_id
             try:
                 if run_id is None:
                     try:
@@ -100,6 +110,7 @@ class InvestigationDispatcher:
                             )
                         )
                         trigger_span.set_attribute("workflow_run_id", str(outcome.workflow_run_id))
+                        self._mark_completed(context.tenant_id, request_id)
                         return DispatchResult(
                             request_id,
                             outcome.workflow_run_id,
@@ -110,14 +121,18 @@ class InvestigationDispatcher:
                 with self.factory() as session, session.begin():
                     bind_tenant(session, context.tenant_id)
                     request = session.scalars(
-                        sa.select(InvestigationDispatch).where(
+                        sa.select(InvestigationDispatch)
+                        .where(
                             InvestigationDispatch.tenant_id == context.tenant_id,
                             InvestigationDispatch.id == request_id,
                         )
+                        .with_for_update()
                     ).one()
                     run_id = request.workflow_run_id
                     if run_id is None:
                         raise DomainError("dispatch has no linked run")
+                    request.status = "completed"
+                    request.last_error = None
                     run = session.scalars(
                         sa.select(WorkflowRun).where(
                             WorkflowRun.tenant_id == context.tenant_id, WorkflowRun.id == run_id
@@ -133,6 +148,7 @@ class InvestigationDispatcher:
                 return DispatchResult(request_id, run_id, "busy")
             except Exception:
                 # Store a safe code, never an exception message containing SQL or source data.
+                linked_success = False
                 with self.factory() as session, session.begin():
                     bind_tenant(session, context.tenant_id)
                     request = session.scalars(
@@ -143,15 +159,40 @@ class InvestigationDispatcher:
                         )
                         .with_for_update()
                     ).one()
-                    incident_status = session.scalar(
-                        sa.select(Incident.status).where(
-                            Incident.tenant_id == context.tenant_id,
-                            Incident.id == request.incident_id,
+                    if request.workflow_run_id is not None:
+                        request.status = "completed"
+                        request.last_error = None
+                        linked_success = True
+                    else:
+                        incident_status = session.scalar(
+                            sa.select(Incident.status).where(
+                                Incident.tenant_id == context.tenant_id,
+                                Incident.id == request.incident_id,
+                            )
                         )
-                    )
-                    if incident_status is not None and is_terminal(incident_status):
-                        request.status = "terminal"
-                        request.last_error = "terminal_incident"
-                        return DispatchResult(request_id, request.workflow_run_id, "terminal")
-                    request.last_error = "trigger_failed"
+                        if incident_status is not None and is_terminal(incident_status):
+                            request.status = "terminal"
+                            request.last_error = "terminal_incident"
+                            return DispatchResult(request_id, None, "terminal")
+                        request.last_error = "trigger_failed"
+                if linked_success:
+                    trigger_span.set_attribute("dispatch.outcome", "linked_run_failed_to_drive")
                 raise
+
+    def _mark_completed(self, tenant_id: UUID, request_id: UUID) -> None:
+        """Persist successful run linkage without conflating it with workflow completion."""
+        with self.factory() as session, session.begin():
+            bind_tenant(session, tenant_id)
+            apply_statement_timeouts(session)
+            request = session.scalars(
+                sa.select(InvestigationDispatch)
+                .where(
+                    InvestigationDispatch.tenant_id == tenant_id,
+                    InvestigationDispatch.id == request_id,
+                )
+                .with_for_update()
+            ).one()
+            if request.workflow_run_id is None:
+                raise DomainError("dispatch has no linked run")
+            request.status = "completed"
+            request.last_error = None

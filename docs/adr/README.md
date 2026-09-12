@@ -1,15 +1,11 @@
 # Architecture Decision Records
 
-> **Eighteen records. Seven are Accepted.**
+> **Nineteen records. Fourteen are Accepted.**
 >
-> ADRs 0001-0011 were written during the Architecture Package. Three of them - 0002, 0003
-> and 0005 - are now `Accepted`, because Phase 4 implemented them and the evidence exists.
-> The rest remain `Proposed`, `Needs validation` or `Deferred`: the Architecture Package is
-> approved, but each of those decisions becomes binding only as the phase that implements
-> it lands.
->
-> ADRs 0012-0014 were raised during Phase 3 and 0015-0017 during Phase 4 - decided,
-> implemented and verified by tests. Each names the passing tests that confirm it.
+> ADRs 0001-0011 were written during the Architecture Package. Later implementation phases
+> accepted the decisions whose evidence now exists; the table below is authoritative for
+> current status. ADRs 0012-0014 were raised during Phase 3, 0015-0018 during Phase 4 and
+> its migration-history correction, and 0019 during Phase 5.
 
 ## Why ADRs are mandatory here
 
@@ -86,6 +82,7 @@ not replace an accepted ADR.
 | [0016](./0016-deterministic-model-provider.md) | A deterministic model provider for Phase 4; no live provider yet | **`Accepted`** | 9, 10, 11, 14, 20 | 2026-09-07 |
 | [0017](./0017-read-only-capability-ceiling.md) | A read-only capability ceiling enforced in three independent places | **`Accepted`** | 6, 7, 15 | 2026-09-07 |
 | [0018](./0018-migrations-are-historical-contracts.md) | Migrations are historical contracts and never read live application code | **`Accepted`** | 12, 15, 20 | 2026-09-09 |
+| [0019](./0019-transactional-signal-ingestion.md) | Transactional signal ingestion and durable investigation requests | **`Accepted`** | 12, 14, 15, 17 | 2026-09-11 |
 
 ## Priority order for acceptance
 

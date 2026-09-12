@@ -457,7 +457,7 @@ class TestUpgradePaths:
             with engine.connect() as conn:
                 assert (
                     conn.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one()
-                    == "0008_knowledge_memory"
+                    == "0009_phase5_cleanup"
                 )
         finally:
             engine.dispose()
