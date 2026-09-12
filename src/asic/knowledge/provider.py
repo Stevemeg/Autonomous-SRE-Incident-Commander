@@ -27,8 +27,6 @@ selects providers by :meth:`supports`, so behaviour is unaffected; the label is 
 
 from __future__ import annotations
 
-import re
-import uuid
 from collections.abc import Callable, Mapping
 from typing import Any, Final
 
@@ -36,70 +34,23 @@ import sqlalchemy as sa
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from asic.db.models import Environment, Service, TenantToolGrant, ToolDefinition
+from asic.db.models import Environment, Service
 from asic.db.session import apply_statement_timeouts, bind_tenant
-from asic.domain.enums import RetrievalPrincipalKind, ToolProviderKind
+from asic.domain.enums import ToolProviderKind
 from asic.domain.errors import ToolAdapterError
-from asic.knowledge.contracts import (
-    LABEL_PATTERN,
-    RetrievalPrincipal,
-    RetrievalQuery,
-    RetrievalScope,
+from asic.knowledge.authorization import (
+    CAPABILITY,
+    CLEARANCE_OVERRIDE_KEY,
+    TOOL_NAME,
+    investigation_principal,
 )
+from asic.knowledge.contracts import RetrievalQuery, RetrievalScope
 from asic.knowledge.errors import EmbeddingFailure, RetrievalRefused
 from asic.knowledge.retrieval import KnowledgeRetriever
 from asic.tools.descriptor import ToolDescriptor
 from asic.tools.provider import InvocationContext, ProviderHealth
 
-TOOL_NAME: Final[str] = "knowledge.search"
-CAPABILITY: Final[str] = "read.knowledge"
-#: Key in a tenant grant's ``scope_overrides`` naming the investigation's clearances.
-CLEARANCE_OVERRIDE_KEY: Final[str] = "knowledge_acl_clearances"
 SOURCE_LABEL: Final[str] = "asic-knowledge-store"
-
-_LABEL = re.compile(LABEL_PATTERN)
-
-
-def investigation_principal(
-    session: Session,
-    *,
-    tenant_id: uuid.UUID,
-    environment_id: uuid.UUID,
-    principal_id: str,
-) -> RetrievalPrincipal:
-    """The principal an investigation retrieves as, from the tenant's grant.
-
-    The environment-specific grant wins over a tenant-wide one. Malformed clearance
-    configuration fails closed rather than being interpreted.
-    """
-    rows = session.execute(
-        sa.select(TenantToolGrant.environment_id, TenantToolGrant.scope_overrides)
-        .join(ToolDefinition, ToolDefinition.id == TenantToolGrant.tool_definition_id)
-        .where(
-            TenantToolGrant.tenant_id == tenant_id,
-            TenantToolGrant.is_enabled.is_(True),
-            ToolDefinition.name == TOOL_NAME,
-            ToolDefinition.capability == CAPABILITY,
-            ToolDefinition.is_enabled.is_(True),
-            sa.or_(
-                TenantToolGrant.environment_id == environment_id,
-                TenantToolGrant.environment_id.is_(None),
-            ),
-        )
-    ).all()
-    chosen = sorted(rows, key=lambda row: row[0] is None)
-    overrides: Mapping[str, Any] = dict(chosen[0][1] or {}) if chosen else {}
-    raw = overrides.get(CLEARANCE_OVERRIDE_KEY, [])
-    if not isinstance(raw, list) or len(raw) > 32:
-        raise RetrievalRefused("invalid_clearance_configuration")
-    if not all(isinstance(label, str) and _LABEL.match(label) for label in raw):
-        raise RetrievalRefused("invalid_clearance_configuration")
-    return RetrievalPrincipal(
-        tenant_id=tenant_id,
-        kind=RetrievalPrincipalKind.INVESTIGATION,
-        principal_id=principal_id,
-        clearances=frozenset(raw),
-    )
 
 
 class KnowledgeStoreProvider:

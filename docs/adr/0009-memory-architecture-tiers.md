@@ -71,9 +71,18 @@ production behaviour from a single incident"* is unambiguous, and the failure it
 severe — a single anomalous incident durably poisoning advice for every future one, with no
 review and no obvious symptom.
 
-The `support_count` field on `verified_outcome` operationalises this: a count of one is
-never sufficient for promotion. Repetition across incidents is what turns an observation
-into knowledge, and a human confirms the inference.
+**P6-07 correction:** an earlier version of this ADR claimed the `support_count` field
+enforces a minimum-repetition threshold before promotion - it does not, and no code path
+in `asic.memory.policy`/`asic.memory.service` refuses a `verified_outcome` promotion for
+`support_count = 1`. What is actually structurally guaranteed, and what does the real work
+against §10's "never silently modify production behaviour from a single incident", is the
+**mandatory human approval** (SI-12): `MemoryPromotion.status`/`approver_user_id` cannot
+reach `approved` without a named human decision, for a support count of one exactly as for
+any other. `support_count` is recorded as an observability signal - how many independent,
+verified incidents corroborate this entry - so a reviewer can see it and a future policy
+change could act on it; it is not itself a gate today. If a numeric minimum is wanted, it
+belongs in `asic.memory.policy.evaluate()` as an explicit, tested check, not asserted here
+without one.
 
 ## Consequences
 
@@ -107,7 +116,7 @@ would question the value of T5 rather than the gating.
 | Test | Passing criterion |
 |---|---|
 | No automatic promotion | Attempted memory write without an approval record is rejected (SI-12) |
-| Single-incident guard | `support_count = 1` never auto-promotes |
+| Single-incident guard | No promotion - `support_count = 1` or otherwise - ever reaches `approved` without a named human decision; `support_count` itself gates nothing today (P6-07) |
 | History does not override | Scenario 10 (stale, wrong runbook): current evidence wins |
 | Provenance integrity | No tier transition upgrades a provenance label |
 | Promotion effect | Measured change in replay outcomes after a promotion |

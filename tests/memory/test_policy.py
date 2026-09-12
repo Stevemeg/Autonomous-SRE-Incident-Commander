@@ -12,6 +12,7 @@ from asic.domain.enums import (
     MemoryCategory,
     MemoryKind,
     ProvenanceLabel,
+    RemediationActionStatus,
     VerificationVerdict,
 )
 from asic.memory.policy import (
@@ -40,10 +41,39 @@ def request(category: MemoryCategory, **overrides: object) -> MemoryWriteRequest
     return MemoryWriteRequest.model_validate(values)
 
 
+#: A criteria hash shared by a verification and the action it verified, by default - an
+#: independently, fully evidenced verification. Individual tests override one field at a
+#: time to prove each check is load-bearing (P6-05).
+_CRITERIA_HASH = "criteria-hash-" + "a" * 50
+
+
+def verification_fact(
+    verdict: VerificationVerdict = VerificationVerdict.VERIFIED,
+    *,
+    incident_id: uuid.UUID = INCIDENT,
+    criteria_hash: str = _CRITERIA_HASH,
+    action_criteria_hash: str = _CRITERIA_HASH,
+    baseline: dict[str, object] | None = None,
+    observed: dict[str, object] | None = None,
+    action_status: RemediationActionStatus = RemediationActionStatus.VERIFIED,
+) -> VerificationFact:
+    return VerificationFact(
+        verification_id=uuid.uuid4(),
+        verdict=verdict,
+        incident_id=incident_id,
+        remediation_action_id=uuid.uuid4(),
+        criteria_hash=criteria_hash,
+        action_criteria_hash=action_criteria_hash,
+        baseline=baseline if baseline is not None else {"p95_latency_ms": 850},
+        observed=observed if observed is not None else {"p95_latency_ms": 210},
+        action_status=action_status,
+    )
+
+
 def verified(verdict: VerificationVerdict = VerificationVerdict.VERIFIED) -> ResolvedReferences:
     return ResolvedReferences(
         incidents={INCIDENT: True},
-        verifications=(VerificationFact(uuid.uuid4(), verdict, INCIDENT, uuid.uuid4()),),
+        verifications=(verification_fact(verdict),),
     )
 
 
@@ -162,6 +192,47 @@ class TestVerifiedOutcomes:
             verified(),
         )
         assert decision.reason == "verification_only_for_verified_outcomes"
+
+    # ---- P6-05: a verdict alone is not evidence. Each check below disables exactly one
+    # ---- piece of the fully-evidenced default fixture and confirms it alone is refused.
+
+    def _refused_for(self, fact: VerificationFact) -> str:
+        refs = ResolvedReferences(incidents={INCIDENT: True}, verifications=(fact,))
+        decision = evaluate(
+            request(MemoryCategory.VERIFIED_OUTCOME, verification_ids=(fact.verification_id,)),
+            AGENT,
+            refs,
+        )
+        return decision.reason
+
+    def test_a_fully_evidenced_verification_is_accepted(self) -> None:
+        """The positive control: proves the fixture itself is not the reason later cases fail."""
+        assert self._refused_for(verification_fact()) == "proposal_accepted"
+
+    def test_empty_baseline_is_refused_even_with_a_verified_verdict(self) -> None:
+        assert self._refused_for(verification_fact(baseline={})) == "verification_baseline_missing"
+
+    def test_empty_observed_evidence_is_refused_even_with_a_verified_verdict(self) -> None:
+        assert self._refused_for(verification_fact(observed={})) == "verification_observed_missing"
+
+    def test_criteria_hash_mismatch_is_refused(self) -> None:
+        """The verification judged different criteria than the action froze (INV-11)."""
+        fact = verification_fact(action_criteria_hash="criteria-hash-" + "b" * 50)
+        assert self._refused_for(fact) == "verification_criteria_mismatch"
+
+    def test_action_status_disagreeing_with_the_verdict_is_refused(self) -> None:
+        """ACTION EXECUTED is not OUTCOME VERIFIED: the two records must agree."""
+        fact = verification_fact(action_status=RemediationActionStatus.SUCCEEDED)
+        assert self._refused_for(fact) == "verification_action_status_not_verified"
+
+    def test_model_asserted_success_with_no_verification_record_is_refused(self) -> None:
+        """A model claiming success, with no verification_ids at all, is not evidence."""
+        decision = evaluate(
+            request(MemoryCategory.VERIFIED_OUTCOME, statement="the remediation succeeded"),
+            AGENT,
+            ResolvedReferences(incidents={INCIDENT: True}),
+        )
+        assert decision.reason == "verification_evidence_required"
 
 
 class TestRequestShape:

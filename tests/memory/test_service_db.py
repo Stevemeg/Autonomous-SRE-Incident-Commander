@@ -288,6 +288,87 @@ class TestDecideIsGoverned:
         assert outcome.outcome is MemoryDecisionOutcome.REJECTED
         assert outcome.reason == "verification_evidence_required"
 
+    # ---- P6-05: a verdict alone is not evidence, exercised through the real DB-backed
+    # ---- resolution path (test_policy.py exercises the pure function; this is the same
+    # ---- guarantee proven against real Verification/RemediationAction rows).
+
+    def test_a_verification_with_empty_baseline_and_observed_is_refused(
+        self, world: MemoryWorld
+    ) -> None:
+        from asic.db.models import Verification
+        from asic.domain.enums import VerificationVerdict
+
+        with world.factory() as session, session.begin():
+            bind_tenant(session, world.tenant_id)
+            empty = Verification(
+                id=uuid.uuid4(),
+                tenant_id=world.tenant_id,
+                remediation_action_id=world.remediation_action_id,
+                attempt=2,
+                callback_idempotency_key=uuid.uuid4().hex * 2,
+                criteria_hash="c" * 64,  # matches the fixture action's frozen criteria
+                verdict=VerificationVerdict.VERIFIED,
+                # No baseline, no observed: a verdict with no measurement behind it.
+                observation_window_start=world.clock.now(),
+                observation_window_end=world.clock.now(),
+            )
+            session.add(empty)
+            session.flush()
+            empty_id = empty.id
+
+        request = _outcome_request(world, verification_ids=(empty_id,))
+        outcome = world.service.propose(world.tenant_id, request, world.agent)
+        assert outcome.outcome is MemoryDecisionOutcome.REJECTED
+        assert outcome.reason in {
+            "verification_baseline_missing",
+            "verification_observed_missing",
+        }
+
+    def test_a_verification_judging_different_criteria_than_the_action_froze_is_refused(
+        self, world: MemoryWorld
+    ) -> None:
+        """INV-11: a verification's criteria_hash must match the action's frozen one."""
+        from asic.db.models import Verification
+        from asic.domain.enums import VerificationVerdict
+
+        with world.factory() as session, session.begin():
+            bind_tenant(session, world.tenant_id)
+            mismatched = Verification(
+                id=uuid.uuid4(),
+                tenant_id=world.tenant_id,
+                remediation_action_id=world.remediation_action_id,
+                attempt=3,
+                callback_idempotency_key=uuid.uuid4().hex * 2,
+                criteria_hash="different-criteria-hash-than-the-action-froze".ljust(64, "0")[:64],
+                verdict=VerificationVerdict.VERIFIED,
+                observed={"http_5xx_rate": 0.001},
+                baseline={"http_5xx_rate": 0.021},
+                observation_window_start=world.clock.now(),
+                observation_window_end=world.clock.now(),
+            )
+            session.add(mismatched)
+            session.flush()
+            mismatched_id = mismatched.id
+
+        request = _outcome_request(world, verification_ids=(mismatched_id,))
+        outcome = world.service.propose(world.tenant_id, request, world.agent)
+        assert outcome.outcome is MemoryDecisionOutcome.REJECTED
+        assert outcome.reason == "verification_criteria_mismatch"
+
+    def test_a_verification_from_another_tenant_is_unresolvable(
+        self, world: MemoryWorld, app_engine: sa.Engine, owner_engine: sa.Engine
+    ) -> None:
+        """Row-level security hides another tenant's verification entirely - it is
+        indistinguishable from a fabricated id, and is refused the same way."""
+        other = make_world(app_engine, slug=f"mem-other-{uuid.uuid4().hex[:8]}")
+        try:
+            request = _outcome_request(world, verification_ids=(other.verification_id,))
+            outcome = world.service.propose(world.tenant_id, request, world.agent)
+            assert outcome.outcome is MemoryDecisionOutcome.REJECTED
+            assert outcome.reason == "unresolved_reference"
+        finally:
+            _teardown(owner_engine, other)
+
 
 class TestCrossTenantIsolation:
     def test_a_second_tenants_user_cannot_decide_this_promotion(

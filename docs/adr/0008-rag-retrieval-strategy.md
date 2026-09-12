@@ -101,11 +101,13 @@ becomes a leading failure class in the taxonomy.
 ## Validation
 
 Implemented Phase 6 and measured against `tests/knowledge/test_retrieval_evaluation.py`'s
-ten-document golden corpus, under the deterministic test embedding provider:
+twelve-document golden corpus (P6-09 added a hard-negative distractor, a lexical-only
+holdout, and an out-of-vocabulary paraphrase holdout to the original ten), under the
+deterministic test embedding provider:
 
 | Test | Passing criterion | Result |
 |---|---|---|
-| Hybrid retrieval quality | Recall@5, precision@5, MRR on the golden corpus | recall@5 = 1.000, precision@5 = 0.867, MRR = 1.000 over 9 gradeable queries (architecture validation, not a production figure) |
+| Hybrid retrieval quality | Recall@5, precision@5, MRR on the golden corpus | recall@5 = 1.000, precision@5 = 0.730, MRR = 0.933 over 10 gradeable queries (architecture validation, not a production figure; the hard-negative distractor and the out-of-vocabulary holdout are graded separately rather than folded into this average - see `requirements-traceability.md` FR-KNW-06) |
 | Exact-token queries | Error codes and service names retrieved reliably | Exact-lexical and semantic-paraphrase queries both resolve to the correct document |
 | Scope violations | **Zero** out-of-scope or out-of-tenant chunks in any configuration | Measured zero across the unauthorized-rate probe set; mutation-tested — forcing the ACL predicate true makes the corresponding tests fail |
 | Rerank A/B | Measured Recall@k, nDCG, added latency and cost per query | **Not run.** No reranker exists in the codebase; `RetrievalMode` (LEXICAL/VECTOR/HYBRID) exists for a future ablation but a formal hybrid-vs-dense-alone A/B was not performed this phase |

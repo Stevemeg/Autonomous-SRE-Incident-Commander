@@ -49,13 +49,9 @@ from asic.db.models import (
 )
 from asic.db.session import require_tenant
 from asic.domain.clock import Clock, SystemClock
-from asic.domain.enums import (
-    KnowledgeDocumentType,
-    KnowledgeSourceStatus,
-    KnowledgeVersionState,
-    TrustClass,
-)
+from asic.domain.enums import KnowledgeDocumentType, TrustClass
 from asic.knowledge import telemetry
+from asic.knowledge.authorization import current_access
 from asic.knowledge.contracts import (
     MAX_RESULT_CONTENT_CHARS,
     KnowledgeCitation,
@@ -114,6 +110,14 @@ class RetrievalPolicy:
     @property
     def identifier(self) -> str:
         return f"{self.version}:{self.mode.value}:{self.fusion.version}"
+
+
+#: The identifier the deployed default policy produces. Manifest verification
+#: (P6-02, :func:`asic.orchestration.knowledge_context.validate_manifest`) compares a
+#: provider's claimed ``policy_version`` against this rather than trusting the claim: the
+#: retrieval policy is code, not tenant configuration, so there is exactly one correct
+#: answer and no provider ever needs to assert it.
+DEFAULT_POLICY_IDENTIFIER: Final[str] = RetrievalPolicy().identifier
 
 
 _TRUST_ORDER: Final[dict[str, int]] = {
@@ -519,12 +523,22 @@ class ReplayedResult:
     withheld_reason: str | None
 
 
-def replay_retrieval(session: Session, retrieval_id: uuid.UUID) -> tuple[ReplayedResult, ...]:
+def replay_retrieval(
+    session: Session,
+    retrieval_id: uuid.UUID,
+    *,
+    principal: RetrievalPrincipal,
+    scope: RetrievalScope,
+) -> tuple[ReplayedResult, ...]:
     """Reproduce what a past retrieval returned - the exact versions, never the newest.
 
     Superseded content is returned as it was, because a historical run must be explicable
-    against what it actually saw. Revoked or deleted content is withheld: withdrawing
-    access applies to the past as well as the future.
+    against what it actually saw. **Current** hard authorization still governs whether the
+    text is actually handed back (P6-03): ``principal`` and ``scope`` are re-evaluated
+    against the source and document *as they stand now*, not as the original retrieval
+    recorded them. Ranking, identifiers and version references are preserved regardless -
+    historical traceability is not the same claim as historical authorization, and only the
+    latter can withhold content.
     """
     tenant_id = require_tenant(session)
     rows = session.execute(
@@ -558,13 +572,7 @@ def replay_retrieval(session: Session, retrieval_id: uuid.UUID) -> tuple[Replaye
     ).all()
     replayed = []
     for result, chunk, version, source in rows:
-        withheld = (
-            f"source_{source.status.value}"
-            if source.status is not KnowledgeSourceStatus.ACTIVE
-            else "version_revoked"
-            if version.lifecycle is KnowledgeVersionState.REVOKED
-            else None
-        )
+        withheld = current_access(source=source, document=version, principal=principal, scope=scope)
         replayed.append(
             ReplayedResult(
                 rank=result.rank,
@@ -582,23 +590,25 @@ def replay_retrieval(session: Session, retrieval_id: uuid.UUID) -> tuple[Replaye
 
 
 def current_content(
-    session: Session, citations: Sequence[KnowledgeCitation]
+    session: Session,
+    citations: Sequence[KnowledgeCitation],
+    *,
+    principal: RetrievalPrincipal,
+    scope: RetrievalScope,
 ) -> dict[uuid.UUID, str | None]:
-    """Chunk text for citations, withheld (``None``) where access has been withdrawn.
+    """Chunk text for citations, withheld (``None``) where access is not currently authorized.
 
-    Used when retrieved content is rendered into a prompt after the retrieval itself, so
-    a revocation that lands in between is honoured.
+    Used when retrieved content is rendered into a prompt after the retrieval itself, so a
+    revocation - of the document, or of ``principal``'s own clearances or scope - that
+    lands in between is honoured (P6-03). ``principal`` and ``scope`` must be the caller's
+    *current* trusted context, re-derived at render time; passing through what a historical
+    retrieval recorded would silently reinstate exactly the defect this closes.
     """
     if not citations:
         return {}
     tenant_id = require_tenant(session)
     rows = session.execute(
-        sa.select(
-            KnowledgeChunk.id,
-            KnowledgeChunk.text,
-            KnowledgeDocument.lifecycle,
-            KnowledgeSource.status,
-        )
+        sa.select(KnowledgeChunk, KnowledgeDocument, KnowledgeSource)
         .join(
             KnowledgeDocument,
             sa.and_(
@@ -619,12 +629,12 @@ def current_content(
         )
     ).all()
     available: dict[uuid.UUID, str | None] = {c.chunk_id: None for c in citations}
-    for chunk_id, text, lifecycle, status in rows:
+    for chunk, document, source in rows:
         if (
-            status is KnowledgeSourceStatus.ACTIVE
-            and lifecycle is not KnowledgeVersionState.REVOKED
+            current_access(source=source, document=document, principal=principal, scope=scope)
+            is None
         ):
-            available[chunk_id] = text
+            available[chunk.id] = chunk.text
     return available
 
 
@@ -633,6 +643,7 @@ def as_of_now(clock: Clock | None = None) -> datetime:
 
 
 __all__ = [
+    "DEFAULT_POLICY_IDENTIFIER",
     "POLICY_VERSION",
     "FusionPolicy",
     "KnowledgeRetriever",

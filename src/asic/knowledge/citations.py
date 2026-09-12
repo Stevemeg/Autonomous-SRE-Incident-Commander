@@ -8,6 +8,15 @@ be minted for content that was never retrieved, a model cannot invent one that r
 and text inside a document that *looks like* a citation is just text: the parser is never
 pointed at document content, and even a well-formed token must match a recorded row in the
 caller's own tenant.
+
+**Resolving that the citation is real is not the same claim as authorizing its content
+(P6-03).** A citation token being genuine - the retrieval really did return that chunk -
+says nothing about whether the *caller resolving it now* is still allowed to see it: the
+principal's clearances may have been narrowed, the source's scope changed, or the document
+revoked, since the retrieval ran. :func:`resolve_citation` therefore re-evaluates
+:func:`asic.knowledge.authorization.current_access` against the caller's current principal
+and scope every time, and ``content_available`` reflects *that*, not the historical
+retrieval's now-irrelevant opinion of its own authorization.
 """
 
 from __future__ import annotations
@@ -27,8 +36,8 @@ from asic.db.models import (
     KnowledgeSource,
 )
 from asic.db.session import require_tenant
-from asic.domain.enums import KnowledgeSourceStatus, KnowledgeVersionState
-from asic.knowledge.contracts import KnowledgeCitation
+from asic.knowledge.authorization import current_access
+from asic.knowledge.contracts import KnowledgeCitation, RetrievalPrincipal, RetrievalScope
 from asic.knowledge.errors import CitationInvalid
 
 _UUID: Final[str] = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
@@ -62,14 +71,10 @@ def parse_citation(token: str) -> KnowledgeCitation:
     return KnowledgeCitation(retrieval_id=retrieval_id, chunk_id=chunk_id, version_id=version_id)
 
 
-def resolve_citation(session: Session, citation: KnowledgeCitation | str) -> ResolvedCitation:
-    """Resolve a citation within the session's bound tenant.
-
-    Raises:
-        CitationInvalid: ``malformed_citation``, ``unknown_citation`` (the retrieval did
-            not return that chunk, or it belongs to another tenant) or ``version_mismatch``.
-    """
-    parsed = parse_citation(citation) if isinstance(citation, str) else citation
+def _locate(
+    session: Session, parsed: KnowledgeCitation
+) -> tuple[KnowledgeRetrievalResult, KnowledgeChunk, KnowledgeDocument, KnowledgeSource]:
+    """The row a citation names, or a typed refusal. No authorization decision here."""
     tenant_id = require_tenant(session)
     row = session.execute(
         sa.select(KnowledgeRetrievalResult, KnowledgeChunk, KnowledgeDocument, KnowledgeSource)
@@ -107,6 +112,44 @@ def resolve_citation(session: Session, citation: KnowledgeCitation | str) -> Res
         raise CitationInvalid("version_mismatch")
     if chunk.content_hash != result.content_hash:  # pragma: no cover - chunks are immutable
         raise CitationInvalid("content_changed")
+    return result, chunk, version, source
+
+
+def citation_reference_exists(session: Session, citation: KnowledgeCitation | str) -> None:
+    """Confirm a citation token names a chunk genuinely returned by a recorded retrieval.
+
+    An integrity check only - it says nothing about whether anyone may currently read the
+    content, and takes no principal or scope for that reason. Used where a citation is being
+    checked as a *reference* (e.g. a memory promotion naming its supporting citations), not
+    where its content is about to be shown to someone; for that, use :func:`resolve_citation`.
+
+    Raises:
+        CitationInvalid: ``malformed_citation``, ``unknown_citation``, ``version_mismatch``.
+    """
+    parsed = parse_citation(citation) if isinstance(citation, str) else citation
+    _locate(session, parsed)
+
+
+def resolve_citation(
+    session: Session,
+    citation: KnowledgeCitation | str,
+    *,
+    principal: RetrievalPrincipal,
+    scope: RetrievalScope,
+) -> ResolvedCitation:
+    """Resolve a citation within the session's bound tenant.
+
+    ``principal`` and ``scope`` must be the caller's *current* trusted context - re-derived
+    at resolution time, never carried over from the historical retrieval - because
+    ``content_available`` is answered against current authorization (P6-03), not against
+    whatever the retrieval recorded when it ran.
+
+    Raises:
+        CitationInvalid: ``malformed_citation``, ``unknown_citation`` (the retrieval did
+            not return that chunk, or it belongs to another tenant) or ``version_mismatch``.
+    """
+    parsed = parse_citation(citation) if isinstance(citation, str) else citation
+    result, chunk, version, source = _locate(session, parsed)
     return ResolvedCitation(
         citation=parsed,
         source_id=source.id,
@@ -121,10 +164,15 @@ def resolve_citation(session: Session, citation: KnowledgeCitation | str) -> Res
         content_hash=result.content_hash,
         stale_at_retrieval=result.stale,
         content_available=(
-            source.status is KnowledgeSourceStatus.ACTIVE
-            and version.lifecycle is not KnowledgeVersionState.REVOKED
+            current_access(source=source, document=version, principal=principal, scope=scope)
+            is None
         ),
     )
 
 
-__all__ = ["ResolvedCitation", "parse_citation", "resolve_citation"]
+__all__ = [
+    "ResolvedCitation",
+    "citation_reference_exists",
+    "parse_citation",
+    "resolve_citation",
+]

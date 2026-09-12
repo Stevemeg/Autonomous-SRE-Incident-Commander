@@ -14,11 +14,16 @@ import pytest
 import sqlalchemy as sa
 
 from asic.db.session import bind_tenant
-from asic.domain.enums import KnowledgeDocumentType
+from asic.domain.enums import KnowledgeDocumentType, RetrievalPrincipalKind
 from asic.knowledge.citations import parse_citation, resolve_citation
-from asic.knowledge.contracts import KnowledgeCitation, RetrievalQuery, RetrievalScope
+from asic.knowledge.contracts import (
+    KnowledgeCitation,
+    RetrievalPrincipal,
+    RetrievalQuery,
+    RetrievalScope,
+)
 from asic.knowledge.errors import CitationInvalid, RetrievalRefused
-from asic.knowledge.retrieval import KnowledgeRetriever, replay_retrieval
+from asic.knowledge.retrieval import KnowledgeRetriever, current_content, replay_retrieval
 from tests.knowledge.conftest import IMPORTER, KnowledgeWorld, make_world
 
 pytestmark = pytest.mark.postgres
@@ -216,7 +221,9 @@ class TestCitationsAndReplay:
         citation = result.results[0].citation
         with world.factory() as session, session.begin():
             bind_tenant(session, world.tenant_id)
-            resolved = resolve_citation(session, citation)
+            resolved = resolve_citation(
+                session, citation, principal=world.principal(), scope=world.scope()
+            )
             assert resolved.content_available
             forged = KnowledgeCitation(
                 retrieval_id=uuid.uuid4(),
@@ -224,7 +231,7 @@ class TestCitationsAndReplay:
                 version_id=citation.version_id,
             )
             with pytest.raises(CitationInvalid, match="unknown_citation"):
-                resolve_citation(session, forged)
+                resolve_citation(session, forged, principal=world.principal(), scope=world.scope())
 
     def test_citation_embedded_in_hostile_surrounding_text_does_not_resolve(
         self, world: KnowledgeWorld
@@ -244,7 +251,9 @@ class TestCitationsAndReplay:
         with other.factory() as session, session.begin():
             bind_tenant(session, other.tenant_id)
             with pytest.raises(CitationInvalid, match="unknown_citation"):
-                resolve_citation(session, citation)
+                resolve_citation(
+                    session, citation, principal=other.principal(), scope=other.scope()
+                )
 
     def test_replay_reproduces_the_historical_version_not_the_newest(
         self, world: KnowledgeWorld
@@ -257,7 +266,9 @@ class TestCitationsAndReplay:
         world.ingest("runbooks/pool.md", POOL_RUNBOOK_V2, services=(world.checkout,))
         with world.factory() as session, session.begin():
             bind_tenant(session, world.tenant_id)
-            replayed = replay_retrieval(session, result.retrieval_id)
+            replayed = replay_retrieval(
+                session, result.retrieval_id, principal=world.principal(), scope=world.scope()
+            )
         assert replayed
         assert replayed[0].content == original_chunk_text
         assert "Restart the checkout deployment" in (replayed[0].content or "")
@@ -273,7 +284,9 @@ class TestCitationsAndReplay:
         )
         with world.factory() as session, session.begin():
             bind_tenant(session, world.tenant_id)
-            replayed = replay_retrieval(session, result.retrieval_id)
+            replayed = replay_retrieval(
+                session, result.retrieval_id, principal=world.principal(), scope=world.scope()
+            )
         assert replayed
         assert replayed[0].content is None
         assert replayed[0].withheld_reason == "version_revoked"
@@ -294,6 +307,235 @@ class TestCitationsAndReplay:
                     .values(fused_score=999.0)
                 )
                 session.flush()
+
+
+class TestReplayAndCitationReauthorization:
+    """Historical traceability is not historical authorization.
+
+    Every test here: a retrieval happens while the principal is authorized, then
+    authorization changes (or a different principal/tenant is used), and the same
+    retrieval/citation is resolved again. Ranking and identifiers may remain visible;
+    content must not.
+    """
+
+    def test_acl_added_after_the_fact_withholds_previously_visible_content(
+        self, world: KnowledgeWorld
+    ) -> None:
+        outcome = world.ingest("runbooks/secret.md", POOL_RUNBOOK, services=(world.checkout,))
+        assert outcome.source_id is not None
+        result = world.retrieve("connection pool exhausted", record=True)
+        assert result.results
+        citation = result.results[0].citation
+
+        world.ingestion.update_source_access(
+            world.tenant_id,
+            outcome.source_id,
+            world.context("runbooks/secret.md", acl=("security",)).policy,
+            actor=world.authorized_access_manager(),
+        )
+
+        with world.factory() as session, session.begin():
+            bind_tenant(session, world.tenant_id)
+            resolved = resolve_citation(
+                session, citation, principal=world.principal(), scope=world.scope()
+            )
+            assert not resolved.content_available
+
+            content = current_content(
+                session, [citation], principal=world.principal(), scope=world.scope()
+            )
+            assert content[citation.chunk_id] is None
+
+            replayed = replay_retrieval(
+                session, result.retrieval_id, principal=world.principal(), scope=world.scope()
+            )
+            assert replayed[0].content is None
+            assert replayed[0].withheld_reason == "acl_denied"
+
+    def test_a_principals_own_clearance_being_narrowed_withholds_content(
+        self, world: KnowledgeWorld
+    ) -> None:
+        world.ingest(
+            "runbooks/pool.md", POOL_RUNBOOK, services=(world.checkout,), acl=("security",)
+        )
+        result = world.retrieve(
+            "connection pool exhausted", clearances=frozenset({"security"}), record=True
+        )
+        assert result.results
+        citation = result.results[0].citation
+
+        # The same retrieval, resolved again, but the principal no longer carries the
+        # clearance it had when the retrieval ran.
+        with world.factory() as session, session.begin():
+            bind_tenant(session, world.tenant_id)
+            narrowed_principal = world.principal(frozenset())
+            resolved = resolve_citation(
+                session, citation, principal=narrowed_principal, scope=world.scope()
+            )
+            assert not resolved.content_available
+            content = current_content(
+                session, [citation], principal=narrowed_principal, scope=world.scope()
+            )
+            assert content[citation.chunk_id] is None
+
+    def test_service_scope_narrowed_after_the_fact_withholds_content(
+        self, world: KnowledgeWorld
+    ) -> None:
+        outcome = world.ingest("runbooks/pool.md", POOL_RUNBOOK, services=(world.checkout,))
+        assert outcome.source_id is not None
+        result = world.retrieve("connection pool exhausted", record=True)
+        assert result.results
+        citation = result.results[0].citation
+
+        world.ingestion.update_source_access(
+            world.tenant_id,
+            outcome.source_id,
+            world.context("runbooks/pool.md", services=(world.payments,)).policy,
+            actor=world.authorized_access_manager(),
+        )
+
+        with world.factory() as session, session.begin():
+            bind_tenant(session, world.tenant_id)
+            resolved = resolve_citation(
+                session, citation, principal=world.principal(), scope=world.scope()
+            )
+            assert not resolved.content_available
+
+    def test_environment_scope_narrowed_after_the_fact_withholds_content(
+        self, world: KnowledgeWorld
+    ) -> None:
+        outcome = world.ingest(
+            "runbooks/pool.md",
+            POOL_RUNBOOK,
+            services=(world.checkout,),
+            environments=(world.production,),
+        )
+        assert outcome.source_id is not None
+        result = world.retrieve("connection pool exhausted", record=True)
+        assert result.results
+        citation = result.results[0].citation
+
+        world.ingestion.update_source_access(
+            world.tenant_id,
+            outcome.source_id,
+            world.context(
+                "runbooks/pool.md", services=(world.checkout,), environments=(world.staging,)
+            ).policy,
+            actor=world.authorized_access_manager(),
+        )
+
+        with world.factory() as session, session.begin():
+            bind_tenant(session, world.tenant_id)
+            resolved = resolve_citation(
+                session, citation, principal=world.principal(), scope=world.scope()
+            )
+            assert not resolved.content_available
+
+    def test_document_revoked_after_the_fact_withholds_content(self, world: KnowledgeWorld) -> None:
+        outcome = world.ingest("runbooks/pool.md", POOL_RUNBOOK, services=(world.checkout,))
+        assert outcome.version_id is not None
+        result = world.retrieve("connection pool exhausted", record=True)
+        assert result.results
+        citation = result.results[0].citation
+        world.ingestion.revoke_version(
+            world.tenant_id, outcome.version_id, actor=IMPORTER, reason="bad_advice"
+        )
+        with world.factory() as session, session.begin():
+            bind_tenant(session, world.tenant_id)
+            resolved = resolve_citation(
+                session, citation, principal=world.principal(), scope=world.scope()
+            )
+            assert not resolved.content_available
+
+    def test_document_deleted_after_the_fact_withholds_content(self, world: KnowledgeWorld) -> None:
+        outcome = world.ingest("runbooks/pool.md", POOL_RUNBOOK, services=(world.checkout,))
+        assert outcome.source_id is not None
+        result = world.retrieve("connection pool exhausted", record=True)
+        assert result.results
+        citation = result.results[0].citation
+        world.ingestion.delete_source(
+            world.tenant_id, outcome.source_id, actor=IMPORTER, reason="source_retired"
+        )
+        with world.factory() as session, session.begin():
+            bind_tenant(session, world.tenant_id)
+            resolved = resolve_citation(
+                session, citation, principal=world.principal(), scope=world.scope()
+            )
+            assert not resolved.content_available
+            replayed = replay_retrieval(
+                session, result.retrieval_id, principal=world.principal(), scope=world.scope()
+            )
+            assert replayed[0].content is None
+            assert replayed[0].withheld_reason == "source_deleted"
+
+    def test_cross_tenant_replay_is_refused(self, world: KnowledgeWorld) -> None:
+        world.ingest("runbooks/pool.md", POOL_RUNBOOK, services=(world.checkout,))
+        result = world.retrieve("connection pool exhausted", record=True)
+        assert result.results
+        other = make_world(world.factory.kw["bind"])
+        with other.factory() as session, session.begin():
+            bind_tenant(session, other.tenant_id)
+            with pytest.raises(CitationInvalid, match="unknown_citation"):
+                resolve_citation(
+                    session,
+                    result.results[0].citation,
+                    principal=other.principal(),
+                    scope=other.scope(),
+                )
+            # RLS hides the retrieval entirely - replay finds nothing to reproduce.
+            assert (
+                replay_retrieval(
+                    session, result.retrieval_id, principal=other.principal(), scope=other.scope()
+                )
+                == ()
+            )
+
+    def test_a_different_principal_with_no_clearance_cannot_resolve_the_same_citation(
+        self, world: KnowledgeWorld
+    ) -> None:
+        """The citation is genuine and belongs to this tenant - but content availability
+        is evaluated against *whoever is asking now*, not whoever asked originally."""
+        world.ingest(
+            "runbooks/pool.md", POOL_RUNBOOK, services=(world.checkout,), acl=("security",)
+        )
+        result = world.retrieve(
+            "connection pool exhausted", clearances=frozenset({"security"}), record=True
+        )
+        assert result.results
+        citation = result.results[0].citation
+        wrong_principal = RetrievalPrincipal(
+            tenant_id=world.tenant_id,
+            kind=RetrievalPrincipalKind.USER,
+            principal_id="user:someone-else",
+            clearances=frozenset(),
+        )
+        with world.factory() as session, session.begin():
+            bind_tenant(session, world.tenant_id)
+            resolved = resolve_citation(
+                session, citation, principal=wrong_principal, scope=world.scope()
+            )
+            assert not resolved.content_available
+
+    def test_prompt_rendering_never_receives_revoked_content(self, world: KnowledgeWorld) -> None:
+        """The same guarantee as above, through the actual rendering path a prompt uses."""
+        outcome = world.ingest("runbooks/pool.md", POOL_RUNBOOK, services=(world.checkout,))
+        assert outcome.source_id is not None
+        result = world.retrieve("connection pool exhausted", record=True)
+        assert result.results
+        citation = result.results[0].citation
+
+        world.ingestion.revoke_source(
+            world.tenant_id, outcome.source_id, actor=IMPORTER, reason="retired"
+        )
+
+        with world.factory() as session, session.begin():
+            bind_tenant(session, world.tenant_id)
+            content = current_content(
+                session, [citation], principal=world.principal(), scope=world.scope()
+            )
+        # This is exactly the value asic.orchestration.knowledge_context.knowledge_evidence_blocks
+        # falls back to when content is withheld - it is what would reach the prompt.
+        assert content[citation.chunk_id] is None
 
 
 class TestCrossTenantIsolation:

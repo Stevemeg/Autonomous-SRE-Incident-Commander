@@ -11,7 +11,7 @@ The five categories and what the policy does with each:
 ``incident_history``      Refused. It is derived from the append-only event log.
 ``model_inference``       Refused. Hypotheses stay incident-scoped MODEL_CLAIMs.
 ``operational_knowledge`` May become a proposal for an ``operational_fact``.
-``verified_outcome``      May become a proposal only with a verified verification.
+``verified_outcome``      May become a proposal only with independent verification evidence.
 ========================  =====================================================
 
 **Provenance is derived, never declared.** A proposal from an agent node carries
@@ -20,6 +20,30 @@ The five categories and what the policy does with each:
 for a verified outcome whose every cited verification record has verdict ``verified`` - the
 evidence, not the proposer, confers it. Human approval later decides whether a proposal is
 written; it does not upgrade provenance, because approval is not verification.
+
+**A verdict alone is not evidence (P6-05).** Neither a model saying "verified", nor a human
+approving the proposal, nor a boolean field, nor the remediation action having executed
+successfully is sufficient to call an outcome independently verified. ``ACTION EXECUTED`` and
+``OUTCOME VERIFIED`` are different claims, backed by different rows
+(:class:`~asic.db.models.remediation.RemediationAction` and
+:class:`~asic.db.models.remediation.Verification` respectively), and this policy requires the
+verification side to carry actual evidentiary content - not merely a verdict - before a
+``verified_outcome`` proposal is accepted:
+
+* the criteria the verifier judged against must be the *same* criteria frozen at proposal
+  time (``criteria_hash`` matches the action's ``verification_criteria_hash`` - INV-11); a
+  verification of different, possibly loosened, criteria proves nothing about this action.
+* ``baseline`` and ``observed`` must both be non-empty: a verdict with no recorded
+  pre-action baseline or post-action observation is an assertion, not a measurement.
+* the remediation action's own denormalized status must independently agree that it
+  reached ``verified`` - a verdict row existing while the action disagrees means the two
+  append-only records have diverged, which is refused rather than resolved in the
+  optimistic direction.
+
+None of this is asserted by the proposer: :func:`asic.memory.service._resolve` reads it from
+the database fresh, at both proposal and decision time (a verification that stops satisfying
+these checks between the two does not slip through), and it is refused with a specific
+reason code rather than folded into a generic "missing reference".
 """
 
 from __future__ import annotations
@@ -29,7 +53,7 @@ import json
 import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Annotated, Final
+from typing import Annotated, Any, Final
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -38,6 +62,7 @@ from asic.domain.enums import (
     MemoryCategory,
     MemoryKind,
     ProvenanceLabel,
+    RemediationActionStatus,
     VerificationVerdict,
 )
 
@@ -83,10 +108,26 @@ class MemoryActor:
 
 @dataclass(frozen=True, slots=True)
 class VerificationFact:
+    """What was independently resolved from :class:`~asic.db.models.remediation.Verification`
+    and its :class:`~asic.db.models.remediation.RemediationAction`, never from the proposer.
+
+    ``criteria_hash`` and ``action_criteria_hash`` are compared by :func:`evaluate`, not
+    assumed equal here, and ``baseline``/``observed`` are carried through as the raw JSONB
+    so emptiness can be checked structurally rather than by trusting the verdict.
+    """
+
     verification_id: uuid.UUID
     verdict: VerificationVerdict
     incident_id: uuid.UUID
     remediation_action_id: uuid.UUID
+    #: The criteria hash the verification actually judged against.
+    criteria_hash: str
+    #: The criteria hash frozen on the action at proposal time (INV-11).
+    action_criteria_hash: str
+    baseline: Mapping[str, Any] = field(default_factory=dict)
+    observed: Mapping[str, Any] = field(default_factory=dict)
+    #: The action's own denormalized lifecycle status, independently written.
+    action_status: RemediationActionStatus = RemediationActionStatus.PROPOSED
 
 
 @dataclass(frozen=True, slots=True)
@@ -128,6 +169,20 @@ def evaluate(
             return PolicyDecision(False, "verification_evidence_required")
         if any(v.verdict is not VerificationVerdict.VERIFIED for v in refs.verifications):
             return PolicyDecision(False, "verification_not_verified")
+        # A verdict alone is not evidence (P6-05): the verification must have judged the
+        # criteria actually frozen on the action, and must carry a real pre/post
+        # measurement rather than an empty assertion.
+        if any(v.criteria_hash != v.action_criteria_hash for v in refs.verifications):
+            return PolicyDecision(False, "verification_criteria_mismatch")
+        if any(not v.baseline for v in refs.verifications):
+            return PolicyDecision(False, "verification_baseline_missing")
+        if any(not v.observed for v in refs.verifications):
+            return PolicyDecision(False, "verification_observed_missing")
+        # ACTION EXECUTED is not OUTCOME VERIFIED: the action's own independently written
+        # status must agree that verification concluded ``verified`` - two append-only
+        # records disagreeing is refused, not resolved optimistically.
+        if any(v.action_status is not RemediationActionStatus.VERIFIED for v in refs.verifications):
+            return PolicyDecision(False, "verification_action_status_not_verified")
         verified_incidents = {v.incident_id for v in refs.verifications}
         if not request.incident_ids or not verified_incidents <= set(request.incident_ids):
             return PolicyDecision(False, "verification_not_linked_to_incident")

@@ -22,6 +22,9 @@ dependencies = [
     "langgraph>=1.0,<2.0",
     "opentelemetry-api>=1.27",
     "opentelemetry-sdk>=1.27",
+    # Phase 6: src/asic/db/models/knowledge.py imports pgvector.sqlalchemy.Vector at
+    # module load time, so this is a hard runtime dependency, not a dev-only extra.
+    "pgvector>=0.3.6,<0.6",
 ]
 
 [project.optional-dependencies]

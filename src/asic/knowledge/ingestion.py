@@ -43,15 +43,21 @@ from asic.db.models import (
     KnowledgeDocument,
     KnowledgeIngestion,
     KnowledgeSource,
+    Permission,
+    RolePermission,
     Service,
+    User,
+    UserRoleAssignment,
 )
 from asic.db.session import apply_statement_timeouts, bind_tenant
 from asic.domain.clock import Clock, SystemClock
 from asic.domain.enums import (
+    ActorType,
     AuditEventType,
     KnowledgeIngestionOutcome,
     KnowledgeSourceStatus,
     KnowledgeVersionState,
+    UserStatus,
 )
 from asic.knowledge import telemetry
 from asic.knowledge.canonical import PARSER_VERSION, CanonicalDocument, canonicalize, sanitize
@@ -73,6 +79,10 @@ from asic.observability.audit import AuditWriter
 SOURCE_LOCK_NAMESPACE: Final[str] = "asic.knowledge.source.v1"
 
 MAX_TITLE_CHARS: Final[int] = 300
+
+#: The permission required to change a knowledge source's access policy (P6-04). Seeded by
+#: migration 0010, the same way ``memory.promotion.decide`` was seeded by migration 0008.
+ACCESS_MANAGE_PERMISSION: Final[str] = "knowledge.source.access.manage"
 
 _REASON = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 
@@ -533,11 +543,38 @@ class KnowledgeIngestionService:
 
         Document type and trust class are part of a source's identity and cannot change
         here.
+
+        **Requires ``knowledge.source.access.manage`` (P6-04).** ``actor`` is never trusted
+        to already hold this permission: it must be a human, and the permission is
+        re-resolved against the RBAC tables - ``app_user``, ``user_role_assignment``,
+        ``role_permission``, ``permission`` - through a current, unexpired role
+        assignment, the same way :func:`asic.memory.service._may_decide` re-resolves
+        ``memory.promotion.decide``. A caller-supplied actor name, an actor type of
+        ``system``, or a ``user_id`` naming someone who does not hold the permission are
+        refused before the advisory lock is even acquired, let alone before either
+        the ACL or the scope changes.
+
+        Raises:
+            KnowledgeRejected: ``access_manage_not_authorized`` if the permission check
+                fails; ``source_identity_immutable`` or a missing-scope code otherwise.
         """
         canonical = policy.canonical()
         with self._factory() as session, session.begin():
             bind_tenant(session, tenant_id)
             apply_statement_timeouts(session)
+            if not _may_manage_access(session, tenant_id, actor, self._clock.now()):
+                AuditWriter(tenant_id=tenant_id, clock=self._clock).record(
+                    session,
+                    event_type=AuditEventType.AUTHORIZATION_DENIED,
+                    outcome="denied",
+                    actor_type=actor.actor_type,
+                    actor_id=actor.actor_id,
+                    target_type="knowledge_source",
+                    target_id=str(source_id),
+                    payload={"reason": "access_manage_not_authorized"},
+                )
+                session.commit()
+                raise KnowledgeRejected("access_manage_not_authorized")
             source = _source_by_id(session, tenant_id, source_id)
             namespace, key = source_lock_key(tenant_id, source.provider, source.source_ref)
             session.execute(
@@ -662,6 +699,48 @@ def _source_by_id(session: Session, tenant_id: uuid.UUID, source_id: uuid.UUID) 
     return source
 
 
+def _may_manage_access(
+    session: Session, tenant_id: uuid.UUID, actor: ImportActor, now: datetime
+) -> bool:
+    """P6-04: an active human in this tenant, holding the permission through a current
+    role - never a caller's self-asserted actor type, name or ``user_id``.
+
+    A ``system`` (connector) actor is refused outright: this schema's RBAC tables
+    (:class:`~asic.db.models.tenancy.User` and its role assignments) model human
+    principals only, and ``update_source_access`` is exactly the operation SI-4/SI-9-style
+    separation exists for - an automated pipeline cannot grant itself broader access than
+    the human administrators who configured it.
+    """
+    if actor.actor_type is not ActorType.HUMAN or actor.user_id is None:
+        return False
+    return (
+        session.scalar(
+            sa.select(sa.literal(1))
+            .select_from(User)
+            .join(
+                UserRoleAssignment,
+                sa.and_(
+                    UserRoleAssignment.tenant_id == User.tenant_id,
+                    UserRoleAssignment.user_id == User.id,
+                ),
+            )
+            .join(RolePermission, RolePermission.role_id == UserRoleAssignment.role_id)
+            .join(Permission, Permission.id == RolePermission.permission_id)
+            .where(
+                User.tenant_id == tenant_id,
+                User.id == actor.user_id,
+                User.status == UserStatus.ACTIVE,
+                Permission.key == ACCESS_MANAGE_PERMISSION,
+                sa.or_(
+                    UserRoleAssignment.expires_at.is_(None), UserRoleAssignment.expires_at > now
+                ),
+            )
+            .limit(1)
+        )
+        is not None
+    )
+
+
 def _current_version(
     session: Session, tenant_id: uuid.UUID, source_id: uuid.UUID
 ) -> KnowledgeDocument | None:
@@ -734,4 +813,9 @@ def _missing_scope(
     return None
 
 
-__all__ = ["SOURCE_LOCK_NAMESPACE", "KnowledgeIngestionService", "source_lock_key"]
+__all__ = [
+    "ACCESS_MANAGE_PERMISSION",
+    "SOURCE_LOCK_NAMESPACE",
+    "KnowledgeIngestionService",
+    "source_lock_key",
+]

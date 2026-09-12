@@ -60,10 +60,21 @@ class _Frozen(BaseModel):
 
 
 class ImportActor(_Frozen):
-    """Who imported a document. Attribution, not authority."""
+    """Who imported a document. Attribution, not authority.
+
+    ``user_id`` is who this actor claims to be for audit purposes only. For the one
+    operation that requires actual authorization -
+    :meth:`~asic.knowledge.ingestion.KnowledgeIngestionService.update_source_access`
+    (P6-04) - it is never trusted directly: the permission check re-resolves it against
+    the RBAC tables (:class:`~asic.db.models.tenancy.User`,
+    ``user_role_assignment``, ``role_permission``, ``permission``), the same way
+    :func:`asic.memory.service._may_decide` does. A caller cannot grant itself the
+    permission by simply setting this field.
+    """
 
     actor_type: ActorType
     actor_id: Annotated[str, Field(min_length=1, max_length=128, pattern=_NO_CONTROL)] | None = None
+    user_id: uuid.UUID | None = None
 
 
 class SourceAccessPolicy(_Frozen):

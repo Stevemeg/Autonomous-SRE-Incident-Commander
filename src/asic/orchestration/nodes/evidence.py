@@ -55,6 +55,7 @@ from asic.domain.enums import (
 )
 from asic.domain.errors import BudgetExhausted, DomainError
 from asic.domain.untrusted import scan_structure
+from asic.knowledge.errors import RetrievalRefused
 from asic.observability import metrics
 from asic.orchestration import knowledge_context
 from asic.orchestration.context import NodeDependencies
@@ -161,19 +162,31 @@ def evidence_node(deps: NodeDependencies) -> Any:
                 )
                 return _degrade(contract, state, deps, domain, step_ref, charged, reason=reason)
 
-            # Knowledge results arrive with a provider manifest. It is untrusted input:
-            # verified against the database before anything is recorded, and refused -
-            # degrading the domain - if any claim in it does not hold.
+            # Knowledge results arrive with a provider manifest, and providing one is
+            # mandatory (P6-02): it is untrusted input, re-checked against the database and
+            # against principal/policy/query facts this node recomputes itself - never
+            # taken from the provider on trust - before anything is recorded. Any claim
+            # that does not hold, or a missing manifest, refuses and degrades the domain.
             verified: knowledge_context.VerifiedRetrieval | None = None
             if domain is EvidenceDomain.KNOWLEDGE:
                 try:
+                    principal, scope = knowledge_context.recompute_investigation_context(
+                        deps.session,
+                        tenant_id=deps.context.tenant_id,
+                        environment_id=deps.context.scope.environment_id,
+                        service_ids=(deps.context.scope.service(request.service_name).service_id,),
+                        correlation_id=deps.context.correlation_id,
+                    )
                     verified = knowledge_context.validate_manifest(
                         deps.session,
                         tenant_id=deps.context.tenant_id,
                         correlation_id=deps.context.correlation_id,
+                        principal=principal,
+                        scope=scope,
+                        query_text=str(request.arguments["topic"]),
                         result=result,
                     )
-                except knowledge_context.KnowledgeManifestInvalid as exc:
+                except (knowledge_context.KnowledgeManifestInvalid, RetrievalRefused) as exc:
                     span.fail(exc.code)
                     return _degrade(
                         contract,

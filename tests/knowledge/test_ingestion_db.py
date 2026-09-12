@@ -19,12 +19,13 @@ from asic.db.models import (
 )
 from asic.db.session import bind_tenant
 from asic.domain.enums import (
+    ActorType,
     KnowledgeContentFormat,
     KnowledgeIngestionOutcome,
     KnowledgeSourceStatus,
     KnowledgeVersionState,
 )
-from asic.knowledge.contracts import SourceAccessPolicy, SourceDocument
+from asic.knowledge.contracts import ImportActor, SourceAccessPolicy, SourceDocument
 from asic.knowledge.embedding import EmbeddingService
 from asic.knowledge.errors import EmbeddingFailure, EmbeddingTimeout, KnowledgeRejected
 from asic.knowledge.ingestion import KnowledgeIngestionService
@@ -201,7 +202,7 @@ class TestAuthorityIsNotReadFromDocuments:
             world.tenant_id,
             first.source_id,
             world.context("runbooks/secret.md").policy,
-            actor=IMPORTER,
+            actor=world.authorized_access_manager(),
         )
         assert (
             world.ingest("runbooks/secret.md", POOL_V2).outcome is KnowledgeIngestionOutcome.CREATED
@@ -221,6 +222,165 @@ class TestAuthorityIsNotReadFromDocuments:
         assert world.retrieve(
             "PoolTimeoutError credentials", clearances=frozenset({"security"})
         ).results
+
+
+class TestUpdateSourceAccessRequiresPermission:
+    """P6-04: the access-control mutation path has a structural permission check.
+
+    An actor string is not authorization. Every scenario below attempts the same
+    mutation and confirms both the typed refusal *and* that the source's policy was
+    left completely unchanged - a refusal that still leaked a partial write would be
+    worse than no check at all.
+    """
+
+    def _attempt(
+        self, world: KnowledgeWorld, source_id: uuid.UUID, actor: object
+    ) -> KnowledgeRejected | None:
+        try:
+            world.ingestion.update_source_access(
+                world.tenant_id,
+                source_id,
+                world.context("runbooks/secret.md", acl=()).policy,
+                actor=actor,  # type: ignore[arg-type]
+            )
+        except KnowledgeRejected as exc:
+            return exc
+        return None
+
+    def _acl(self, world: KnowledgeWorld, source_id: uuid.UUID) -> list[str]:
+        with world.factory() as session:
+            bind_tenant(session, world.tenant_id)
+            source = session.get(KnowledgeSource, source_id)
+            assert source is not None
+            return list(source.acl_labels)
+
+    def test_unauthorized_actor_is_refused(self, world: KnowledgeWorld) -> None:
+        outcome = world.ingest("runbooks/secret.md", POOL_V1, acl=("security",))
+        assert outcome.source_id is not None
+        exc = self._attempt(world, outcome.source_id, world.unauthorized_human())
+        assert exc is not None and exc.code == "access_manage_not_authorized"
+        assert self._acl(world, outcome.source_id) == ["security"]
+
+    def test_a_system_connector_actor_is_refused_even_though_it_only_imports_routinely(
+        self, world: KnowledgeWorld
+    ) -> None:
+        """The actor that may *create* a source is not automatically the actor that may
+        *change its access policy* - the two are different operations with different
+        authorization requirements."""
+        outcome = world.ingest("runbooks/secret.md", POOL_V1, acl=("security",))
+        assert outcome.source_id is not None
+        exc = self._attempt(world, outcome.source_id, IMPORTER)
+        assert exc is not None and exc.code == "access_manage_not_authorized"
+        assert self._acl(world, outcome.source_id) == ["security"]
+
+    def test_fabricated_actor_metadata_naming_a_real_grant_is_refused(
+        self, world: KnowledgeWorld
+    ) -> None:
+        """A ``system``-typed actor cannot borrow a real, authorized human's ``user_id``:
+        the actor *type* itself is part of what is checked, not merely the id."""
+        outcome = world.ingest("runbooks/secret.md", POOL_V1, acl=("security",))
+        assert outcome.source_id is not None
+        real_admin = world.authorized_access_manager()
+        forged = ImportActor(
+            actor_type=ActorType.SYSTEM, actor_id="connector:pretending", user_id=real_admin.user_id
+        )
+        exc = self._attempt(world, outcome.source_id, forged)
+        assert exc is not None and exc.code == "access_manage_not_authorized"
+        assert self._acl(world, outcome.source_id) == ["security"]
+
+    def test_fabricated_user_id_with_no_matching_grant_is_refused(
+        self, world: KnowledgeWorld
+    ) -> None:
+        outcome = world.ingest("runbooks/secret.md", POOL_V1, acl=("security",))
+        assert outcome.source_id is not None
+        forged = ImportActor(actor_type=ActorType.HUMAN, actor_id="nobody", user_id=uuid.uuid4())
+        exc = self._attempt(world, outcome.source_id, forged)
+        assert exc is not None and exc.code == "access_manage_not_authorized"
+        assert self._acl(world, outcome.source_id) == ["security"]
+
+    def test_cross_tenant_actor_is_refused(self, world: KnowledgeWorld) -> None:
+        outcome = world.ingest("runbooks/secret.md", POOL_V1, acl=("security",))
+        assert outcome.source_id is not None
+        other = make_world(world.factory.kw["bind"])
+        other_admin = other.authorized_access_manager()
+        exc = self._attempt(world, outcome.source_id, other_admin)
+        assert exc is not None and exc.code == "access_manage_not_authorized"
+        assert self._acl(world, outcome.source_id) == ["security"]
+
+    def test_revoked_permission_is_refused(self, world: KnowledgeWorld) -> None:
+        outcome = world.ingest("runbooks/secret.md", POOL_V1, acl=("security",))
+        assert outcome.source_id is not None
+        admin = world.authorized_access_manager()
+        # Works while the grant is current.
+        world.ingestion.update_source_access(
+            world.tenant_id,
+            outcome.source_id,
+            world.context("runbooks/secret.md", acl=("security", "on-call")).policy,
+            actor=admin,
+        )
+        assert self._acl(world, outcome.source_id) == ["on-call", "security"]
+        # The grant is revoked (the role assignment removed).
+        with world.factory() as session, session.begin():
+            from asic.db.models import UserRoleAssignment
+
+            bind_tenant(session, world.tenant_id)
+            session.execute(
+                sa.delete(UserRoleAssignment).where(
+                    UserRoleAssignment.tenant_id == world.tenant_id,
+                    UserRoleAssignment.user_id == admin.user_id,
+                )
+            )
+        exc = self._attempt(world, outcome.source_id, admin)
+        assert exc is not None and exc.code == "access_manage_not_authorized"
+        assert self._acl(world, outcome.source_id) == ["on-call", "security"]
+
+    def test_authorized_actor_succeeds(self, world: KnowledgeWorld) -> None:
+        outcome = world.ingest("runbooks/secret.md", POOL_V1, acl=("security",))
+        assert outcome.source_id is not None
+        admin = world.authorized_access_manager()
+        world.ingestion.update_source_access(
+            world.tenant_id,
+            outcome.source_id,
+            world.context("runbooks/secret.md").policy,
+            actor=admin,
+        )
+        assert self._acl(world, outcome.source_id) == []
+
+    def test_concurrent_access_updates_serialize_without_corrupting_the_policy(
+        self, world: KnowledgeWorld
+    ) -> None:
+        """Two authorized updates racing for the same source: the advisory lock still
+        serializes them, so the result is one policy or the other, never a mix."""
+        outcome = world.ingest("runbooks/secret.md", POOL_V1, acl=("security",))
+        assert outcome.source_id is not None
+        source_id = outcome.source_id
+        admin = world.authorized_access_manager()
+        barrier = Barrier(2)
+
+        def widen() -> None:
+            barrier.wait(timeout=5)
+            world.ingestion.update_source_access(
+                world.tenant_id,
+                source_id,
+                world.context("runbooks/secret.md", acl=("security", "on-call")).policy,
+                actor=admin,
+            )
+
+        def narrow() -> None:
+            barrier.wait(timeout=5)
+            world.ingestion.update_source_access(
+                world.tenant_id,
+                source_id,
+                world.context("runbooks/secret.md", acl=("security",)).policy,
+                actor=admin,
+            )
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            futures = [pool.submit(widen), pool.submit(narrow)]
+            for future in futures:
+                future.result(timeout=10)
+        final = self._acl(world, source_id)
+        assert final in (["security"], ["on-call", "security"])
 
     def test_a_document_cannot_extend_its_own_freshness(self, world: KnowledgeWorld) -> None:
         future = world.clock.now() + timedelta(days=3650)

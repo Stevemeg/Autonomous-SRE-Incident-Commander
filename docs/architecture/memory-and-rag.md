@@ -276,17 +276,26 @@ chunks, and is versioned alongside the knowledge corpus so retrieval changes are
 against a fixed target.
 
 **Implementation and measured evidence.** `tests/knowledge/test_retrieval_evaluation.py`
-is a ten-document, fifteen-query golden corpus covering exact-lexical, semantic-paraphrase,
-ambiguous, wrong-service, no-result, unauthorized, stale, revoked, superseded/competing-
-version and injected-document cases. Measured on the run that produced this document:
-recall@5 = 1.000, precision@5 = 0.867, MRR = 1.000 over the nine gradeable queries (the
-ambiguous query is deliberately excluded from the average — it has no single correct
-answer and is graded on citation soundness instead); unauthorized-rate and stale-rate were
-both measured at zero across their probe sets, and are asserted as exact-zero security
+is a twelve-document, eighteen-query golden corpus covering exact-lexical, semantic-
+paraphrase, ambiguous, wrong-service, wrong-tenant, no-result, unauthorized, stale,
+revoked, superseded/competing-version and injected-document cases, plus (P6-09) a
+lexical-only holdout absent from the deterministic embedding's concept table, a
+hard-negative distractor sharing vocabulary with a correct answer while describing a
+different (non-)problem, and a semantic-paraphrase holdout built to avoid that concept
+table entirely. Measured on the run that produced this document: recall@5 = 1.000,
+precision@5 = 0.730, MRR = 0.933 over the ten gradeable queries (the ambiguous query, the
+hard-negative distractor and the out-of-vocabulary holdout are each excluded from this
+average and have their own dedicated test instead - the ambiguous query has no single
+correct answer and is graded on citation soundness, the distractor is graded on whether
+the true answer is still recalled at all under real competition, and the out-of-vocabulary
+holdout is asserted to **miss**, honestly: the deterministic embedding is a hashed bag of
+tokens and a fixed concept table, not a semantic model, and has no mechanism to recognise
+a paraphrase built to avoid that table); unauthorized-rate and stale-rate were both
+measured at zero across their probe sets, and are asserted as exact-zero security
 properties rather than folded into the quality average. This is architecture validation on
-a small, deliberately separable corpus built with the deterministic test embedding
-provider — it is not a claim about recall against any other corpus, embedding model, or
-production-scale document set.
+a small corpus that now deliberately includes a hard negative, built with the
+deterministic test embedding provider — it is not a claim about recall against any other
+corpus, embedding model, or production-scale document set.
 
 ---
 

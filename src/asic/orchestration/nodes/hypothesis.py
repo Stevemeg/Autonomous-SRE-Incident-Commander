@@ -54,12 +54,16 @@ from asic.domain.enums import (
 )
 from asic.domain.errors import ModelProviderError, SchemaViolation
 from asic.domain.untrusted import UntrustedBlock
+from asic.knowledge.errors import RetrievalRefused
 from asic.llm.port import ModelRequest
 from asic.llm.prompts import HYPOTHESIS_PROMPT
 from asic.observability import metrics
 from asic.orchestration.alert_context import incident_alert_blocks
 from asic.orchestration.context import NodeDependencies
-from asic.orchestration.knowledge_context import knowledge_evidence_blocks
+from asic.orchestration.knowledge_context import (
+    knowledge_evidence_blocks,
+    recompute_investigation_context,
+)
 
 SCHEMA_REPAIR_ATTEMPTS: Final[int] = 1
 
@@ -218,16 +222,36 @@ def _ask_model(
         "degraded_domains": sorted(state.get("degraded_domains", [])),
     }
     # Retrieved knowledge is operational data like any other: fenced, labelled RETRIEVED,
-    # bounded, and withheld if access was withdrawn after it was retrieved.
+    # bounded, and withheld if access was withdrawn after it was retrieved - re-checked
+    # against the *current* principal and scope (P6-03), recomputed here rather than
+    # trusted from whenever the evidence was originally gathered.
+    try:
+        principal, scope = recompute_investigation_context(
+            deps.session,
+            tenant_id=deps.context.tenant_id,
+            environment_id=deps.context.scope.environment_id,
+            service_ids=tuple(s.service_id for s in deps.context.scope.services),
+            correlation_id=deps.context.correlation_id,
+        )
+        knowledge_blocks: tuple[UntrustedBlock, ...] = knowledge_evidence_blocks(
+            deps.session,
+            tenant_id=deps.context.tenant_id,
+            evidence=evidence,
+            principal=principal,
+            scope=scope,
+        )
+    except RetrievalRefused:
+        # An unresolvable principal (malformed grant configuration) withholds knowledge
+        # content rather than surfacing it unauthorized or crashing the hypothesis step;
+        # every other evidence domain is unaffected.
+        knowledge_blocks = ()
     untrusted = (
         incident_alert_blocks(
             deps.session,
             tenant_id=deps.context.tenant_id,
             incident_id=deps.context.incident_id,
         )
-        + knowledge_evidence_blocks(
-            deps.session, tenant_id=deps.context.tenant_id, evidence=evidence
-        )
+        + knowledge_blocks
     ) + tuple(
         UntrustedBlock(
             source=f"{ref.domain.value}:{ref.evidence_id}",

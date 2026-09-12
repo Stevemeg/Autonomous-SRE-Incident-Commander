@@ -62,7 +62,7 @@ from asic.domain.errors import DomainError
 from asic.domain.incident_state import is_terminal
 from asic.domain.untrusted import UntrustedBlock
 from asic.knowledge import telemetry
-from asic.knowledge.citations import resolve_citation
+from asic.knowledge.citations import citation_reference_exists
 from asic.knowledge.errors import CitationInvalid
 from asic.memory.policy import (
     POLICY_VERSION,
@@ -476,12 +476,27 @@ def _resolve(
 
     verifications: list[VerificationFact] = []
     if request.verification_ids:
-        for verification_id, verdict, action_id, incident_id in session.execute(
+        for (
+            verification_id,
+            verdict,
+            action_id,
+            incident_id,
+            criteria_hash,
+            observed,
+            baseline,
+            action_criteria_hash,
+            action_status,
+        ) in session.execute(
             sa.select(
                 Verification.id,
                 Verification.verdict,
                 Verification.remediation_action_id,
                 RemediationAction.incident_id,
+                Verification.criteria_hash,
+                Verification.observed,
+                Verification.baseline,
+                RemediationAction.verification_criteria_hash,
+                RemediationAction.status,
             )
             .join(
                 RemediationAction,
@@ -501,6 +516,11 @@ def _resolve(
                     verdict=verdict,
                     incident_id=incident_id,
                     remediation_action_id=action_id,
+                    criteria_hash=criteria_hash,
+                    action_criteria_hash=action_criteria_hash,
+                    baseline=dict(baseline or {}),
+                    observed=dict(observed or {}),
+                    action_status=action_status,
                 )
             )
         if {v.verification_id for v in verifications} != set(request.verification_ids):
@@ -509,7 +529,7 @@ def _resolve(
     resolved_citations = 0
     for token in request.knowledge_citations:
         try:
-            resolve_citation(session, token)
+            citation_reference_exists(session, token)
             resolved_citations += 1
         except CitationInvalid:
             missing.append("knowledge_citation")

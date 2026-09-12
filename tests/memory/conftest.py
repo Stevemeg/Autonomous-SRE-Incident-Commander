@@ -37,6 +37,7 @@ from asic.domain.enums import (
     IncidentSeverity,
     IncidentStatus,
     NodeId,
+    RemediationActionStatus,
     RiskTier,
     TerminationReason,
     VerificationVerdict,
@@ -240,6 +241,10 @@ def make_world(engine: sa.Engine, *, slug: str | None = None) -> MemoryWorld:
             action_version_hash="a" * 64,
             request_idempotency_key=uuid.uuid4().hex + uuid.uuid4().hex,
             proposed_by_node=NodeId.G6_REMEDIATION_PLANNER,
+            # Independently verified (P6-05): the action's own denormalized status must
+            # agree with the verification row below, not merely coexist with it.
+            status=RemediationActionStatus.VERIFIED,
+            executed_at=CLOCK_START - timedelta(minutes=55),
         )
         session.add(action)
         session.flush()
@@ -252,6 +257,10 @@ def make_world(engine: sa.Engine, *, slug: str | None = None) -> MemoryWorld:
             callback_idempotency_key=uuid.uuid4().hex * 2,
             criteria_hash=action.verification_criteria_hash,
             verdict=VerificationVerdict.VERIFIED,
+            # Real evidentiary content (P6-05): a verdict with no recorded measurement is
+            # an assertion, not a verification.
+            baseline={"http_5xx_rate": 0.021},
+            observed={"http_5xx_rate": 0.001},
             observation_window_start=CLOCK_START - timedelta(minutes=50),
             observation_window_end=CLOCK_START - timedelta(minutes=45),
         )

@@ -457,7 +457,7 @@ class TestUpgradePaths:
             with engine.connect() as conn:
                 assert (
                     conn.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one()
-                    == "0009_phase5_cleanup"
+                    == "0010_p6_correction"
                 )
         finally:
             engine.dispose()
@@ -566,6 +566,234 @@ class TestUpgradePaths:
 
         with pytest.raises(Exception, match="fk_tool_execution_tool_definition"):
             command.downgrade(config, "0004_workflow_checkpoint")
+
+
+#: The four governance constraints migration 0008 added NOT VALID and 0010 validates.
+_GOVERNANCE_CONSTRAINTS = (
+    ("knowledge_document", "ck_knowledge_document_versioned_source"),
+    ("knowledge_chunk", "ck_knowledge_chunk_located_chunk"),
+    ("memory_entry", "ck_memory_entry_governed_entry"),
+    ("memory_promotion", "ck_memory_promotion_governed_promotion"),
+)
+
+
+def _convalidated(url: str, table: str, constraint: str) -> bool:
+    engine = sa.create_engine(url)
+    try:
+        with engine.connect() as conn:
+            return bool(
+                conn.execute(
+                    sa.text(
+                        "SELECT convalidated FROM pg_constraint"
+                        " WHERE conname = :name AND conrelid = CAST(:table AS regclass)"
+                    ),
+                    {"name": constraint, "table": table},
+                ).scalar_one()
+            )
+    finally:
+        engine.dispose()
+
+
+def _make_tenant(conn: sa.Connection, slug: str) -> uuid.UUID:
+    return conn.execute(
+        sa.text(
+            "INSERT INTO tenant (id, slug, display_name, status) "
+            "VALUES (gen_random_uuid(), :slug, :slug, 'active') RETURNING id"
+        ),
+        {"slug": slug},
+    ).scalar_one()
+
+
+@requires_postgres
+class TestP6CorrectionMigration:
+    """P6-08: migration 0010 validates Phase 6's NOT VALID governance constraints -
+    correctly, meaning it actually inspects retained rows rather than validating blind.
+    """
+
+    def test_clean_database_upgrades_to_head_with_every_constraint_validated(
+        self, throwaway_database: str
+    ) -> None:
+        config = _alembic_config(throwaway_database)
+        command.upgrade(config, "head")
+        for table, constraint in _GOVERNANCE_CONSTRAINTS:
+            assert _convalidated(throwaway_database, table, constraint), (
+                f"{table}.{constraint} was not validated on a clean upgrade to head"
+            )
+
+    def test_the_access_manage_permission_is_seeded_exactly_once(
+        self, throwaway_database: str
+    ) -> None:
+        config = _alembic_config(throwaway_database)
+        command.upgrade(config, "head")
+        engine = sa.create_engine(throwaway_database)
+        try:
+            with engine.connect() as conn:
+                count = conn.execute(
+                    sa.text(
+                        "SELECT count(*) FROM permission"
+                        " WHERE key = 'knowledge.source.access.manage'"
+                    )
+                ).scalar_one()
+        finally:
+            engine.dispose()
+        assert count == 1
+
+    def test_retained_rows_that_already_satisfy_the_constraint_upgrade_and_stay_valid(
+        self, throwaway_database: str
+    ) -> None:
+        """A retained row already shaped like Phase 6 data (e.g. written by 0008-era
+        code before 0010 shipped) upgrades cleanly and the constraint still validates."""
+        config = _alembic_config(throwaway_database)
+        command.upgrade(config, "0009_phase5_cleanup")
+        engine = sa.create_engine(throwaway_database)
+        try:
+            with engine.begin() as conn:
+                tenant_id = _make_tenant(conn, "p6-08-valid-retained")
+                conn.execute(
+                    sa.text(
+                        "WITH s AS (INSERT INTO knowledge_source (id, tenant_id, provider, "
+                        "source_ref, document_type, trust_class, created_by_type) "
+                        "VALUES (gen_random_uuid(), :t, 'git', 'runbooks/valid.md', "
+                        "'runbook', 'official_runbook', 'system') RETURNING id) "
+                        "INSERT INTO knowledge_document (id, tenant_id, source_uri, title, "
+                        "document_type, trust_class, content_hash, source_id, "
+                        "content_format, parser_version, chunker_version, "
+                        "embedding_model_id, embedding_dimensions, byte_size, chunk_count) "
+                        "SELECT gen_random_uuid(), :t, 'runbooks/valid.md', 'Valid', "
+                        "'runbook', 'official_runbook', repeat('a', 64), s.id, 'markdown', "
+                        "'p1', 'c1', 'm1', 1536, 10, 1 FROM s"
+                    ),
+                    {"t": tenant_id},
+                )
+        finally:
+            engine.dispose()
+
+        command.upgrade(config, "head")
+        assert _convalidated(
+            throwaway_database, "knowledge_document", "ck_knowledge_document_versioned_source"
+        )
+        # The retained row is still there - the migration did not need to touch it.
+        engine = sa.create_engine(throwaway_database)
+        try:
+            with engine.connect() as conn:
+                count = conn.execute(
+                    sa.text("SELECT count(*) FROM knowledge_document WHERE tenant_id = :t"),
+                    {"t": tenant_id},
+                ).scalar_one()
+        finally:
+            engine.dispose()
+        assert count == 1
+
+    def test_a_genuinely_invalid_legacy_row_blocks_the_migration_rather_than_validating_blind(
+        self, throwaway_database: str
+    ) -> None:
+        """A pre-Phase-6-shaped row (Phase 6 columns left NULL, as a real pre-Phase-6
+        deployment would have) must refuse the migration, not validate over it silently.
+
+        The row has to be written *before* migration 0008 adds the constraint: 0008 adds
+        it ``NOT VALID``, which grandfathers rows that already exist but - as PostgreSQL
+        always does - still enforces it against every row written from that point on. So
+        this is the only way such a row can legitimately exist, and it is exactly the
+        scenario 0008's own docstring describes ("none exist in any known database", but
+        the schema does not forbid a database where one does).
+        """
+        config = _alembic_config(throwaway_database)
+        command.upgrade(config, "0007_phase5_hardening")
+        engine = sa.create_engine(throwaway_database)
+        try:
+            with engine.begin() as conn:
+                tenant_id = _make_tenant(conn, "p6-08-invalid-legacy")
+                conn.execute(
+                    sa.text(
+                        "INSERT INTO knowledge_document (id, tenant_id, source_uri, title, "
+                        "document_type, trust_class, content_hash) VALUES (gen_random_uuid(), "
+                        ":t, 'runbooks/legacy.md', 'Legacy', 'runbook', 'official_runbook', "
+                        "repeat('b', 64))"
+                    ),
+                    {"t": tenant_id},
+                )
+        finally:
+            engine.dispose()
+
+        with pytest.raises(Exception, match="ck_knowledge_document_versioned_source"):
+            command.upgrade(config, "head")
+
+        # The migration must not have partially applied: the permission seed from the
+        # same revision must not be visible either, and the constraint must still be
+        # exactly as 0008 left it - NOT VALID, not validated, not dropped.
+        assert not _convalidated(
+            throwaway_database, "knowledge_document", "ck_knowledge_document_versioned_source"
+        )
+        engine = sa.create_engine(throwaway_database)
+        try:
+            with engine.connect() as conn:
+                count = conn.execute(
+                    sa.text(
+                        "SELECT count(*) FROM permission"
+                        " WHERE key = 'knowledge.source.access.manage'"
+                    )
+                ).scalar_one()
+        finally:
+            engine.dispose()
+        assert count == 0
+
+        # Superseding the row in place is not valid remediation either: an UPDATE
+        # re-checks the constraint against the resulting row the same as an INSERT would
+        # (a NOT VALID constraint skips only the one-time historical scan, never ongoing
+        # writes), and the row's Phase-6 columns are still NULL. Deleting it is the actual
+        # remediation an operator has for a row Phase 6 tooling never produced.
+        engine = sa.create_engine(throwaway_database)
+        try:
+            with (
+                pytest.raises(Exception, match="ck_knowledge_document_versioned_source"),
+                engine.begin() as conn,
+            ):
+                conn.execute(
+                    sa.text(
+                        "UPDATE knowledge_document SET lifecycle = 'superseded', "
+                        "superseded_at = now() WHERE tenant_id = :t"
+                    ),
+                    {"t": tenant_id},
+                )
+        finally:
+            engine.dispose()
+        engine = sa.create_engine(throwaway_database)
+        try:
+            with engine.begin() as conn:
+                conn.execute(
+                    sa.text("DELETE FROM knowledge_document WHERE tenant_id = :t"), {"t": tenant_id}
+                )
+        finally:
+            engine.dispose()
+        command.upgrade(config, "head")
+        assert _convalidated(
+            throwaway_database, "knowledge_document", "ck_knowledge_document_versioned_source"
+        )
+
+    def test_downgrade_restores_the_not_valid_state_and_removes_the_permission(
+        self, throwaway_database: str
+    ) -> None:
+        config = _alembic_config(throwaway_database)
+        command.upgrade(config, "head")
+        for table, constraint in _GOVERNANCE_CONSTRAINTS:
+            assert _convalidated(throwaway_database, table, constraint)
+        command.downgrade(config, "0009_phase5_cleanup")
+        for table, constraint in _GOVERNANCE_CONSTRAINTS:
+            assert not _convalidated(throwaway_database, table, constraint)
+        engine = sa.create_engine(throwaway_database)
+        try:
+            with engine.connect() as conn:
+                count = conn.execute(
+                    sa.text(
+                        "SELECT count(*) FROM permission"
+                        " WHERE key = 'knowledge.source.access.manage'"
+                    )
+                ).scalar_one()
+        finally:
+            engine.dispose()
+        assert count == 0
+        command.upgrade(config, "head")
+        command.check(config)
 
 
 def test_the_migrations_directory_is_where_the_tests_think_it_is() -> None:

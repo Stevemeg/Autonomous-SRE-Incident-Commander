@@ -26,9 +26,16 @@ from asic.contracts.state import EvidenceRef
 from asic.db.models import Evidence, WorkflowRun
 from asic.db.session import bind_tenant
 from asic.domain.clock import FrozenClock
-from asic.domain.enums import EvidenceDomain, KnowledgeContentFormat, NodeId, ProvenanceLabel
+from asic.domain.enums import (
+    EvidenceDomain,
+    KnowledgeContentFormat,
+    NodeId,
+    ProvenanceLabel,
+    RetrievalPrincipalKind,
+)
 from asic.domain.untrusted import scan
 from asic.knowledge.citations import resolve_citation
+from asic.knowledge.contracts import RetrievalPrincipal, RetrievalScope
 from asic.knowledge.embedding import DeterministicEmbeddingProvider, EmbeddingService
 from asic.knowledge.errors import CitationInvalid
 from asic.knowledge.ingestion import KnowledgeIngestionService
@@ -94,6 +101,26 @@ class _World:
         self.clock = FrozenClock(start=fixture.incident.opened_at)
         self.ingestion = KnowledgeIngestionService(self.factory, self.embeddings, clock=self.clock)
         self.retriever = KnowledgeRetriever(self.embeddings, clock=self.clock)
+
+    def principal_and_scope(
+        self, correlation_id: uuid.UUID
+    ) -> tuple[RetrievalPrincipal, RetrievalScope]:
+        """The same trusted principal/scope the native provider derives for this call.
+
+        ``principal_id`` must match exactly what
+        :func:`asic.knowledge.provider.KnowledgeStoreProvider.invoke` used -
+        ``f"investigation:{correlation_id}"`` - since this is the caller's own
+        recomputation, checked against the manifest rather than trusted from it.
+        """
+        return (
+            RetrievalPrincipal(
+                tenant_id=self.tenant_id,
+                kind=RetrievalPrincipalKind.INVESTIGATION,
+                principal_id=f"investigation:{correlation_id}",
+                clearances=frozenset(),
+            ),
+            RetrievalScope(environment_id=self.environment_id, service_ids=(self.service_id,)),
+        )
 
     def ingest_hostile_document(self) -> None:
         from asic.domain.enums import KnowledgeDocumentType, TrustClass
@@ -189,8 +216,15 @@ class TestTheHostileDocumentThroughTheRealPath:
                 contract=G4_EVIDENCE_COLLECTOR,
             )
             broker.close()
+            principal, scope = world.principal_and_scope(correlation_id)
             verified = validate_knowledge_manifest(
-                session, tenant_id=world.tenant_id, correlation_id=correlation_id, result=result
+                session,
+                tenant_id=world.tenant_id,
+                correlation_id=correlation_id,
+                principal=principal,
+                scope=scope,
+                query_text="restart the checkout deployment",
+                result=result,
             )
         assert verified is not None
         assert verified.citations
@@ -219,8 +253,15 @@ class TestTheHostileDocumentThroughTheRealPath:
             assert result.succeeded
             assert result.tool_execution_id is not None
 
+            principal, scope = world.principal_and_scope(correlation_id)
             verified = validate_knowledge_manifest(
-                session, tenant_id=world.tenant_id, correlation_id=correlation_id, result=result
+                session,
+                tenant_id=world.tenant_id,
+                correlation_id=correlation_id,
+                principal=principal,
+                scope=scope,
+                query_text="restart the checkout deployment",
+                result=result,
             )
             assert verified is not None
 
@@ -273,6 +314,8 @@ class TestTheHostileDocumentThroughTheRealPath:
                         content_digest="d" * 64,
                     )
                 ],
+                principal=principal,
+                scope=scope,
             )
         assert blocks
         block = blocks[0]
@@ -326,6 +369,7 @@ class TestTheHostileDocumentThroughTheRealPath:
         # does not resolve, because resolution goes through the retrieval-result table, not
         # through anything that looks like a token.
         real_citation = block.source
+        principal, scope = world.principal_and_scope(correlation_id)
         with world.factory() as verify_session, verify_session.begin():
             bind_tenant(verify_session, world.tenant_id)
             with pytest.raises(CitationInvalid, match="unknown_citation"):
@@ -334,10 +378,14 @@ class TestTheHostileDocumentThroughTheRealPath:
                     "knowledge:11111111-1111-1111-1111-111111111111/"
                     "22222222-2222-2222-2222-222222222222"
                     "@33333333-3333-3333-3333-333333333333",
+                    principal=principal,
+                    scope=scope,
                 )
             # The genuine citation, by contrast, does resolve - the defence is not
             # "citations never work", it is "only a real one does".
-            resolved = resolve_citation(verify_session, real_citation)
+            resolved = resolve_citation(
+                verify_session, real_citation, principal=principal, scope=scope
+            )
             assert resolved.content_available
 
         # A scan of the whole rendered prompt still finds the patterns: detection recorded

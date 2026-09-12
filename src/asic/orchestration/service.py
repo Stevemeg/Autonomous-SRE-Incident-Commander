@@ -52,6 +52,9 @@ from asic.domain.budget import BudgetPolicy
 from asic.domain.clock import Clock, FrozenClock, SystemClock
 from asic.domain.enums import AlertSeverity, AlertStatus, IncidentSeverity, IncidentStatus
 from asic.domain.idempotency import alert_key
+from asic.knowledge.embedding import DeterministicEmbeddingProvider, EmbeddingService
+from asic.knowledge.provider import KnowledgeStoreProvider
+from asic.knowledge.retrieval import KnowledgeRetriever
 from asic.llm.deterministic import DeterministicModelProvider
 from asic.llm.port import ModelProvider
 from asic.llm.prompts import PROMPT_SET_VERSION
@@ -294,9 +297,20 @@ def main(argv: Sequence[str] | None = None) -> int:
             seeded = seed_demonstration_incident(session, scenario_obj=scenario_obj, clock=clock)
             session.commit()
 
+        # The native KnowledgeStoreProvider is registered ahead of the simulator (P6-06):
+        # the broker picks the first provider whose `supports()` claims a descriptor, so
+        # `knowledge.search` reaches the governed PostgreSQL-backed retrieval path - real
+        # ingestion, real manifest verification, real citations - and the simulator serves
+        # every other domain this demonstration does not have a native adapter for yet.
+        knowledge_retriever = KnowledgeRetriever(
+            EmbeddingService(DeterministicEmbeddingProvider()), clock=clock
+        )
         service = InvestigationService(
             session_factory=factory,
-            providers=[SimulatorProvider(scenario_obj, clock=clock)],
+            providers=[
+                KnowledgeStoreProvider(factory, knowledge_retriever),
+                SimulatorProvider(scenario_obj, clock=clock),
+            ],
             model=DeterministicModelProvider(scenario_obj),
             clock=clock,
             budget_policy=scenario_obj.budget,

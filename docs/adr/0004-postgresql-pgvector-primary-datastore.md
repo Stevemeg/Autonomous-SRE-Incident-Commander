@@ -1,6 +1,13 @@
 # ADR-0004: PostgreSQL + pgvector as the single primary datastore
 
-- **Status:** Accepted — pgvector implemented Phase 6 (`knowledge_chunk.embedding`, HNSW index, exact cosine search over a pre-filtered candidate set)
+- **Status:** Accepted — pgvector implemented Phase 6 (`knowledge_chunk.embedding`).
+  The actual query plan performs an **exact cosine scan** over the tenant- and
+  ACL-filtered candidate set, never an approximate/HNSW search: exact search over an
+  already-filtered set cannot silently drop an authorized result the way an ANN index
+  can, and at the corpus size this phase targets the exact scan is cheap (P6-07).
+  An `ix_knowledge_chunk_embedding_hnsw` HNSW index is created and kept in the schema
+  for the scale at which that trade-off reverses, but it is not read by any query today
+  and its performance has not been measured (see Validation below).
 - **Date:** 2026-09-04
 - **Deciders:** Project owner (pending approval)
 - **Spec reference:** §8, §13, §15
@@ -65,8 +72,13 @@ correct implementation.
 
 Scale does not argue otherwise. The corpus is runbooks, service docs, known errors and
 postmortems for a handful of tenants — thousands to low hundreds of thousands of chunks.
-pgvector with HNSW is comfortable in that range; a dedicated vector database earns its
-operational cost at a scale we are not near and may never reach.
+An exact cosine scan over the tenant- and ACL-filtered candidate set is what the query
+plan actually performs at that range - not HNSW, which exists in the schema but is not
+used by any query and has not been measured (P6-07: this ADR previously implied HNSW
+was in the production query path or had been benchmarked; neither is true). A dedicated
+vector database earns its operational cost at a scale we are not near and may never
+reach; production-scale retrieval latency for either approach remains unvalidated (see
+Validation below).
 
 Adopting a vector database at this scale would be the résumé-keyword adoption §20 forbids.
 
