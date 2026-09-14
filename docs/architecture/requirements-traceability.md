@@ -48,6 +48,29 @@ this count previously drifted apart), not production benchmarks.
 | FR-MEM-03 | `support_count()` counts independent incidents; the policy and the entry-construction code do not special-case `support_count == 1` into automatic promotion — every promotion, single-incident or not, still requires the same human decision. No auto-promotion path exists to guard against |
 | FR-MEM-04 | `MemoryGovernanceService.decide()`: human-only, not-the-proposer, permission-checked (`memory.promotion.decide`, seeded by migration `0008`), re-evaluates the policy at decision time; every decision — approve, decline, and every rejection at propose time — is recorded in the append-only `memory_write_decision` table. Mutation-tested: disabling the VERIFIED-verdict requirement in `evaluate()` makes `test_only_a_verified_verdict_counts` fail for both `not_verified` and `inconclusive` |
 
+## Phase 7 implementation evidence
+
+[`bounded-reflection.md`](./bounded-reflection.md) and `tests/orchestration/
+test_reflection.py`, `test_termination.py::TestReflectionDrivenTermination`,
+`test_hypothesis.py::TestBoundedReflection` implement the bounded-reflection portion of the
+following requirements. No live model provider exists (ADR-0016 unchanged) and no
+evaluation harness exists (Phase 11), so no accuracy, calibration or redundant-call-rate
+figure is claimed here even where a row below names one as its eventual validation.
+
+| Requirement | Implemented evidence and limits |
+|---|---|
+| FR-INV-01 | Unchanged from Phase 4: the planner selects from declared gaps. Phase 7 adds that a gap can now originate from a bounded-reflection decision (`continue_with_gap`, `collect_counter_evidence`) as well as from the planner's own analysis - both are ordinary `open_gaps` entries to the planner, no new selection mechanism |
+| FR-INV-02 | Hypothesise → gather → critique → revise → stop is now observable in the trace: the hypothesis engine's span carries `reflection_action`, `reflection_rule_id` and `reflection_overridden_reason`; `SC-0012-counter-evidence-revises-hypothesis` exercises the full cycle end to end. "Critique" and "revise" are code, not a second model call - see [ADR-0022](../adr/0022-bounded-reflection-without-a-new-node.md) |
+| FR-INV-04 | Unchanged mechanism (budget exhaustion still yields a partial result via R2/R3); reflection cannot bypass it because R1-R3 in `termination.py` are checked before `wants_to_stop` regardless of what reflection proposed |
+| FR-RCA-02 | Extended to hypothesis ids: `revise_hypothesis`/`collect_counter_evidence` naming a hypothesis this run never persisted is rejected by `reflection.py`'s G1 guard before any write, the same principle INV-5 already applies to evidence citations. `test_a_fabricated_reflection_target_is_rejected_through_the_real_kernel` proves no row is touched |
+| FR-RCA-04 | Extended: a `terminate_success`/`escalate` proposal is held to the identical actionability bar (`termination.is_actionable`) the planner's own `TERMINATE` already was, so reflection cannot manufacture certainty the planner could not. `test_an_unactionable_terminate_success_claim_does_not_escalate` is the direct test |
+
+**Not addressed by Phase 7, and not implied by the rows above:** FR-RCA-01 (accuracy
+against labels - needs Phase 11 and a real provider), FR-RCA-03 (calibration curve - same),
+FR-INV-05 (per-domain analyser strategies in G4 - untouched), FR-INV-07/08 (already
+partially true from Phase 4's step persistence; the redundant-call-rate *baseline* is
+explicitly a Phase 11 artefact), FR-EVD-01/02/04 (unchanged from Phase 4/6).
+
 - **Status:** Authored — Architecture Package. **Most requirements below are not implemented**; the note beneath says exactly which are, and on what evidence.
 - **Requirement definitions:** [`../prd/SRS.md`](../prd/SRS.md)
 - **Master specification:** [`../spec/MASTER_PROJECT_PROMPT_V3.md`](../spec/MASTER_PROJECT_PROMPT_V3.md)

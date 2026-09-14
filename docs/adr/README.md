@@ -1,11 +1,14 @@
 # Architecture Decision Records
 
-> **Nineteen records. Fourteen are Accepted.**
+> **Twenty records. Fifteen are Accepted.**
 >
 > ADRs 0001-0011 were written during the Architecture Package. Later implementation phases
 > accepted the decisions whose evidence now exists; the table below is authoritative for
 > current status. ADRs 0012-0014 were raised during Phase 3, 0015-0018 during Phase 4 and
-> its migration-history correction, and 0019 during Phase 5.
+> its migration-history correction, 0019 during Phase 5, and 0022 during Phase 7. ADR
+> numbers 0020 and 0021 are reserved by forward references left in the Phase 6 correction
+> (the `provider_kind` label defect and a retrieval-quality bound) and are not yet written;
+> Phase 7 numbers its own record 0022 rather than collide with them.
 
 ## Why ADRs are mandatory here
 
@@ -83,6 +86,7 @@ not replace an accepted ADR.
 | [0017](./0017-read-only-capability-ceiling.md) | A read-only capability ceiling enforced in three independent places | **`Accepted`** | 6, 7, 15 | 2026-09-07 |
 | [0018](./0018-migrations-are-historical-contracts.md) | Migrations are historical contracts and never read live application code | **`Accepted`** | 12, 15, 20 | 2026-09-09 |
 | [0019](./0019-transactional-signal-ingestion.md) | Transactional signal ingestion and durable investigation requests | **`Accepted`** | 12, 14, 15, 17 | 2026-09-11 |
+| [0022](./0022-bounded-reflection-without-a-new-node.md) | Bounded reflection extends the hypothesis engine's output, not a new graph node | **`Accepted`** | 3, 4, 15 | 2026-09-13 |
 
 ## Priority order for acceptance
 
@@ -122,6 +126,12 @@ during implementation become ADRs rather than being made silently:
 | [0016](./0016-deterministic-model-provider.md) | Two nodes are model-backed, but nothing in this phase can evaluate a model's output — so a live provider would buy an unreadable signal at the cost of determinism | `test_planner.py`, `test_hypothesis.py`, `test_scenarios.py` |
 | [0017](./0017-read-only-capability-ceiling.md) | The remediation authorization path is Phase 8; a registered write tool before it would be a capability authorized by nothing | `TestRiskCeiling`, `TestRefusals`, negative-tested boundary validator |
 | [0018](./0018-migrations-are-historical-contracts.md) | A migration deriving its table list from the live model registry silently changed what an earlier migration did, and broke fresh installs | `TestPinnedListsMatchHistory`, `TestMigrationsAreSelfContained`, `TestUpgradePaths` |
+
+## Decisions raised by Phase 7
+
+| ADR | Discovered because | Evidence |
+|---|---|---|
+| [0022](./0022-bounded-reflection-without-a-new-node.md) | Section 6.2 of the orchestration kernel doc named bounded reflection as deliberately deferred to Phase 7; building it required deciding whether it needed a thirteenth graph node or could extend the existing "model proposes, deterministic guard decides" pattern | `test_reflection.py`, `test_termination.py::TestReflectionDrivenTermination`, `test_hypothesis.py::TestBoundedReflection` |
 
 ## Candidate decisions still to be written
 

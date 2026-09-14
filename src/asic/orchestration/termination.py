@@ -37,6 +37,7 @@ from asic.domain.enums import (
     HypothesisStatus,
     IncidentStatus,
     PlannerAction,
+    ReflectionAction,
     TerminationReason,
 )
 
@@ -52,6 +53,62 @@ MIN_EVIDENCE_FOR_CONCLUSION: Final[int] = 2
 #: Fraction of the domains the planner declared gaps in that must have been answered before
 #: a conclusion is treated as adequately grounded.
 MIN_DOMAIN_COVERAGE: Final[float] = 0.5
+
+
+def best_hypothesis_of(hypotheses: Sequence[HypothesisRef]) -> HypothesisRef | None:
+    """The strongest live candidate, or ``None`` if there is not one.
+
+    Shared by the terminator and by :mod:`asic.orchestration.reflection`, so "which
+    hypothesis is the run's best answer right now" has exactly one definition. A superseded
+    or rejected hypothesis is not a candidate: it has already been replaced or discarded, and
+    counting it would let a stale conclusion outrank the one that replaced it.
+
+    ``hypotheses`` is deduplicated by id first, keeping the *last* occurrence. Graph state
+    accumulates hypothesis references append-only across a run (``operator.add``), so a
+    revision recorded later - the same id reappearing with ``status=superseded`` - must
+    override the entry an earlier round emitted, not merely sit alongside it.
+    """
+    latest: dict[str, HypothesisRef] = {}
+    for h in hypotheses:
+        latest[h.hypothesis_id] = h
+    candidates = [
+        h
+        for h in latest.values()
+        if h.status in (HypothesisStatus.PROPOSED, HypothesisStatus.ACCEPTED)
+    ]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda h: (h.confidence, -h.rank))
+
+
+def domain_coverage_of(attempted_domains: Sequence[str], degraded_domains: Sequence[str]) -> float:
+    """Fraction of the domains attempted that actually produced evidence."""
+    attempted = set(attempted_domains)
+    if not attempted:
+        return 0.0
+    degraded = set(degraded_domains)
+    return len(attempted - degraded) / len(attempted)
+
+
+def is_actionable(*, best: HypothesisRef | None, domain_coverage: float) -> bool:
+    """Whether the evidence genuinely supports handing a cause to a human.
+
+    Four conditions, all necessary, and all evaluated here rather than left to whichever
+    caller asks: the planner's own ``TERMINATE`` proposal and a bounded-reflection
+    ``terminate_success``/``escalate`` proposal must clear exactly the same bar, or a model
+    could reach the same outcome by choosing whichever vocabulary happens to be checked more
+    loosely. The model's stated confidence is only one of the four, and on its own it is the
+    weakest: a confident claim over one piece of evidence with a contradiction outstanding is
+    the exact shape of failure F4.
+    """
+    if best is None:
+        return False
+    return (
+        best.confidence >= MIN_ACTIONABLE_CONFIDENCE
+        and best.supporting_evidence_count >= MIN_EVIDENCE_FOR_CONCLUSION
+        and best.contradicting_evidence_count == 0
+        and domain_coverage >= MIN_DOMAIN_COVERAGE
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,6 +127,11 @@ class TerminationInputs:
     #: ledger because the refusal happens *before* the cost is paid, so the ledger still
     #: shows headroom afterwards.
     budget_refusal: BudgetKind | None = None
+    #: The validated bounded-reflection decision for this step, if reflection has run.
+    #: ``terminate_success``, ``terminate_uncertain`` and ``escalate`` are accepted here
+    #: alongside the planner's own ``TERMINATE`` action - a second route to the same five
+    #: categories, never a sixth outcome of its own.
+    reflection_action: ReflectionAction | None = None
 
     @property
     def unrecoverable_failures(self) -> tuple[NodeFailureRef, ...]:
@@ -77,23 +139,26 @@ class TerminationInputs:
 
     @property
     def best_hypothesis(self) -> HypothesisRef | None:
-        candidates = [
-            h
-            for h in self.hypotheses
-            if h.status in (HypothesisStatus.PROPOSED, HypothesisStatus.ACCEPTED)
-        ]
-        if not candidates:
-            return None
-        return max(candidates, key=lambda h: (h.confidence, -h.rank))
+        return best_hypothesis_of(self.hypotheses)
 
     @property
     def domain_coverage(self) -> float:
         """Fraction of the domains attempted that actually produced evidence."""
-        attempted = set(self.attempted_domains)
-        if not attempted:
-            return 0.0
-        degraded = set(self.degraded_domains)
-        return len(attempted - degraded) / len(attempted)
+        return domain_coverage_of(self.attempted_domains, self.degraded_domains)
+
+    @property
+    def wants_to_stop(self) -> bool:
+        """Whether *either* the planner or reflection has asked the run to end.
+
+        The two proposals are independent inputs to the same rule set, not competing
+        authorities: whichever component asked to stop is enough to reach R4 or R5, and
+        which one asked is preserved in the verdict's explanation, not discarded.
+        """
+        return self.planner_action is PlannerAction.TERMINATE or self.reflection_action in (
+            ReflectionAction.TERMINATE_SUCCESS,
+            ReflectionAction.TERMINATE_UNCERTAIN,
+            ReflectionAction.ESCALATE,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -174,12 +239,13 @@ def _planner_stopped(inputs: TerminationInputs) -> TerminationVerdict:
         if best is not None
         else "no hypothesis could be formed from the evidence gathered"
     )
+    stopped_by = "the planner" if inputs.planner_action is PlannerAction.TERMINATE else "reflection"
     return TerminationVerdict(
         should_terminate=True,
         rule_id="R5_planner_terminated_without_conclusion",
         reason=TerminationReason.INSUFFICIENT_EVIDENCE,
         incident_status=IncidentStatus.UNCERTAIN,
-        explanation=f"the planner stopped and {detail}",
+        explanation=f"{stopped_by} asked to stop and {detail}",
     )
 
 
@@ -187,22 +253,8 @@ def _continue(_: TerminationInputs) -> TerminationVerdict:
     return TerminationVerdict(should_terminate=False, rule_id="R6_continue")
 
 
-def _is_actionable(inputs: TerminationInputs) -> bool:
-    """Whether the evidence genuinely supports handing a cause to a human.
-
-    Four conditions, all necessary. The model's stated confidence is only one of them, and
-    on its own it is the weakest: a confident claim over one piece of evidence with a
-    contradiction outstanding is the exact shape of failure F4.
-    """
-    best = inputs.best_hypothesis
-    if best is None:
-        return False
-    return (
-        best.confidence >= MIN_ACTIONABLE_CONFIDENCE
-        and best.supporting_evidence_count >= MIN_EVIDENCE_FOR_CONCLUSION
-        and best.contradicting_evidence_count == 0
-        and inputs.domain_coverage >= MIN_DOMAIN_COVERAGE
-    )
+def _inputs_actionable(inputs: TerminationInputs) -> bool:
+    return is_actionable(best=inputs.best_hypothesis, domain_coverage=inputs.domain_coverage)
 
 
 #: Ordered, total. Evaluated top to bottom; the last rule always matches.
@@ -215,12 +267,12 @@ RULES: Final[tuple[_Rule, ...]] = (
     ),
     _Rule(
         "R4_actionable_cause_escalated",
-        lambda i: i.planner_action is PlannerAction.TERMINATE and _is_actionable(i),
+        lambda i: i.wants_to_stop and _inputs_actionable(i),
         _actionable,
     ),
     _Rule(
         "R5_planner_terminated_without_conclusion",
-        lambda i: i.planner_action is PlannerAction.TERMINATE,
+        lambda i: i.wants_to_stop,
         _planner_stopped,
     ),
     _Rule("R6_continue", lambda _: True, _continue),
@@ -259,6 +311,9 @@ __all__ = [
     "RULES",
     "TerminationInputs",
     "TerminationVerdict",
+    "best_hypothesis_of",
     "decide",
+    "domain_coverage_of",
     "domains_of",
+    "is_actionable",
 ]

@@ -3,13 +3,18 @@
 This directory holds every non-code artifact required by the master specification
 (section 16, "REQUIRED ARCHITECTURE/DOCUMENTATION").
 
-> **Current project stage: Phase 6 complete — operational knowledge, RAG and governed
-> memory.** A bounded, read-only, simulator-backed incident investigation runs end to end
-> through a typed graph with a capability broker, durable checkpointing and structured
-> traces, and can now retrieve versioned operational knowledge — authorization-first,
-> citation-backed — through the same broker as every other capability. A governed memory
-> write path lets a human, never a model and never storage alone, promote a verified
-> outcome or an operational fact into durable memory.
+> **Current project stage: Phase 7 complete — bounded investigation agents, evidence
+> reasoning and bounded reflection.** A bounded, read-only, simulator-backed incident
+> investigation runs end to end through a typed graph with a capability broker, durable
+> checkpointing and structured traces, retrieves versioned operational knowledge through
+> the same broker as every other capability, and now reflects on its own hypotheses within
+> hard structural limits: continuing on a different gap, deliberately seeking counter-
+> evidence, revising a hypothesis (superseding it, never silently replacing it), or
+> proposing a terminal outcome — always validated by a deterministic guard, never trusted
+> as the model stated it, and always resolved through the same five-category termination
+> rule set every other outcome already used. A governed memory write path lets a human,
+> never a model and never storage alone, promote a verified outcome or an operational fact
+> into durable memory.
 > **No remediation, no external integration, no API and no frontend exists**, and no
 > capability above risk tier `RO` is registered. No metric anywhere in this directory is a
 > measurement beyond what is explicitly labelled as measured on a stated corpus.
@@ -29,7 +34,8 @@ area and points to the document that owns the detail.
 | [`architecture/`](./architecture/) | A–Q package spine, architecture overview, C4, agent topology, tool registry, safety policy, memory/RAG, observability, data model/API, failure & recovery, traceability, CI/CD | **Authored** |
 | [`architecture/tenancy-and-rls.md`](./architecture/tenancy-and-rls.md) | How tenant isolation survives an application bug | **Implemented and tested** |
 | [`architecture/orchestration-kernel.md`](./architecture/orchestration-kernel.md) | The graph, node contracts, tool broker, budgets, checkpointing and trace model | **Implemented and tested** |
-| [`adr/`](./adr/) | 19 Architecture Decision Records | **14 Accepted**; the remainder proposed or deferred |
+| [`architecture/bounded-reflection.md`](./architecture/bounded-reflection.md) | The reflection decision loop: vocabulary, deterministic guards, hypothesis revision, failure handling | **Implemented and tested** |
+| [`adr/`](./adr/) | 20 Architecture Decision Records | **15 Accepted**; the remainder proposed or deferred |
 | [`security/`](./security/) | Threat model (§L) and the active repository security checklist | **Authored** |
 | [`evaluation/`](./evaluation/) | Evaluation harness architecture (§I) | **Authored** |
 
@@ -46,6 +52,9 @@ area and points to the document that owns the detail.
    Phase 4 built, what it deliberately did not, and what remains unmeasured.
 9. [`architecture/telemetry-ingestion.md`](./architecture/telemetry-ingestion.md) — normalized
    signals, durable receipts, correlation explanations and the recoverable investigation handoff.
+10. [`architecture/bounded-reflection.md`](./architecture/bounded-reflection.md) — the
+    reflection decision loop Phase 7 added: vocabulary, deterministic guards, hypothesis
+    revision and how it stays inside the existing five-category termination model.
 
 ### If you are reviewing for security
 
@@ -74,6 +83,7 @@ is the defect.
 | Entities, invariants, API boundaries | [`architecture/data-model-and-api.md`](./architecture/data-model-and-api.md) |
 | Tenancy, RLS, composite keys | [`architecture/tenancy-and-rls.md`](./architecture/tenancy-and-rls.md) |
 | Graph, node contracts, broker, budgets, checkpointing | [`architecture/orchestration-kernel.md`](./architecture/orchestration-kernel.md) |
+| Bounded reflection: vocabulary, guards, hypothesis revision | [`architecture/bounded-reflection.md`](./architecture/bounded-reflection.md) |
 | Threats and security invariants | [`security/THREAT_MODEL.md`](./security/THREAT_MODEL.md) |
 | Scenarios, judges, metrics, regression | [`evaluation/EVALUATION_ARCHITECTURE.md`](./evaluation/EVALUATION_ARCHITECTURE.md) |
 | Technology decisions | [`adr/`](./adr/) |

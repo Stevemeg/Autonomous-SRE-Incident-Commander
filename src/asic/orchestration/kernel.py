@@ -819,6 +819,7 @@ def _initial_state(
         "degraded_domains": [],
         "capability_menu": [],
         "last_decision": None,
+        "reflection_decision": None,
         "budget": BudgetSnapshot(consumed=budget.ledger.to_dict(), remaining=budget.remaining()),
         "budget_refusal": None,
         "pending_approval": None,

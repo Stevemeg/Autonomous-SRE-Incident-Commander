@@ -111,6 +111,7 @@ def terminator_node(deps: NodeDependencies) -> Any:
         ) as span:
             budget = _budget_state(state, deps)
             decision = state.get("last_decision")
+            reflection = state.get("reflection_decision")
             inputs = TerminationInputs(
                 budget=budget,
                 hypotheses=state.get("hypotheses", []),
@@ -122,6 +123,7 @@ def terminator_node(deps: NodeDependencies) -> Any:
                 planner_action=decision.action if decision else None,
                 open_gaps=state.get("open_gaps", []),
                 budget_refusal=_refusal(state),
+                reflection_action=reflection.action if reflection else None,
             )
             verdict = decide(inputs)
 

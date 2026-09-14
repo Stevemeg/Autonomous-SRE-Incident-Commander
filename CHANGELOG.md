@@ -22,6 +22,56 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added — Phase 7 investigation agents, evidence reasoning and bounded reflection
+
+- Added bounded reflection: the hypothesis engine's structured output gains an optional
+  `reflection` proposal (`continue_with_gap`, `collect_counter_evidence`,
+  `revise_hypothesis`, `terminate_success`, `terminate_uncertain`, `escalate` —
+  `ReflectionAction`, a closed vocabulary), validated by a new deterministic guard chain
+  (`asic.orchestration.reflection.decide_reflection`) on the same "the model's choice is a
+  proposal" principle already used for the planner. No new graph node, no new model call,
+  no schema migration — see [ADR-0022](docs/adr/0022-bounded-reflection-without-a-new-node.md).
+- Added hypothesis revision: `revise_hypothesis` supersedes a named hypothesis
+  (`status=superseded`, `superseded_by_id` set) rather than leaving a stale conclusion
+  standing beside a contradicting new one, reusing schema Phase 4 already carried.
+  `asic.orchestration.termination.best_hypothesis_of` now deduplicates hypothesis
+  references by id, keeping the latest status, so a superseded hypothesis cannot still be
+  selected as the run's best answer from stale graph state.
+- Extended `asic.orchestration.termination`: `TerminationInputs.reflection_action` and
+  `wants_to_stop` let a reflection-driven terminal proposal (`terminate_success`/
+  `terminate_uncertain`/`escalate`) feed the same R4/R5 rules the planner's own
+  `TERMINATE` action already used, so a run still ends in exactly one of the five
+  existing termination categories — never a sixth. `is_actionable()` is now a standalone,
+  shared function so both proposal sources are held to the identical actionability bar.
+- Added a `"RANK:<n>"`/`"LATEST"` sentinel for `target_hypothesis_id`, mirroring the
+  existing evidence-citation sentinels, so a deterministic scenario script can name a
+  hypothesis before its generated id exists.
+- Added `EvidenceFailureCategory` (`NO_EVIDENCE_FOUND`, `EVIDENCE_COLLECTION_FAILED`,
+  `EVIDENCE_UNAUTHORIZED`, `INVESTIGATION_TIMEOUT`, `MODEL_FAILURE`, `TOOL_FAILURE`,
+  `UNCERTAIN`) as an additive classification on `NodeFailureRef.category`, alongside the
+  existing free-form `error_type` rather than replacing it.
+- Added scenario `SC-0012-counter-evidence-revises-hypothesis`: reflection asks for
+  counter-evidence rather than accepting a plausible first hypothesis, the counter-evidence
+  changes the conclusion, and the original hypothesis is superseded — run end to end
+  through the real kernel in `tests/e2e/test_scenarios.py`.
+- Added two bounded-cardinality metrics: `asic.reflection.decisions` (by action and guard
+  rule id) and `asic.hypothesis.revisions`.
+- Security: a `revise_hypothesis`/`collect_counter_evidence` proposal naming a hypothesis
+  this run never persisted — a fabricated id, an evidence id, or an id from another run —
+  is rejected before any database write, driven through the real kernel and a real
+  PostgreSQL database (`tests/orchestration/test_hypothesis.py::TestBoundedReflection::
+  test_a_fabricated_reflection_target_is_rejected_through_the_real_kernel`). Hostile free
+  text in a reflection proposal's `rationale`/`gap` fields is confirmed inert — there is no
+  mechanism by which it could grant a capability, bypass approval, or cross a tenant
+  boundary, because nothing parses those fields as anything but data.
+- Mutation-tested: disabling the actionability guard in `reflection.py` is shown to let an
+  unsupported `terminate_success` claim through, confirming the guard — not something else
+  — is what stops it (`tests/orchestration/test_reflection.py`).
+- No remediation planner, executor, approval workflow, production write capability, or
+  later-phase functionality was added. No live model provider was wired (ADR-0016
+  unchanged); no RCA-accuracy, calibration, or redundant-call-rate figure is claimed —
+  those require Phase 11's evaluation harness and a real provider, neither of which exists.
+
 ### Added — Phase 6 operational knowledge, RAG and governed memory
 
 - Added versioned, idempotent knowledge ingestion (`KnowledgeSource`/`KnowledgeDocument`/

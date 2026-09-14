@@ -43,6 +43,7 @@ from asic.contracts.state import (
     HypothesisRef,
     InvestigationObjective,
     PlannerDecisionRef,
+    ReflectionDecisionRef,
     RunIdentity,
     StepRef,
     TraceContext,
@@ -72,6 +73,7 @@ _EPHEMERAL_KEYS: Final[tuple[str, ...]] = (
     "degraded_domains",
     "capability_menu",
     "last_decision",
+    "reflection_decision",
     "budget",
     "budget_refusal",
     "pending_approval",
@@ -336,6 +338,11 @@ def rehydrate(
         "last_decision": (
             PlannerDecisionRef.model_validate(stored["last_decision"])
             if stored.get("last_decision")
+            else None
+        ),
+        "reflection_decision": (
+            ReflectionDecisionRef.model_validate(stored["reflection_decision"])
+            if stored.get("reflection_decision")
             else None
         ),
         "budget": (

@@ -1,12 +1,14 @@
 # Orchestration Kernel
 
-- **Status:** **Implemented and tested** — Phase 4.
-- **Master specification references:** Sections 4, 5, 7, 11, 12, 15, 17
-- **Related:** [`agent-topology.md`](./agent-topology.md) · [`tool-registry.md`](./tool-registry.md) · [`failure-and-recovery.md`](./failure-and-recovery.md) · [`observability.md`](./observability.md) · [ADR-0015](../adr/0015-domain-owned-checkpointing.md) · [ADR-0016](../adr/0016-deterministic-model-provider.md) · [ADR-0017](../adr/0017-read-only-capability-ceiling.md)
+- **Status:** **Implemented and tested** — Phase 4, extended by Phase 7 (bounded reflection).
+- **Master specification references:** Sections 3, 4, 5, 7, 11, 12, 15, 17
+- **Related:** [`agent-topology.md`](./agent-topology.md) · [`tool-registry.md`](./tool-registry.md) · [`failure-and-recovery.md`](./failure-and-recovery.md) · [`observability.md`](./observability.md) · [`bounded-reflection.md`](./bounded-reflection.md) · [ADR-0015](../adr/0015-domain-owned-checkpointing.md) · [ADR-0016](../adr/0016-deterministic-model-provider.md) · [ADR-0017](../adr/0017-read-only-capability-ceiling.md) · [ADR-0022](../adr/0022-bounded-reflection-without-a-new-node.md)
 
 This document describes what Phase 4 built: a deterministic, typed, bounded, tenant-aware
 execution substrate on which the investigation agents can safely operate. It is **read-only
-and simulator-backed**. Nothing here mutates infrastructure, and nothing here can.
+and simulator-backed**. Nothing here mutates infrastructure, and nothing here can. Phase 7
+extended the hypothesis engine with bounded reflection (section 6.2); the topology, the
+tool boundary and the read-only ceiling are unchanged.
 
 ---
 
@@ -206,11 +208,29 @@ override is recorded with its reason:
 
 ### 6.2 Reflection
 
-Not implemented, and deliberately. The loop is plan → collect → analyse → plan, bounded by
-iteration and tool-call budgets. A critique-and-revise cycle needs the evaluation harness to
-show whether it improves anything; adding it now would add cost and latency to a system that
-cannot yet measure the benefit, which is the shape of adding a feature because the project
-is called agentic. Phase 7 owns it.
+Implemented in Phase 7, and bounded the same way the planner is: the hypothesis engine's
+model call is asked for an optional `reflection` decision alongside its hypotheses, and
+`asic.orchestration.reflection.decide_reflection` validates the proposal before anything
+acts on it - continue on a gap, seek counter-evidence, revise a hypothesis, or propose a
+terminal outcome. No new graph node was added (ADR-0022): reflection reuses the hypothesis
+engine's existing model call and the existing termination rule engine, rather than
+duplicating either.
+
+Full design in `docs/architecture/bounded-reflection.md`. In outline:
+
+| Guard | Rejects | Falls back to |
+|---|---|---|
+| G1 | A target hypothesis id this run never persisted, or none given for a targeted action | Continue on an open gap, escalate, or terminate uncertain |
+| G2 | A revision with no newly formed hypothesis to supersede onto, or a target already superseded | Same fallback ladder |
+| G3 | `continue_with_gap` with no gap proposed and none open | Same fallback ladder |
+| G4 | `terminate_success` when the evidence does not clear the same actionability bar R4 uses | Downgraded to `terminate_uncertain` |
+| G5 | `escalate` with no hypothesis to escalate | Downgraded to `terminate_uncertain` |
+
+Reflection's three terminal actions (`terminate_success`, `terminate_uncertain`, `escalate`)
+are not a second way for a run to end: they are additional inputs to the same `decide()`
+in section 7, so a reflection-driven stop is bound by exactly the same R1-R6 rule set a
+planner-driven one is, and a run still ends in exactly one of the five categories in
+section 7 - never a sixth.
 
 ---
 
@@ -224,8 +244,8 @@ rule that produced it.
 | R1 | Unrecoverable node failure | `unrecoverable_failure` | `failed` |
 | R2 | Wall clock exhausted | `wall_clock_timeout` | `uncertain` |
 | R3 | Any other budget exhausted or refused | `budget_exhausted` | `uncertain` |
-| R4 | Planner stopped **and** the evidence supports an actionable cause | `human_escalation` | `escalated` |
-| R5 | Planner stopped without one | `insufficient_evidence` | `uncertain` |
+| R4 | The planner or reflection asked to stop, **and** the evidence supports an actionable cause | `human_escalation` | `escalated` |
+| R5 | The planner or reflection asked to stop without one | `insufficient_evidence` | `uncertain` |
 | R6 | *(matches unconditionally)* — continue | — | — |
 
 **`resolved` is not reachable, and that is correct.** This deployment gathers evidence and
@@ -236,6 +256,9 @@ Reporting resolution would claim an outcome the system did not produce.
 R4 requires four conditions, all necessary: confidence at or above 0.55, at least two
 supporting records, **zero** contradicting records, and at least half the attempted domains
 answering. The model's stated confidence is only one of the four, and on its own the weakest.
+`is_actionable()` is a standalone function precisely so reflection's `terminate_success` and
+`escalate` proposals are held to the identical bar (section 6.2) rather than a second,
+possibly looser one.
 
 ---
 
@@ -500,10 +523,12 @@ Stated because they are real, not because they are comfortable.
 
 | Limitation | Consequence | Where it is addressed |
 |---|---|---|
-| No real model provider | Reasoning quality is untested and unclaimed | Phase 7, with Phase 11 to measure it |
+| No real model provider | Reasoning quality is untested and unclaimed. Phase 7 added bounded reflection to the existing model-backed hypothesis call; it did not add a live provider (ADR-0016 still applies unchanged) | Phase 11, when a measurable evaluation harness exists |
 | No real adapters | Behaviour against live telemetry is unproven | Phase 10 |
-| Single-service evidence collection | A multi-service incident collects for the first service in scope | Phase 7 analyser strategies |
+| Single-service evidence collection | A multi-service incident collects for the first service in scope. Phase 7 did not touch the evidence collector's domain strategies - it added reflection and hypothesis revision over evidence already gathered, not new collection strategies | Not yet scheduled; revisit if a later phase's evidence shows this matters |
 | Concurrency under a shared pool untested | Lease correctness is tested; contention is not measured | Phase 15 |
 | No performance measured | No latency, throughput or cost figure exists | Phase 15 |
 | **Node execution is not preemptible** | A node that blocks in pure Python is bounded only by the timeouts *inside* it | §11.2, Phase 15 obligation |
 | `0005` cannot be downgraded once a tool has run | Correct: `ON DELETE RESTRICT` protects execution history | Deprecate a catalogue entry rather than deleting it ([ADR-0018](../adr/0018-migrations-are-historical-contracts.md)) |
+| Reflection shares the hypothesis engine's model call | It cannot ask a follow-up question the same call did not already answer; a revision or counter-evidence request is proposed in the same response that formed the hypothesis it concerns | ADR-0022's documented revisit trigger |
+| A revision supersedes at most one hypothesis per step | `revise_hypothesis` names one target; superseding several requires several bounded-reflection steps, one per iteration | Not measured as a real constraint yet - no scenario has needed more than one |

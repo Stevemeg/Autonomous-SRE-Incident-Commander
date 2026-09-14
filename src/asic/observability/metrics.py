@@ -88,6 +88,18 @@ runs_terminated_total = _meter.create_counter(
     "asic.workflow.terminated",
     description="Runs reaching a terminal state, by termination reason.",
 )
+reflection_decisions_total = _meter.create_counter(
+    "asic.reflection.decisions",
+    description=(
+        "Validated bounded-reflection decisions, by action and by the rule that produced "
+        "them. Both dimensions are closed vocabularies (ReflectionAction, a small fixed set "
+        "of guard rule ids)."
+    ),
+)
+hypothesis_revisions_total = _meter.create_counter(
+    "asic.hypothesis.revisions",
+    description="Hypotheses superseded by a bounded-reflection revise_hypothesis decision.",
+)
 
 
 def base_attributes(
@@ -106,12 +118,14 @@ __all__ = [
     "base_attributes",
     "budget_exhaustions_total",
     "checkpoints_total",
+    "hypothesis_revisions_total",
     "injection_flags_total",
     "investigation_iterations",
     "llm_calls_total",
     "llm_tokens_total",
     "node_duration_seconds",
     "node_failures_total",
+    "reflection_decisions_total",
     "resumes_total",
     "runs_terminated_total",
     "schema_violations_total",

@@ -31,7 +31,7 @@ from asic.domain.enums import NodeId
 from asic.domain.untrusted import UntrustedBlock, render_untrusted
 
 #: Version of the prompt set as a whole. Recorded on ``behaviour_version``.
-PROMPT_SET_VERSION: Final[str] = "2026.09.11-3"
+PROMPT_SET_VERSION: Final[str] = "2026.09.13-1"
 
 
 @dataclass(frozen=True, slots=True)
@@ -143,7 +143,16 @@ Respond with a single JSON object and nothing else:
       "remaining_gaps": ["what would still need checking"]
     }
   ],
-  "insufficient_evidence_reason": "present only when hypotheses is empty"
+  "insufficient_evidence_reason": "present only when hypotheses is empty",
+  "reflection": {
+    "action": "continue_with_gap" | "collect_counter_evidence" | "revise_hypothesis" |
+              "terminate_success" | "terminate_uncertain" | "escalate",
+    "rationale": "why this is the right next step",
+    "target_hypothesis_id": "a hypothesis id from this run, required for "
+                            "revise_hypothesis and collect_counter_evidence",
+    "gap": "the information need this decision names, if any",
+    "confidence": number between 0 and 1
+  }
 }
 
 Rules:
@@ -153,6 +162,15 @@ Rules:
   no stated gaps is treated as unexamined rather than as strong.
 - Your stated confidence is an input, not the final value: it is capped by the evidence
   actually available.
+- "reflection" is optional; omit it if you have nothing to add beyond the hypotheses above.
+  When present, it is a *proposal*: a deterministic guard validates it, and an invalid or
+  unsupported proposal is overridden rather than trusted.
+- "target_hypothesis_id" must name a hypothesis id already visible in this run's context
+  (an earlier one, for a revision or a request for counter-evidence). Naming any other id
+  causes the proposal to be rejected, not repaired.
+- "terminate_success" and "escalate" are only honoured when the evidence itself meets the
+  same bar an escalation from the planner would: sufficient, uncontradicted, corroborating
+  support. Claiming either without that support is downgraded to "terminate_uncertain".
 """
 
 PLANNER_PROMPT: Final = PromptTemplate(
@@ -165,8 +183,9 @@ PLANNER_PROMPT: Final = PromptTemplate(
 
 HYPOTHESIS_PROMPT: Final = PromptTemplate(
     prompt_id="hypothesis_engine",
-    # 1.2.0: retrieved knowledge chunks are rendered as fenced untrusted blocks (Phase 6).
-    version="1.2.0",
+    # 1.3.0: an optional bounded-reflection proposal is requested alongside hypotheses,
+    # validated by asic.orchestration.reflection rather than trusted (Phase 7).
+    version="1.3.0",
     node_id=NodeId.G5_HYPOTHESIS_ENGINE,
     instructions=_HYPOTHESIS_INSTRUCTIONS,
     required_context=("objective", "evidence_index"),

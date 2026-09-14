@@ -8,21 +8,25 @@ approval, verifies outcomes, and preserves operational memory.
 
 ---
 
-> ## Project status: investigation is now backed by governed operational knowledge and memory
+> ## Project status: bounded investigation agents now reflect on their own hypotheses
 >
 > A simulated incident can be investigated end to end through a typed, bounded,
 > tenant-aware orchestration graph — planning, evidence collection through a capability
-> broker (now including read-only retrieval over an operational knowledge base),
-> evidence-backed hypotheses, deterministic termination, durable checkpointing and a full
-> execution trace. **It is still read-only in effect: no capability above risk tier `RO` is
-> registered, and none can be until the policy gate exists. Phase 6 adds a governed write
-> path for durable operational memory, gated by human approval — it is not remediation.**
+> broker (including read-only retrieval over an operational knowledge base),
+> evidence-backed hypotheses, **bounded reflection over those hypotheses (continue on a
+> different gap, seek counter-evidence, revise a hypothesis by superseding it, or propose a
+> terminal outcome — every proposal validated by a deterministic guard, never trusted as
+> stated)**, deterministic termination, durable checkpointing and a full execution trace.
+> **It is still read-only in effect: no capability above risk tier `RO` is registered, and
+> none can be until the policy gate exists. Phase 6 added a governed write path for durable
+> operational memory, gated by human approval — it is not remediation. Phase 7 adds no
+> write capability of any kind.**
 >
 > | | |
 > |---|---|
-> | **Completed** | Phase 0 bootstrap · Phase 1 requirements · Phase 2 architecture · Phase 3 persistence · Phase 4 orchestration · Phase 5 telemetry ingestion and correlation · **Phase 6 operational knowledge, RAG and governed memory** |
-> | **In progress** | Nothing — Phase 6 is complete |
-> | **Next** | Not yet scoped |
+> | **Completed** | Phase 0 bootstrap · Phase 1 requirements · Phase 2 architecture · Phase 3 persistence · Phase 4 orchestration · Phase 5 telemetry ingestion and correlation · Phase 6 operational knowledge, RAG and governed memory · **Phase 7 investigation agents, evidence reasoning and bounded reflection** |
+> | **In progress** | Nothing — Phase 7 is complete |
+> | **Next** | Not yet scoped. Remediation, approval and execution (Phase 8) require explicit review and approval before work begins |
 > | **Remediation, integrations, API, frontend** | None. Deliberately absent, and structurally prevented |
 >
 > Phase 4 delivered five graph nodes under enforced contracts, a tool broker that is the
@@ -32,10 +36,15 @@ approval, verifies outcomes, and preserves operational memory.
 > durable delivery decisions, explainable correlation, and a recoverable investigation
 > request. Phase 6 adds versioned knowledge ingestion, authorization-first hybrid
 > retrieval, forgery-resistant citations, and a governed memory write path where a human
-> — never a model, never storage alone — decides what becomes durable. See
-> [telemetry ingestion](docs/architecture/telemetry-ingestion.md) and
-> [memory and RAG](docs/architecture/memory-and-rag.md) for guarantees, tests, and explicit
-> limitations.
+> — never a model, never storage alone — decides what becomes durable. Phase 7 adds a
+> bounded reflection decision on top of the existing hypothesis engine — no new graph node,
+> no new model call, no schema migration ([ADR-0022](docs/adr/0022-bounded-reflection-without-a-new-node.md))
+> — and hypothesis revision that supersedes a hypothesis rather than silently leaving a
+> stale one standing beside it. See
+> [telemetry ingestion](docs/architecture/telemetry-ingestion.md),
+> [memory and RAG](docs/architecture/memory-and-rag.md) and
+> [bounded reflection](docs/architecture/bounded-reflection.md) for guarantees, tests, and
+> explicit limitations.
 > The repository gates include the full pytest suite against an unprivileged PostgreSQL role,
 > strict typing, lint/format, migration drift and documentation/security validation.
 >
@@ -212,7 +221,7 @@ section O.
 | 4 | Agent state machine, planner, tool registry and orchestration | **Complete** |
 | 5 | Telemetry ingestion, alert correlation and incident lifecycle | **Complete** |
 | 6 | RAG, operational knowledge and governed memory | **Complete** |
-| 7 | Investigation agents, hypothesis management and bounded reflection | Not started |
+| 7 | Investigation agents, hypothesis management and bounded reflection | **Complete** |
 | 8 | Remediation planning, policy gates, human approval and verification | Not started |
 | 9 | Backend APIs and frontend incident-command dashboard | Not started |
 | 10 | External integrations | Not started |

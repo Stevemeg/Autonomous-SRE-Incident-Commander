@@ -764,6 +764,75 @@ class PlannerAction(StrEnum):
 
 
 @unique
+class ReflectionAction(StrEnum):
+    """The only six things a bounded-reflection step may decide, once evidence exists.
+
+    Phase 7 (master specification section 3). A closed set for the same reason
+    :class:`PlannerAction` is one: the model proposes a member of this vocabulary, never a
+    free-form instruction, and :mod:`asic.orchestration.reflection` is the only place a
+    proposal is turned into a decision. Terminal members do not end a run by themselves -
+    they are inputs the deterministic termination rule set (``termination.py``) accepts
+    alongside the planner's own ``TERMINATE`` action, so a run still ends in exactly one of
+    the five categories in :class:`TerminationReason` and never in a sixth, reflection-only
+    outcome.
+    """
+
+    #: Keep investigating; the gap named on the decision is the one to close next.
+    CONTINUE_WITH_GAP = "continue_with_gap"
+    #: Deliberately seek evidence that would contradict the leading hypothesis, rather than
+    #: more evidence that would merely agree with it.
+    COLLECT_COUNTER_EVIDENCE = "collect_counter_evidence"
+    #: Supersede a named hypothesis with a better-supported one formed this same step.
+    REVISE_HYPOTHESIS = "revise_hypothesis"
+    #: Propose that the leading hypothesis is sufficiently supported to stop on. Accepted
+    #: only if the same actionability guard the planner's own proposal must pass also
+    #: passes here; the read-only kernel still cannot verify a fix, so this is realised as
+    #: :attr:`TerminationReason.HUMAN_ESCALATION`, never as ``SUCCESS``.
+    TERMINATE_SUCCESS = "terminate_success"
+    #: Propose stopping because the evidence does not, and is not expected to, distinguish a
+    #: cause. Realised as :attr:`TerminationReason.INSUFFICIENT_EVIDENCE`.
+    TERMINATE_UNCERTAIN = "terminate_uncertain"
+    #: Propose handing the investigation to a human now, independent of confidence -
+    #: contradictory evidence, a stalled loop, or a finding a human should see regardless of
+    #: whether it clears the actionability bar.
+    ESCALATE = "escalate"
+
+
+@unique
+class EvidenceFailureCategory(StrEnum):
+    """Why one node's step could not produce what was asked of it.
+
+    Distinct from :class:`TerminationReason`, which is why the *run* stopped: several of
+    these can occur inside a run that continues afterwards with reduced coverage. Recorded
+    on :class:`~asic.contracts.state.NodeFailureRef` as an additional, optional
+    classification alongside the existing free-form ``error_type`` - additive, so it never
+    changes the meaning of a value already being asserted on elsewhere.
+    """
+
+    #: A source answered successfully with nothing in it. Not a failure; recorded here only
+    #: when reflection or the terminator must explain why no hypothesis could be formed at
+    #: all, so "we found nothing" is never confused with "something broke".
+    NO_EVIDENCE_FOUND = "no_evidence_found"
+    #: An adapter could not complete a requested collection (error, timeout, malformed
+    #: result). Corresponds to the tool broker's own failure outcomes.
+    EVIDENCE_COLLECTION_FAILED = "evidence_collection_failed"
+    #: A capability, scope or manifest check refused the request. Distinct from a source
+    #: failure: nothing was attempted because it was not permitted.
+    EVIDENCE_UNAUTHORIZED = "evidence_unauthorized"
+    #: The run's wall-clock deadline was reached. Mirrors
+    #: :attr:`TerminationReason.WALL_CLOCK_TIMEOUT`.
+    INVESTIGATION_TIMEOUT = "investigation_timeout"
+    #: The model provider failed, or its output could not be schema-validated after the
+    #: permitted repair attempt.
+    MODEL_FAILURE = "model_failure"
+    #: A tool call reached its adapter and the adapter failed or timed out.
+    TOOL_FAILURE = "tool_failure"
+    #: The evidence gathered exists but does not, and is not expected to, distinguish a
+    #: cause. Mirrors :attr:`TerminationReason.INSUFFICIENT_EVIDENCE`.
+    UNCERTAIN = "uncertain"
+
+
+@unique
 class OperationClass(StrEnum):
     """Retry classification from ``docs/architecture/failure-and-recovery.md`` section 1.
 

@@ -43,12 +43,14 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from asic.domain.enums import (
     EvidenceDomain,
+    EvidenceFailureCategory,
     HypothesisStatus,
     InvestigationPhase,
     InvestigationStepStatus,
     NodeId,
     PlannerAction,
     ProvenanceLabel,
+    ReflectionAction,
 )
 
 #: Longest headline retained in graph state for one piece of evidence. Enough for an
@@ -133,6 +135,33 @@ class PlannerDecisionRef(_Frozen):
     overridden_reason: str | None = None
 
 
+class ReflectionDecisionRef(_Frozen):
+    """What one bounded-reflection step decided, and why.
+
+    Produced by the hypothesis engine's structured output and then passed through
+    :func:`asic.orchestration.reflection.decide_reflection`, which is what makes ``action``
+    here the *validated* decision rather than the model's raw proposal: ``overridden_reason``
+    is set whenever the two differ, on exactly the same principle as
+    :class:`PlannerDecisionRef.overridden_reason`.
+    """
+
+    action: ReflectionAction
+    rationale: str
+    #: The hypothesis a ``revise_hypothesis`` or ``collect_counter_evidence`` decision
+    #: concerns. Checked against this run's persisted hypotheses before it is trusted;
+    #: never a hypothesis id from anywhere else.
+    target_hypothesis_id: str | None = None
+    #: The information gap a non-terminal decision names. Folded into ``open_gaps`` so the
+    #: next planning step sees it like any other gap.
+    gap: str | None = None
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    #: Set when the deterministic guards in ``reflection.py`` overrode the model's proposed
+    #: action - an unknown target id, a missing gap, or a terminal claim the evidence does
+    #: not support.
+    overridden_reason: str | None = None
+    rule_id: str = ""
+
+
 class NodeFailureRef(_Frozen):
     """A typed failure recorded against the run.
 
@@ -147,6 +176,11 @@ class NodeFailureRef(_Frozen):
     recoverable: bool
     occurred_at: str
     stage: str | None = None
+    #: Phase 7's distinguishing vocabulary (master specification section 8), additive to
+    #: ``error_type`` rather than a replacement for it: no failure recorded before this
+    #: field existed changes meaning, and a category is only ever added, never inferred
+    #: retroactively from ``error_type`` text.
+    category: EvidenceFailureCategory | None = None
 
 
 class PendingApproval(_Frozen):
@@ -242,6 +276,10 @@ class GraphState(TypedDict, total=False):
     degraded_domains: list[str]
     capability_menu: list[str]
     last_decision: PlannerDecisionRef | None
+    #: The validated outcome of the last bounded-reflection step, if one has run yet.
+    #: ``None`` until the hypothesis engine has formed at least one hypothesis - reflection
+    #: has nothing to reflect on before then.
+    reflection_decision: ReflectionDecisionRef | None
     budget: BudgetSnapshot
     #: Set when a node was *refused* a step because taking it would exhaust a budget. The
     #: ledger alone cannot express this: the refusal happens before the cost is paid, so a
@@ -303,6 +341,7 @@ __all__ = [
     "NodeFailureRef",
     "PendingApproval",
     "PlannerDecisionRef",
+    "ReflectionDecisionRef",
     "RunIdentity",
     "StepRef",
     "TraceContext",

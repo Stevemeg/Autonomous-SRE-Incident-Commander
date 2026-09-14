@@ -19,12 +19,14 @@ from asic.domain.enums import (
     IncidentStatus,
     NodeId,
     PlannerAction,
+    ReflectionAction,
     TerminationReason,
 )
 from asic.orchestration.termination import (
     MIN_ACTIONABLE_CONFIDENCE,
     RULES,
     TerminationInputs,
+    best_hypothesis_of,
     decide,
 )
 
@@ -298,6 +300,125 @@ class TestRuleSetShape:
         empty = _inputs()
         for rule in RULES[:-1]:
             assert rule.matches(empty) is False, f"{rule.rule_id} matched a fresh run"
+
+
+class TestReflectionDrivenTermination:
+    """A terminal reflection decision is validated exactly like the planner's own.
+
+    Master specification section 3: reflection's terminal members are *inputs* to this same
+    rule set, never a second authority and never a sixth outcome.
+    """
+
+    def test_escalate_from_reflection_is_validated_by_the_same_actionability_gate(self) -> None:
+        verdict = decide(
+            _inputs(
+                hypotheses=[_hypothesis(confidence=0.86, supporting=3)],
+                reflection_action=ReflectionAction.ESCALATE,
+                attempted_domains=["metrics", "logs", "deployments"],
+                evidence_count=3,
+            )
+        )
+        assert verdict.reason is TerminationReason.HUMAN_ESCALATION
+        assert verdict.incident_status is IncidentStatus.ESCALATED
+        assert verdict.rule_id == "R4_actionable_cause_escalated"
+
+    def test_terminate_success_from_reflection_over_weak_evidence_is_not_escalated(self) -> None:
+        verdict = decide(
+            _inputs(
+                hypotheses=[_hypothesis(confidence=0.99, supporting=1)],
+                reflection_action=ReflectionAction.TERMINATE_SUCCESS,
+                attempted_domains=["metrics"],
+                evidence_count=1,
+            )
+        )
+        assert verdict.reason is TerminationReason.INSUFFICIENT_EVIDENCE
+        assert verdict.rule_id == "R5_planner_terminated_without_conclusion"
+
+    def test_terminate_uncertain_from_reflection_ends_the_run_without_a_planner_verdict(
+        self,
+    ) -> None:
+        verdict = decide(
+            _inputs(
+                reflection_action=ReflectionAction.TERMINATE_UNCERTAIN,
+                planner_action=None,
+            )
+        )
+        assert verdict.should_terminate
+        assert verdict.reason is TerminationReason.INSUFFICIENT_EVIDENCE
+
+    def test_a_non_terminal_reflection_action_does_not_end_the_run(self) -> None:
+        verdict = decide(
+            _inputs(
+                reflection_action=ReflectionAction.CONTINUE_WITH_GAP,
+                planner_action=None,
+            )
+        )
+        assert verdict.should_terminate is False
+        assert verdict.rule_id == "R6_continue"
+
+    def test_budget_exhaustion_still_outranks_a_reflection_escalation(self) -> None:
+        verdict = decide(
+            _inputs(
+                budget=BudgetState(
+                    policy=BudgetPolicy(max_tool_calls=2), ledger=BudgetLedger(tool_calls=2)
+                ),
+                hypotheses=[_hypothesis()],
+                reflection_action=ReflectionAction.ESCALATE,
+                attempted_domains=["metrics", "logs"],
+                evidence_count=4,
+            )
+        )
+        assert verdict.reason is TerminationReason.BUDGET_EXHAUSTED
+
+    def test_disabling_wants_to_stop_would_leave_a_reflection_escalation_unterminated(
+        self,
+    ) -> None:
+        """Mutation check: ``wants_to_stop`` is load-bearing, not a no-op wrapper."""
+        inputs = _inputs(
+            hypotheses=[_hypothesis(confidence=0.86, supporting=3)],
+            reflection_action=ReflectionAction.ESCALATE,
+            attempted_domains=["metrics", "logs", "deployments"],
+            evidence_count=3,
+        )
+        assert decide(inputs).should_terminate is True
+
+        stale = TerminationInputs(
+            budget=inputs.budget,
+            hypotheses=inputs.hypotheses,
+            evidence_count=inputs.evidence_count,
+            failures=inputs.failures,
+            degraded_domains=inputs.degraded_domains,
+            attempted_domains=inputs.attempted_domains,
+            planner_action=None,
+            open_gaps=inputs.open_gaps,
+            reflection_action=None,  # the guard's input removed, not the guard itself
+        )
+        assert decide(stale).should_terminate is False, (
+            "without a stop request from either the planner or reflection, the run must "
+            "keep going - proving wants_to_stop is what made the earlier case terminate"
+        )
+
+
+class TestBestHypothesisOf:
+    def test_a_later_status_for_the_same_id_overrides_an_earlier_one(self) -> None:
+        # Graph state accumulates append-only; a revision re-emits the same id with a
+        # corrected status rather than editing the earlier entry in place.
+        stale = _hypothesis(rank=1, confidence=0.9)
+        corrected = HypothesisRef(
+            hypothesis_id=stale.hypothesis_id,
+            rank=stale.rank,
+            root_cause_class=stale.root_cause_class,
+            confidence=stale.confidence,
+            status=HypothesisStatus.SUPERSEDED,
+            supporting_evidence_count=stale.supporting_evidence_count,
+            contradicting_evidence_count=stale.contradicting_evidence_count,
+        )
+        replacement = _hypothesis(rank=2, confidence=0.5)
+        assert best_hypothesis_of([stale, replacement, corrected]) == replacement
+
+    def test_a_superseded_hypothesis_alone_has_no_best(self) -> None:
+        superseded = _hypothesis(status=HypothesisStatus.SUPERSEDED)
+        assert best_hypothesis_of([superseded]) is None
 
 
 def test_decide_raises_if_the_rule_set_stops_being_total(monkeypatch: pytest.MonkeyPatch) -> None:

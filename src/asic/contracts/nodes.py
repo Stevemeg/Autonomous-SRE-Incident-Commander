@@ -312,15 +312,20 @@ G4_EVIDENCE_COLLECTOR: Final = NodeContract(
 
 G5_HYPOTHESIS_ENGINE: Final = NodeContract(
     node_id=NodeId.G5_HYPOTHESIS_ENGINE,
-    node_version="1.0.0",
-    contract_version="1.0.0",
+    node_version="1.1.0",
+    contract_version="1.1.0",
     purpose=(
         "Form and rank root-cause hypotheses strictly against the persisted evidence set, "
-        "recording supporting and contradicting evidence and a confidence with its basis."
+        "recording supporting and contradicting evidence and a confidence with its basis; "
+        "then validate a bounded-reflection decision over the result - continue on a gap, "
+        "seek counter-evidence, revise a hypothesis, or propose a terminal outcome - "
+        "(Phase 7, contract 1.1.0)."
     ),
     inputs=("evidence", "objective", "open_gaps"),
-    outputs=("hypotheses", "open_gaps", "phase"),
-    permitted_state_keys=frozenset({"phase", "hypotheses", "open_gaps", "budget", "failures"}),
+    outputs=("hypotheses", "open_gaps", "reflection_decision", "phase"),
+    permitted_state_keys=frozenset(
+        {"phase", "hypotheses", "open_gaps", "reflection_decision", "budget", "failures"}
+    ),
     # No capabilities: it reasons over evidence already gathered and calls nothing.
     capabilities=frozenset(),
     model_backed=True,
@@ -332,7 +337,9 @@ G5_HYPOTHESIS_ENGINE: Final = NodeContract(
     ),
     idempotency=(
         "Keyed by (workflow_run_id, iteration). Hypotheses from an earlier iteration are "
-        "superseded rather than duplicated."
+        "superseded rather than duplicated. A revision is a supersede update on the target "
+        "row plus a new row; re-entering the node re-derives the same decision from the "
+        "same persisted evidence and does not double-supersede an already-superseded row."
     ),
     failure_modes=(
         "citation of a non-existent evidence id",
@@ -340,28 +347,47 @@ G5_HYPOTHESIS_ENGINE: Final = NodeContract(
         "unsupported claim",
         "schema-invalid model output",
         "no hypothesis expressible from the evidence",
+        "a reflection decision naming a hypothesis this run never persisted",
+        "a reflection decision claiming success or escalation the evidence does not support",
+        "a revision proposed with no newly formed hypothesis to supersede onto",
     ),
     termination_behaviour=(
         "Emits ranked hypotheses or an explicit insufficient-evidence verdict. A "
         "hypothesis citing evidence that does not exist is dropped in code before ranking, "
-        "so a hallucinated citation is an impossible state rather than a low score."
+        "so a hallucinated citation is an impossible state rather than a low score. Its "
+        "reflection decision is always one validated by "
+        "asic.orchestration.reflection.decide_reflection, never the model's raw proposal, "
+        "and a terminal reflection outcome only ever feeds the same five-category "
+        "termination rule set the planner's own TERMINATE proposal feeds - it never ends a "
+        "run by itself."
     ),
     incident_events=(
         IncidentEventType.HYPOTHESIS_FORMED,
         IncidentEventType.HYPOTHESIS_REJECTED_UNSUPPORTED,
+        IncidentEventType.HYPOTHESIS_CRITIQUED,
     ),
     span_kind=TraceSpanKind.NODE_EXECUTE,
 )
 
 G2_TERMINATOR: Final = NodeContract(
     node_id=NodeId.G2_INCIDENT_COORDINATOR,
-    node_version="1.0.0",
-    contract_version="1.0.0-terminator",
+    node_version="1.1.0",
+    contract_version="1.1.0-terminator",
     purpose=(
         "Decide deterministically whether the run continues, and if not, which of the five "
-        "termination categories it ends in."
+        "termination categories it ends in. A terminal bounded-reflection decision "
+        "(``terminate_success``, ``terminate_uncertain``, ``escalate``) is accepted as an "
+        "input alongside the planner's own ``TERMINATE`` action - both are validated "
+        "against the same rule set, and neither is a sixth outcome of its own (Phase 7)."
     ),
-    inputs=("budget", "hypotheses", "evidence", "failures", "degraded_domains"),
+    inputs=(
+        "budget",
+        "hypotheses",
+        "evidence",
+        "failures",
+        "degraded_domains",
+        "reflection_decision",
+    ),
     outputs=("terminated", "termination_reason", "termination_rule_id", "phase"),
     permitted_state_keys=frozenset(
         {

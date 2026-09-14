@@ -29,6 +29,7 @@ that makes it citable is the evidence it is linked to.
 from __future__ import annotations
 
 import json
+import re
 import uuid
 from typing import Any, Final
 
@@ -42,14 +43,17 @@ from asic.contracts.state import (
     GraphState,
     HypothesisRef,
     NodeFailureRef,
+    ReflectionDecisionRef,
 )
 from asic.db.models.investigation import Evidence, Hypothesis, HypothesisEvidence
 from asic.domain.budget import BudgetState
 from asic.domain.enums import (
+    EvidenceFailureCategory,
     EvidenceRelation,
     HypothesisStatus,
     InvestigationPhase,
     NodeId,
+    ReflectionAction,
     TraceSpanKind,
 )
 from asic.domain.errors import ModelProviderError, SchemaViolation
@@ -64,6 +68,7 @@ from asic.orchestration.knowledge_context import (
     knowledge_evidence_blocks,
     recompute_investigation_context,
 )
+from asic.orchestration.reflection import ReflectionInputs, ReflectionProposal, decide_reflection
 
 SCHEMA_REPAIR_ATTEMPTS: Final[int] = 1
 
@@ -98,6 +103,24 @@ class HypothesisDraft(BaseModel):
     remaining_gaps: list[str] = Field(default_factory=list)
 
 
+class ReflectionProposalModel(BaseModel):
+    """The model's proposed bounded-reflection decision, before any of it is believed.
+
+    Optional on the wire (``HypothesisOutput.reflection`` defaults to ``None``) so every
+    scripted response predating Phase 7 remains valid: an absent proposal is handled the
+    same way :func:`asic.orchestration.reflection.decide_reflection` handles any other
+    proposal it does not trust, by falling back to a deterministic default.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    action: ReflectionAction
+    rationale: str = Field(min_length=1, max_length=1000)
+    target_hypothesis_id: str | None = None
+    gap: str | None = Field(default=None, max_length=500)
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+
+
 class HypothesisOutput(BaseModel):
     """The model's whole response."""
 
@@ -105,6 +128,7 @@ class HypothesisOutput(BaseModel):
 
     hypotheses: list[HypothesisDraft] = Field(default_factory=list)
     insufficient_evidence_reason: str | None = None
+    reflection: ReflectionProposalModel | None = None
 
 
 def hypothesis_node(deps: NodeDependencies) -> Any:
@@ -177,15 +201,34 @@ def hypothesis_node(deps: NodeDependencies) -> Any:
             span.confidence = max((h.confidence for h in accepted), default=None)
             span.evidence_refs.extend(uuid.UUID(ref.evidence_id) for ref in evidence)
 
+            merged_gaps = sorted(
+                {
+                    *state.get("open_gaps", []),
+                    *(gap for h in accepted for gap in h.remaining_gaps),
+                }
+            )
+
+            reflection_ref, hypotheses_update = _reflect(
+                deps,
+                state,
+                output=output,
+                accepted=accepted,
+                open_gaps=merged_gaps,
+            )
+            span.set_decision(
+                reflection_action=reflection_ref.action.value,
+                reflection_rule_id=reflection_ref.rule_id,
+                reflection_overridden_reason=reflection_ref.overridden_reason,
+                reflection_target=reflection_ref.target_hypothesis_id,
+            )
+
             update = {
                 "phase": InvestigationPhase.PLANNING,
-                "hypotheses": accepted,
+                "hypotheses": hypotheses_update,
+                "reflection_decision": reflection_ref,
                 "budget": _snapshot(charged),
                 "open_gaps": sorted(
-                    {
-                        *state.get("open_gaps", []),
-                        *(gap for h in accepted for gap in h.remaining_gaps),
-                    }
+                    {*merged_gaps, *([reflection_ref.gap] if reflection_ref.gap else [])}
                 ),
             }
             contract.validate_update(update)
@@ -462,6 +505,120 @@ def _persist(
     )
 
 
+_RANK_SENTINEL: Final = re.compile(r"^RANK:(\d+)$", re.IGNORECASE)
+
+
+def _resolve_target(
+    raw: str | None,
+    prior: list[HypothesisRef],
+    accepted: list[HypothesisRef],
+) -> str | None:
+    """Expand a fixture sentinel for ``target_hypothesis_id`` into a real, persisted id.
+
+    A scripted response is written before a run exists, so it cannot know a hypothesis's
+    generated UUID in advance - the same problem evidence-citation sentinels solve in
+    :func:`_resolve`. ``rank`` is assigned deterministically (sequentially, as hypotheses
+    are formed across the run), so ``"RANK:<n>"`` is stable to script against; ``"LATEST"``
+    means the strongest hypothesis accepted this same step, for a proposal that refers to
+    what it just proposed. Anything else - including a real-looking but wrong id - is left
+    unresolved and is then rejected by ``reflection.py`` exactly as an unknown target is.
+    """
+    if raw is None:
+        return None
+    if raw.strip().upper() == "LATEST":
+        if not accepted:
+            return raw
+        return max(accepted, key=lambda h: h.confidence).hypothesis_id
+    match = _RANK_SENTINEL.match(raw.strip())
+    if match:
+        rank = int(match.group(1))
+        for ref in (*prior, *accepted):
+            if ref.rank == rank:
+                return ref.hypothesis_id
+    return raw
+
+
+def _reflect(
+    deps: NodeDependencies,
+    state: GraphState,
+    *,
+    output: HypothesisOutput,
+    accepted: list[HypothesisRef],
+    open_gaps: list[str],
+) -> tuple[ReflectionDecisionRef, list[HypothesisRef]]:
+    """Validate the model's reflection proposal and apply any hypothesis revision it wins.
+
+    Returns the validated decision alongside the ``hypotheses`` update this step should
+    return: normally just ``accepted``, plus a corrected reference for a superseded target
+    when the decision is ``revise_hypothesis`` - graph state accumulates append-only, so the
+    corrected status has to be re-asserted rather than edited in place (see
+    :func:`asic.orchestration.termination.best_hypothesis_of`).
+    """
+    prior = list(state.get("hypotheses", []))
+    proposal = (
+        ReflectionProposal(
+            action=output.reflection.action,
+            rationale=output.reflection.rationale,
+            target_hypothesis_id=_resolve_target(
+                output.reflection.target_hypothesis_id, prior, accepted
+            ),
+            gap=output.reflection.gap,
+            confidence=output.reflection.confidence,
+        )
+        if output.reflection is not None
+        else ReflectionProposal(action=None, rationale="no reflection was proposed")
+    )
+    inputs = ReflectionInputs(
+        proposal=proposal,
+        hypotheses=[*prior, *accepted],
+        new_hypothesis_ids=frozenset(h.hypothesis_id for h in accepted),
+        open_gaps=open_gaps,
+        degraded_domains=list(state.get("degraded_domains", [])),
+        attempted_domains=[
+            *state.get("covered_domains", []),
+            *state.get("degraded_domains", []),
+        ],
+    )
+    verdict = decide_reflection(inputs)
+
+    hypotheses_update = list(accepted)
+    if verdict.action is ReflectionAction.REVISE_HYPOTHESIS:
+        assert verdict.target_hypothesis_id is not None  # guaranteed by the guard
+        superseding = max(accepted, key=lambda h: h.confidence)
+        deps.session.execute(
+            sa.update(Hypothesis)
+            .where(
+                Hypothesis.tenant_id == deps.context.tenant_id,
+                Hypothesis.id == uuid.UUID(verdict.target_hypothesis_id),
+            )
+            .values(
+                status=HypothesisStatus.SUPERSEDED,
+                superseded_by_id=uuid.UUID(superseding.hypothesis_id),
+            )
+        )
+        deps.session.flush()
+        target_ref = next(h for h in prior if h.hypothesis_id == verdict.target_hypothesis_id)
+        hypotheses_update.append(
+            target_ref.model_copy(update={"status": HypothesisStatus.SUPERSEDED})
+        )
+        metrics.hypothesis_revisions_total.add(1)
+
+    metrics.reflection_decisions_total.add(
+        1, {"action": verdict.action.value, "rule_id": verdict.rule_id}
+    )
+
+    reflection_ref = ReflectionDecisionRef(
+        action=verdict.action,
+        rationale=verdict.rationale[:1000],
+        target_hypothesis_id=verdict.target_hypothesis_id,
+        gap=verdict.gap,
+        confidence=verdict.confidence,
+        overridden_reason=verdict.overridden_reason,
+        rule_id=verdict.rule_id,
+    )
+    return reflection_ref, hypotheses_update
+
+
 def _ceiling_rule(supporting: int, contradicting: int) -> str:
     if supporting == 0:
         return "unsupported"
@@ -508,6 +665,7 @@ def _failure(
     message: str,
     *,
     recoverable: bool,
+    category: EvidenceFailureCategory = EvidenceFailureCategory.MODEL_FAILURE,
 ) -> NodeFailureRef:
     return NodeFailureRef(
         node_id=NodeId.G5_HYPOTHESIS_ENGINE,
@@ -516,6 +674,7 @@ def _failure(
         message=message[:1000],
         recoverable=recoverable,
         occurred_at=deps.clock.now().isoformat(),
+        category=category,
     )
 
 

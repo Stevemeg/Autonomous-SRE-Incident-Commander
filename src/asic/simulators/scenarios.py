@@ -288,6 +288,30 @@ def logs_with_injection_attempt(ctx: SimulationContext) -> Mapping[str, Any]:
     }
 
 
+def logs_reveal_dependency_outage(ctx: SimulationContext) -> Mapping[str, Any]:
+    """The counter-evidence: the real failure is an upstream dependency, not the deploy.
+
+    Written for a scenario where the first hypothesis blames the recent deployment and a
+    second collection - deliberately sought as counter-evidence - shows the actual
+    mechanism was already present before the deployment landed.
+    """
+    early = ctx.at(0.30).isoformat()
+    later = ctx.at(0.35).isoformat()
+    return {
+        "lines": [
+            f"{early} ERROR {ctx.service} upstream payments-api: circuit breaker OPEN",
+            f"{early} WARN  {ctx.service} upstream payments-api: 17 consecutive timeouts",
+            f"{later} ERROR {ctx.service} checkout: unable to authorize, upstream degraded",
+        ],
+        "truncated": False,
+        "source": _SOURCE_LOKI,
+        "schema_version": 1,
+        "environment": ctx.environment,
+        "service": ctx.service,
+        "stream": f"{{app={ctx.service},env={ctx.environment}}}",
+    }
+
+
 def logs_sparse(ctx: SimulationContext) -> Mapping[str, Any]:
     return {
         "lines": [f"{ctx.at(0.5).isoformat()} INFO  {ctx.service} healthz ok"],
@@ -442,6 +466,43 @@ def _hypothesis(
         f'"confidence": {confidence}, "supporting_evidence": {support_json}, '
         f'"contradicting_evidence": {contra_json}, "remaining_gaps": {gaps}'
         "}]}"
+    )
+
+
+def _hypothesis_with_reflection(
+    *,
+    statement: str,
+    root_cause_class: str,
+    confidence: float,
+    reflection_action: str,
+    reflection_rationale: str,
+    supporting: str = "ALL",
+    contradicting: str = "NONE",
+    gaps: str = "[]",
+    target_hypothesis_id: str | None = None,
+    reflection_gap: str | None = None,
+    reflection_confidence: float = 0.5,
+) -> str:
+    """A scripted hypothesis response that also proposes a bounded-reflection decision.
+
+    ``target_hypothesis_id`` accepts the ``"RANK:<n>"`` and ``"LATEST"`` sentinels
+    :mod:`asic.orchestration.nodes.hypothesis` resolves against this run's actual
+    hypotheses - a script is written before a run exists and cannot know a generated UUID.
+    """
+    support_json = "[]" if supporting == "NONE" else f'["{supporting}"]'
+    contra_json = "[]" if contradicting == "NONE" else f'["{contradicting}"]'
+    target_json = f'"{target_hypothesis_id}"' if target_hypothesis_id else "null"
+    gap_json = f'"{reflection_gap}"' if reflection_gap else "null"
+    return (
+        '{"hypotheses": [{'
+        f'"statement": "{statement}", "root_cause_class": "{root_cause_class}", '
+        f'"confidence": {confidence}, "supporting_evidence": {support_json}, '
+        f'"contradicting_evidence": {contra_json}, "remaining_gaps": {gaps}'
+        '}], "reflection": {'
+        f'"action": "{reflection_action}", "rationale": "{reflection_rationale}", '
+        f'"target_hypothesis_id": {target_json}, "gap": {gap_json}, '
+        f'"confidence": {reflection_confidence}'
+        "}}"
     )
 
 
@@ -970,6 +1031,107 @@ def _transient_then_success() -> Scenario:
     )
 
 
+def _counter_evidence_revises_hypothesis() -> Scenario:
+    """Phase 7: reflection seeks counter-evidence, and it changes the leading hypothesis.
+
+    Round one blames the recent deployment on metrics and deployment evidence alone -
+    plausible, but reflection asks for counter-evidence rather than accepting it. Round two
+    collects logs that show the real mechanism (an upstream dependency outage) predates the
+    deployment, and reflection revises the first hypothesis, superseding it rather than
+    merely appending a second, unranked opinion.
+    """
+    service = "checkout-api"
+    return Scenario(
+        scenario_id="SC-0012-counter-evidence-revises-hypothesis",
+        title="Requested counter-evidence overturns the leading hypothesis",
+        service=service,
+        responses={
+            f"read.metrics|{service}": SimulatedResponse(builder=metrics_latency_regression),
+            f"read.deploy|{service}": SimulatedResponse(builder=deployments_recent_change),
+            f"read.logs|{service}": SimulatedResponse(builder=logs_reveal_dependency_outage),
+        },
+        planner_script=(
+            _plan("collect_evidence", "metrics", "onset unknown", "establish onset", 0.8),
+            _plan("collect_evidence", "deployments", "change unknown", "look for a change", 0.8),
+            _plan(
+                "form_hypothesis",
+                None,
+                "a plausible cause is visible",
+                "metrics and a deployment align in time",
+                0.6,
+            ),
+            _plan(
+                "collect_evidence",
+                "logs",
+                "counter-evidence for the deployment theory is unknown",
+                "reflection asked for evidence that would contradict the leading hypothesis",
+                0.7,
+            ),
+            _plan(
+                "form_hypothesis",
+                None,
+                "revise the leading cause with the new evidence",
+                "logs show the real mechanism predates the deployment",
+                0.6,
+            ),
+            _plan("terminate", None, "no further gain", "the revision is the final word", 0.0),
+        ),
+        hypothesis_script=(
+            _hypothesis_with_reflection(
+                statement=(
+                    "Revision 847 reduced the connection pool maximum and the latency "
+                    "regression follows it."
+                ),
+                root_cause_class="bad_deployment",
+                confidence=0.6,
+                supporting="ALL",
+                reflection_action="collect_counter_evidence",
+                reflection_rationale=(
+                    "the deployment and the metrics regression align, but nothing yet "
+                    "rules out an upstream cause; seek evidence that would contradict this"
+                ),
+                target_hypothesis_id="RANK:1",
+                reflection_gap="evidence that would contradict the deployment theory",
+                reflection_confidence=0.5,
+            ),
+            _hypothesis_with_reflection(
+                statement=(
+                    "The upstream payments-api dependency was already failing before "
+                    "revision 847 was applied; the deployment is not the cause."
+                ),
+                root_cause_class="dependency_regression",
+                confidence=0.5,
+                supporting="LOGS",
+                reflection_action="revise_hypothesis",
+                reflection_rationale=(
+                    "logs show the upstream circuit breaker opened before the deployment "
+                    "landed, which contradicts the deployment-caused theory"
+                ),
+                target_hypothesis_id="RANK:1",
+                reflection_confidence=0.6,
+            ),
+        ),
+        expectation=ScenarioExpectation(
+            terminal_reason=TerminationReason.INSUFFICIENT_EVIDENCE,
+            terminal_incident_status="uncertain",
+            expected_domains=(
+                EvidenceDomain.METRICS,
+                EvidenceDomain.DEPLOYMENTS,
+                EvidenceDomain.LOGS,
+            ),
+            expected_root_cause_class=None,
+            notes=(
+                "The revised hypothesis is honestly under-supported on its own (one "
+                "domain), so the run still ends uncertain rather than escalating a "
+                "revision it cannot yet back up. What this scenario proves is that the "
+                "first hypothesis is superseded rather than left standing alongside a "
+                "contradicting second opinion."
+            ),
+        ),
+        tags=("golden", "reflection", "revision"),
+    )
+
+
 #: Every scenario, by id.
 SCENARIOS: Final[Mapping[str, Scenario]] = {
     scenario.scenario_id: scenario
@@ -985,6 +1147,7 @@ SCENARIOS: Final[Mapping[str, Scenario]] = {
         _malformed_model_output(),
         _malformed_tool_result(),
         _transient_then_success(),
+        _counter_evidence_revises_hypothesis(),
     )
 }
 
