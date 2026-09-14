@@ -1,12 +1,12 @@
 # Architecture Decision Records
 
-> **Twenty-one records. Sixteen are Accepted.**
+> **Twenty-two records. Seventeen are Accepted.**
 >
 > ADRs 0001-0011 were written during the Architecture Package. Later implementation phases
 > accepted the decisions whose evidence now exists; the table below is authoritative for
 > current status. ADRs 0012-0014 were raised during Phase 3, 0015-0018 during Phase 4 and
 > its migration-history correction, 0019 during Phase 5, 0022 during Phase 7, and 0023
-> during Phase 8. ADR numbers 0020 and 0021 are reserved by forward references left in the
+> during Phase 8, and 0024 during Phase 9. ADR numbers 0020 and 0021 are reserved by forward references left in the
 > Phase 6 correction (the `provider_kind` label defect and a retrieval-quality bound) and are
 > not yet written; Phase 7 and Phase 8 number their own records 0022 and 0023 rather than
 > collide with them.
@@ -89,6 +89,7 @@ not replace an accepted ADR.
 | [0019](./0019-transactional-signal-ingestion.md) | Transactional signal ingestion and durable investigation requests | **`Accepted`** | 12, 14, 15, 17 | 2026-09-11 |
 | [0022](./0022-bounded-reflection-without-a-new-node.md) | Bounded reflection extends the hypothesis engine's output, not a new graph node | **`Accepted`** | 3, 4, 15 | 2026-09-13 |
 | [0023](./0023-bounded-remediation-as-a-separate-graph.md) | Bounded remediation runs as a separate graph/kernel, entered only from a human-reopened investigation | **`Accepted`** | 3, 6, 17 | 2026-09-14 |
+| [0024](./0024-phase9-api-and-dashboard.md) | Authenticated API edge and server-rendered incident-command dashboard | **`Accepted`** | 15, 16 | 2026-09-14 |
 
 ## Priority order for acceptance
 
@@ -141,6 +142,12 @@ during implementation become ADRs rather than being made silently:
 |---|---|---|
 | [0023](./0023-bounded-remediation-as-a-separate-graph.md) | The already-accepted Phase 3 state machine has no `escalated -> awaiting_approval`/`remediating` edge, only a human-only `escalated -> investigating` one; building remediation required deciding whether it extends investigation's graph or is a separate one entered through that existing transition | `tests/orchestration/test_remediation.py`, `tests/domain/test_policy.py`, `TestRiskCeiling` in `test_broker.py` |
 
+## Decisions raised by Phase 9
+
+| ADR | Discovered because | Evidence |
+|---|---|---|
+| [0024](./0024-phase9-api-and-dashboard.md) | The first HTTP/dashboard surface required an explicit decision to keep tenant authority in verified identity and current database grants, and to make mutation replay durable | `tests/api/test_auth.py`, `tests/api/test_rate_limit.py`, migration `0012_phase9_api_rbac` |
+
 ## Candidate decisions still to be written
 
 Identified during the Architecture Package but not yet ADRs, because the evidence to decide
@@ -151,7 +158,7 @@ them does not exist. Recorded so the scope is visible.
 | C1 | Telemetry log backend: Loki vs Elasticsearch/OpenSearch | 14 | Phase 10 — depends on adapter experience |
 | C2 | Integration simulator design and replay-fixture format | 14 | Phase 4 — needs the first adapter |
 | C3 | Evaluation judge model strategy and calibration approach | 9 | Phase 11 — needs a labelled corpus |
-| C4 | Frontend scope and framework commitment beyond Next.js baseline | 13 | Phase 9 |
+| C4 | Frontend scope and framework commitment beyond Next.js baseline | 13 | Deferred beyond Phase 9; ADR-0024 fixes the Phase 9 baseline |
 | C5 | Kubernetes deployment topology and Terraform module boundaries | 13, 16 | Phase 14 |
 | C6 | Embedding model selection and re-index strategy | 8 | Phase 6 — needs the retrieval evaluation set |
 | C7 | Weighted/graph alert correlation beyond deterministic v2 | 3, 4 | Later — requires an alert corpus and evaluation evidence |

@@ -21,8 +21,7 @@ Checks performed:
                            section 4 has an explicit disposition in the agent topology
                            document. Nothing from the specification may silently vanish.
   5. Phase boundary      - no code exists for a phase that has not been approved:
-                           no agents, orchestration, remediation execution, external
-                           integrations or frontend.
+                           no external integrations or evaluation harness.
   6. Unmeasured claims   - no invented improvement percentages (sections 9 and 22).
 
 Standard library only. Exit code 0 = clean, 1 = findings.
@@ -90,6 +89,7 @@ ALLOWED_SOURCE_ROOTS = (
     "src/asic/observability",
     "src/asic/orchestration",
     "src/asic/remediation",  # Phase 8 - the human-decision surface behind the graph (ADR-0023)
+    "src/asic/api",  # Phase 9 - authenticated HTTP surfaces
     "src/asic/simulators",
     "src/asic/tools",
     "migrations",
@@ -99,7 +99,6 @@ ALLOWED_SOURCE_ROOTS = (
 
 #: Packages whose existence would mean a later phase started early.
 FORBIDDEN_PACKAGES = (
-    "src/asic/api",  # Phase 9  - HTTP surfaces
     "src/asic/integrations",  # Phase 10 - external adapters
     "src/asic/adapters",
     "src/asic/evaluation",  # Phase 11 - harness
@@ -109,7 +108,6 @@ FORBIDDEN_PACKAGES = (
     "src/asic/rag",
     "src/asic/retrieval",
     "src/asic/vector",
-    "frontend",  # Phase 9  - dashboard
     "web",
     "ui",
     "terraform",  # Phase 14
@@ -119,9 +117,6 @@ FORBIDDEN_PACKAGES = (
 #: Imports that would mean an unapproved capability arrived with them. LangGraph and
 #: OpenTelemetry are absent because ADR-0002 and ADR-0010 approve them for this phase.
 FORBIDDEN_IMPORTS = (
-    "fastapi",
-    "starlette",
-    "uvicorn",
     "openai",
     "anthropic",
     "litellm",
@@ -156,7 +151,7 @@ FORBIDDEN_IMPORTS = (
     "phoenix",
 )
 
-#: Frontend and infrastructure languages, none of which belong to this phase.
+#: Frontend languages are permitted only below the Phase 9 dashboard tree.
 FORBIDDEN_EXTENSIONS = {".ts", ".tsx", ".jsx", ".vue", ".svelte", ".tf", ".go", ".java"}
 
 #: Capability prefixes the read-only kernel may register. A write capability in the
@@ -402,12 +397,9 @@ def check_responsibility_coverage(f: Findings) -> int:
 def check_phase_boundary(f: Findings) -> int:
     """Assert no later phase has started early.
 
-    Through Phase 8, the repository holds: governed knowledge, retrieval and memory
-    (Phase 6); bounded investigation agents (Phase 7); and bounded, safety-gated
-    remediation execution behind the same broker and a deterministic policy gate
-    (Phase 8, ADR-0023). External integrations, the HTTP surface, the frontend and the
-    evaluation harness are still explicitly out of scope, and their absence is checkable
-    rather than assertable.
+    Through Phase 9, the repository holds governed knowledge, bounded investigation,
+    safety-gated remediation and authenticated API/dashboard surfaces. External
+    integrations and the evaluation harness remain explicitly out of scope.
     """
     scanned = 0
 
@@ -424,11 +416,11 @@ def check_phase_boundary(f: Findings) -> int:
         parts = path.relative_to(REPO).parts
         if parts and parts[0] in {".git", ".claude", ".venv", "node_modules", "__pycache__"}:
             continue
-        if "__pycache__" in parts:
+        if any(part in {"__pycache__", "node_modules", ".next"} for part in parts):
             continue
         scanned += 1
 
-        if path.suffix.lower() in FORBIDDEN_EXTENSIONS:
+        if path.suffix.lower() in FORBIDDEN_EXTENSIONS and parts[0] != "frontend":
             f.add("phase", f"{rel(path)}: {path.suffix} files belong to a later phase")
 
         if path.suffix != ".py":
@@ -579,7 +571,7 @@ def main() -> int:
     print(f"mermaid diagrams  : {blocks} checked")
     print(f"requirement IDs   : {defined} defined in SRS, {traced} referenced in matrix")
     print(f"spec section 4    : {responsibilities} responsibilities checked for disposition")
-    print(f"repository files  : {scanned} scanned against the Phase 8 boundary")
+    print(f"repository files  : {scanned} scanned against the Phase 9 boundary")
     print()
 
     order = [
@@ -587,7 +579,7 @@ def main() -> int:
         ("mermaid", "Mermaid structure"),
         ("traceability", "Requirement traceability"),
         ("coverage", "Specification coverage"),
-        ("phase", "Phase 8 scope boundary"),
+        ("phase", "Phase 9 scope boundary"),
         ("claims", "No unmeasured claims"),
     ]
 

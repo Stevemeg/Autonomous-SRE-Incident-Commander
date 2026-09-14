@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "asic"
-version = "0.5.0"
-description = "Autonomous SRE Incident Commander - deterministic telemetry ingestion and read-only investigation"
+version = "0.9.0"
+description = "Autonomous SRE Incident Commander - governed incident investigation and remediation"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "UNLICENSED" }
@@ -25,6 +25,9 @@ dependencies = [
     # Phase 6: src/asic/db/models/knowledge.py imports pgvector.sqlalchemy.Vector at
     # module load time, so this is a hard runtime dependency, not a dev-only extra.
     "pgvector>=0.3.6,<0.6",
+    "fastapi>=0.116,<1.0",
+    "PyJWT>=2.10,<3.0",
+    "uvicorn>=0.35,<1.0",
 ]
 
 [project.optional-dependencies]
@@ -33,6 +36,7 @@ dev = [
     "pytest-cov>=5.0",
     "ruff>=0.6",
     "mypy>=1.11",
+    "httpx>=0.28,<1.0",
 ]
 
 [tool.setuptools.packages.find]

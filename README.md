@@ -8,7 +8,7 @@ approval, verifies outcomes, and preserves operational memory.
 
 ---
 
-> ## Project status: bounded remediation is safety-gated and independently verified
+> ## Project status: governed incident command surfaces are available
 >
 > A simulated incident can be investigated end to end through a typed, bounded,
 > tenant-aware orchestration graph — planning, evidence collection through a capability
@@ -25,8 +25,8 @@ approval, verifies outcomes, and preserves operational memory.
 > | | |
 > |---|---|
 > | **Completed** | Phase 0 bootstrap · Phase 1 requirements · Phase 2 architecture · Phase 3 persistence · Phase 4 orchestration · Phase 5 telemetry ingestion and correlation · Phase 6 operational knowledge, RAG and governed memory · Phase 7 bounded investigation · **Phase 8 remediation planning, policy, approval, execution and verification** |
-> | **In progress** | Nothing — Phase 8 is complete |
-> | **Next** | Phase 9 backend APIs and incident-command dashboard |
+> | **In progress** | Nothing — Phase 9 is complete |
+> | **Next** | Phase 10 external integrations (not started) |
 > | **External integrations** | Deferred to Phase 10; Phase 8 execution uses deterministic simulators |
 >
 > Phase 4 delivered five graph nodes under enforced contracts, a tool broker that is the
@@ -46,6 +46,9 @@ approval, verifies outcomes, and preserves operational memory.
 > [bounded reflection](docs/architecture/bounded-reflection.md) for guarantees, tests, and
 > explicit limitations, and [bounded remediation](docs/architecture/bounded-remediation.md)
 > for Phase 8's authorization, crash-recovery and verification boundaries.
+> Phase 9 adds the authenticated API and server-rendered incident-command dashboard; see
+> [Phase 9 API/dashboard](docs/architecture/phase9-api-dashboard.md). External connectors
+> and evaluation/replay remain deferred.
 > The repository gates include the full pytest suite against an unprivileged PostgreSQL role,
 > strict typing, lint/format, migration drift and documentation/security validation.
 >
@@ -86,10 +89,10 @@ people do.
 | Ranked RCA hypotheses with evidence, confidence and counter-evidence | **Structure built** — citation integrity and the confidence ceiling are enforced in code; reasoning quality is unmeasured |
 | Operational RAG over runbooks, service docs, known errors and postmortems | Not started — a simulator-backed `knowledge.search` capability exists; there is no retrieval pipeline |
 | Evidence-backed incident timeline reconstruction | **Built** — a deterministic projection over the event log |
-| Risk-classified remediation planning | Not started |
-| Human approval before risky or irreversible actions | Not started |
-| Controlled remediation using permission-scoped tools only | Not started |
-| Independent post-remediation verification | Not started |
+| Risk-classified remediation planning | **Phase 8 simulator-backed** |
+| Human approval before risky or irreversible actions | **Phase 8 exact-effect approval** |
+| Controlled remediation using permission-scoped tools only | **Phase 8 broker-enforced** |
+| Independent post-remediation verification | **Phase 8 fail-closed verifier** |
 | Slack/Teams collaboration and PagerDuty/Jira workflows | Not started |
 | Historical incident replay for testing and evaluation | Not started |
 | Governed operational memory and learning | Not started |

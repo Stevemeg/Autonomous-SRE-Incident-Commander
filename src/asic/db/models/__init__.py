@@ -8,6 +8,7 @@ imported here is invisible to migrations - so every new module must be added.
 from __future__ import annotations
 
 from asic.db.base import Base, metadata_obj
+from asic.db.models.api import ApiIdempotencyRecord
 from asic.db.models.audit import AuditRecord
 from asic.db.models.catalog import Environment, Service, ServiceDependency
 from asic.db.models.evaluation import (
@@ -106,6 +107,7 @@ def append_only_tables() -> frozenset[str]:
 __all__ = [
     "GLOBAL_TABLES",
     "Alert",
+    "ApiIdempotencyRecord",
     "Approval",
     "AuditRecord",
     "Base",

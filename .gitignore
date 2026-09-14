@@ -120,6 +120,7 @@ out/
 .swc/
 *.tsbuildinfo
 next-env.d.ts
+!frontend/next-env.d.ts
 .eslintcache
 .stylelintcache
 storybook-static/

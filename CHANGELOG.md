@@ -22,6 +22,17 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added — Phase 9 API and incident-command dashboard
+
+- Added independently authorized, tenant-scoped FastAPI surfaces for incidents, approvals,
+  ingestion boundary, evaluation boundary and administration.
+- Added JWT identity validation with current database-backed role/environment grants, typed
+  errors, correlation IDs, bounded rate limiting and durable mutation idempotency records.
+- Added the Next.js server-rendered dashboard for incident evidence, hypotheses, timeline,
+  remediation actions and approval context. External integrations and evaluation/replay
+  execution remain deferred.
+- Added migration `0012_phase9_api_rbac` and API tenancy/authorization/replay tests.
+
 ### Added — Phase 8 bounded remediation
 
 - Added a separate five-node remediation graph: model proposal, deterministic policy gate,

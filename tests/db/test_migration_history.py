@@ -149,12 +149,12 @@ class TestPinnedListsMatchHistory:
         pinned = sorted(module.APPEND_ONLY_TABLES)
         assert pinned == phase_3_tables["append_only"]
 
-    def test_phase_4_through_6_tenant_scoped_additions(
+    def test_post_phase_3_tenant_scoped_additions(
         self, phase_3_tables: dict[str, list[str]]
     ) -> None:
         # The corollary: everything 0003 no longer covers must be covered by a later
         # migration. `tenant_scoped_tables()` reads the current models, so this set is
-        # every tenant-scoped table added since Phase 3 - Phase 4/5's four, plus Phase 6's
+        # every tenant-scoped table added since Phase 3 - Phase 4/5's four, Phase 6's
         # five new knowledge/memory tables (`knowledge_document`, `knowledge_chunk`,
         # `memory_entry` and `memory_promotion` are Phase 3 tables that 0008 only extends).
         added = tenant_scoped_tables() - set(phase_3_tables["tenant"])
@@ -168,11 +168,10 @@ class TestPinnedListsMatchHistory:
             "knowledge_retrieval",
             "knowledge_retrieval_result",
             "memory_write_decision",
+            "api_idempotency_record",
         }
 
-    def test_phase_4_through_6_append_only_additions(
-        self, phase_3_tables: dict[str, list[str]]
-    ) -> None:
+    def test_post_phase_3_append_only_additions(self, phase_3_tables: dict[str, list[str]]) -> None:
         added = append_only_tables() - set(phase_3_tables["append_only"])
         assert added == {
             "workflow_checkpoint",
@@ -182,6 +181,7 @@ class TestPinnedListsMatchHistory:
             "knowledge_retrieval",
             "knowledge_retrieval_result",
             "memory_write_decision",
+            "api_idempotency_record",
         }
 
 
@@ -443,6 +443,7 @@ class TestUpgradePaths:
             "knowledge_retrieval",
             "knowledge_retrieval_result",
             "memory_write_decision",
+            "api_idempotency_record",
         }
 
     def test_accepted_phase_5_head_upgrades_to_current_head(self, throwaway_database: str) -> None:
@@ -457,7 +458,7 @@ class TestUpgradePaths:
             with engine.connect() as conn:
                 assert (
                     conn.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one()
-                    == "0011_remediation_safety"
+                    == "0012_phase9_api_rbac"
                 )
         finally:
             engine.dispose()

@@ -24,6 +24,28 @@ terminal dispatch, read-only trigger deduplication,
 pre-drive crash recovery, trace redaction and migration clean/accepted-head/round-trip/drift.
 No production scale or performance result is implied.
 
+## Phase 9 implementation evidence
+
+[`phase9-api-dashboard.md`](./phase9-api-dashboard.md), `src/asic/api`, `frontend/`, and
+`tests/api` implement the authenticated API and incident-command dashboard boundary.
+Tests exercise tenant isolation, environment scope, independently authorized surfaces,
+idempotent lifecycle control and typed deferred boundaries. The dashboard consumes an
+identity-proxy-provided HttpOnly session cookie; no provider or external connector is
+claimed.
+
+| Requirement | Implemented evidence and limits |
+|---|---|
+| FR-API-01 | Versioned ingestion, incident, approval, evaluation and administration routers with separate permissions; connector/evaluation execution is deferred |
+| FR-API-02 | Signed tenant claim plus current database assignment lookup; API tests prove cross-tenant reads return 404 |
+| FR-API-03 | Dashboard renders evidence, hypotheses, timeline and actions/approval state |
+| FR-API-04 | Independent administration/audit/incident/approval grants; viewer isolation is tested |
+| NFR-SEC-01 | JWT edge contract with explicit production key-management boundary |
+| NFR-SEC-02 | Current role, expiry and environment grants; claims do not widen authority |
+| NFR-SEC-03 | RLS-bound sessions and explicit tenant predicates |
+| NFR-SEC-09 | Bounded Pydantic models, UUID validation, typed errors and correlation IDs |
+| NFR-SEC-12 | Causal authenticated-principal rate-limit test; distributed limiter deferred |
+| NFR-REL-06 | Durable idempotency response ledger with digest conflict detection and advisory-key serialization |
+
 ## Phase 6 implementation evidence
 
 [`memory-and-rag.md`](./memory-and-rag.md) and `tests/knowledge`, `tests/memory`,

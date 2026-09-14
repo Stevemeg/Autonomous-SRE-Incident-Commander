@@ -741,7 +741,12 @@ class IngestionService:
         statement = (
             statement.with_for_update()
             if commit_eligibility_lock
-            else statement.with_for_update(key_share=True)
+            # A foreign-key insert holds KEY SHARE on the incident row.  The ordinary
+            # ingestion path only needs a read-consistent identity here; taking NO KEY
+            # UPDATE would unnecessarily conflict with that FK lock and turn a harmless
+            # non-key projection update into a lock-timeout.  Commit-time eligibility below
+            # still takes the stronger UPDATE lock immediately before selecting a candidate.
+            else statement.with_for_update(read=True)
         )
         return session.scalars(statement.execution_options(populate_existing=True)).one()
 
