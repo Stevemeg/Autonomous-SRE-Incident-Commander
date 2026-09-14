@@ -628,9 +628,17 @@ class TestAuditAndTrace:
 
 
 class TestRiskCeiling:
-    def test_the_resolver_refuses_a_non_read_only_ceiling(self) -> None:
-        with pytest.raises(ValueError, match="read-only"):
-            CapabilityResolver(ToolRegistry.read_only(), max_risk_tier=RiskTier.R1)
+    def test_the_resolver_refuses_a_destructive_ceiling(self) -> None:
+        # Phase 8 (ADR-0023): the ceiling now admits R1/R2 now that the policy gate and
+        # approval service exist to authorise them. R3 remains refused unconditionally -
+        # no descriptor can ever be registered at that tier (SI-5), so a ceiling naming it
+        # could never resolve anything and the refusal is for the caller's own benefit.
+        with pytest.raises(ValueError, match="r3"):
+            CapabilityResolver(ToolRegistry.read_only(), max_risk_tier=RiskTier.R3)
+
+    def test_a_non_destructive_ceiling_is_now_accepted(self) -> None:
+        resolver = CapabilityResolver(ToolRegistry.read_only(), max_risk_tier=RiskTier.R1)
+        assert resolver.max_risk_tier is RiskTier.R1
 
     def test_a_write_descriptor_is_refused_at_the_risk_boundary(self) -> None:
         resolver = CapabilityResolver(ToolRegistry.read_only())

@@ -89,6 +89,7 @@ ALLOWED_SOURCE_ROOTS = (
     "src/asic/memory",
     "src/asic/observability",
     "src/asic/orchestration",
+    "src/asic/remediation",  # Phase 8 - the human-decision surface behind the graph (ADR-0023)
     "src/asic/simulators",
     "src/asic/tools",
     "migrations",
@@ -102,7 +103,6 @@ FORBIDDEN_PACKAGES = (
     "src/asic/integrations",  # Phase 10 - external adapters
     "src/asic/adapters",
     "src/asic/evaluation",  # Phase 11 - harness
-    "src/asic/remediation",  # Phase 8  - execution
     "src/asic/agents",  # Phase 7  - specialised investigation agents
     # Phase 6 lives in knowledge/ and memory/. A parallel retrieval tree would be a second
     # path to content that bypasses the governed one.
@@ -162,6 +162,11 @@ FORBIDDEN_EXTENSIONS = {".ts", ".tsx", ".jsx", ".vue", ".svelte", ".tf", ".go", 
 #: Capability prefixes the read-only kernel may register. A write capability in the
 #: catalogue would mean a tool exists with no policy gate in front of it.
 ALLOWED_CAPABILITY_PREFIXES = ("read.",)
+
+#: Capability prefixes the Phase 8 remediation write catalogue may register. Anything
+#: outside this list - in particular, anything that is not a verb naming a *class* of
+#: mutation - is not a capability this validator will accept as registered.
+ALLOWED_WRITE_CAPABILITY_PREFIXES = ("mutate.", "notify.", "write.")
 
 #: Shapes that would create an arbitrary-execution channel. Checked across the whole source
 #: tree, because the guarantee is "no such field exists anywhere", not "not in the models".
@@ -397,11 +402,12 @@ def check_responsibility_coverage(f: Findings) -> int:
 def check_phase_boundary(f: Findings) -> int:
     """Assert no later phase has started early.
 
-    Phase 6 adds governed knowledge, retrieval and memory to ingestion/correlation, typed
-    contracts, a capability broker, deterministic
-    simulators and a read-only investigation. Remediation execution, external integrations,
-    the HTTP surface, the frontend and the evaluation harness are explicitly out of scope,
-    and their absence is checkable rather than assertable.
+    Through Phase 8, the repository holds: governed knowledge, retrieval and memory
+    (Phase 6); bounded investigation agents (Phase 7); and bounded, safety-gated
+    remediation execution behind the same broker and a deterministic policy gate
+    (Phase 8, ADR-0023). External integrations, the HTTP surface, the frontend and the
+    evaluation harness are still explicitly out of scope, and their absence is checkable
+    rather than assertable.
     """
     scanned = 0
 
@@ -489,6 +495,50 @@ def _check_capability_catalogue(f: Findings) -> None:
                 f"tool {descriptor.name} declares a rollback, which only a write tool needs",
             )
 
+    _check_remediation_capability_catalogue(f)
+
+
+def _check_remediation_capability_catalogue(f: Findings) -> None:
+    """Assert the Phase 8 write catalogue is exactly what a write catalogue must be.
+
+    The mirror image of the read-only check above, and the write-side layer ADR-0017
+    promised would move deliberately: every descriptor is R1 or R2 (never RO, and R3 is
+    already unreachable - :class:`ToolDescriptor` refuses it at construction, SI-5), every
+    capability names a mutation class, and every one declares a rollback - a write tool
+    with no way back is not a tool this catalogue may register at all.
+    """
+    sys.path.insert(0, str(REPO / "src"))
+    try:
+        from asic.tools.remediation_catalogue import WRITE_CATALOGUE
+    except Exception as exc:  # the validator reports problems, it does not crash on them
+        f.add("phase", f"the remediation capability catalogue could not be loaded: {exc}")
+        return
+    finally:
+        sys.path.pop(0)
+
+    for descriptor in WRITE_CATALOGUE:
+        if descriptor.risk_tier.value not in {"r1", "r2"}:
+            f.add(
+                "phase",
+                f"tool {descriptor.name} is risk tier {descriptor.risk_tier.value}; the "
+                "write catalogue registers r1/r2 only - ro belongs in the read catalogue "
+                "and r3 is never expressible (SI-5)",
+            )
+        if not any(
+            descriptor.capability.startswith(prefix) for prefix in ALLOWED_WRITE_CAPABILITY_PREFIXES
+        ):
+            f.add(
+                "phase",
+                f"tool {descriptor.name} declares capability {descriptor.capability!r}, "
+                f"which is not one of {list(ALLOWED_WRITE_CAPABILITY_PREFIXES)}",
+            )
+        if descriptor.rollback_tool_name is None:
+            f.add(
+                "phase",
+                f"tool {descriptor.name} is a write tool with no declared rollback; the "
+                "way back must be declared before the action can ever be proposed",
+            )
+
 
 # ----------------------------------------------------------------- 6. unmeasured claims
 
@@ -529,7 +579,7 @@ def main() -> int:
     print(f"mermaid diagrams  : {blocks} checked")
     print(f"requirement IDs   : {defined} defined in SRS, {traced} referenced in matrix")
     print(f"spec section 4    : {responsibilities} responsibilities checked for disposition")
-    print(f"repository files  : {scanned} scanned against the Phase 6 boundary")
+    print(f"repository files  : {scanned} scanned against the Phase 8 boundary")
     print()
 
     order = [
@@ -537,7 +587,7 @@ def main() -> int:
         ("mermaid", "Mermaid structure"),
         ("traceability", "Requirement traceability"),
         ("coverage", "Specification coverage"),
-        ("phase", "Phase 6 scope boundary"),
+        ("phase", "Phase 8 scope boundary"),
         ("claims", "No unmeasured claims"),
     ]
 

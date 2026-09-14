@@ -130,10 +130,15 @@ class GrantedCapability:
 class CapabilityMenu:
     """The immutable set of capabilities resolved for one run and one node."""
 
-    __slots__ = ("_by_capability",)
+    __slots__ = ("_by_capability", "_by_tool_name")
 
     def __init__(self, granted: Sequence[GrantedCapability]) -> None:
         self._by_capability = {g.capability: g for g in granted}
+        #: A tool name is what a remediation proposal actually names (tool-registry.md §2:
+        #: a capability is a *class* of operation; a proposal picks one registered tool).
+        #: Keyed separately so a caller can validate a proposed tool name without needing
+        #: to already know which capability it maps to.
+        self._by_tool_name = {g.descriptor.name: g for g in granted}
 
     def __contains__(self, capability: object) -> bool:
         return capability in self._by_capability
@@ -144,6 +149,9 @@ class CapabilityMenu:
     def names(self) -> tuple[str, ...]:
         return tuple(sorted(self._by_capability))
 
+    def tool_names(self) -> tuple[str, ...]:
+        return tuple(sorted(self._by_tool_name))
+
     def get(self, capability: str) -> GrantedCapability:
         try:
             return self._by_capability[capability]
@@ -153,6 +161,10 @@ class CapabilityMenu:
                 f"{list(self.names())}. The menu is resolved before any model is invoked, "
                 "so a capability absent from it was never offered and cannot be requested."
             ) from exc
+
+    def get_by_tool_name(self, tool_name: str) -> GrantedCapability | None:
+        """``None``, not an exception: the caller decides how to treat an unknown name."""
+        return self._by_tool_name.get(tool_name)
 
 
 def load_incident_scope(
@@ -214,10 +226,16 @@ class CapabilityResolver:
     __slots__ = ("_max_risk_tier", "_registry")
 
     def __init__(self, registry: ToolRegistry, *, max_risk_tier: RiskTier = RiskTier.RO) -> None:
-        if max_risk_tier is not RiskTier.RO:
+        # Phase 8 (ADR-0023): the ceiling now admits R1/R2, because the policy gate and
+        # approval service that authorise them now exist. R3 remains structurally refused
+        # here independent of the registry: no descriptor can declare it (SI-5), so a
+        # ceiling that named it would be a resolver that could never resolve anything at
+        # that tier - the refusal is for the caller's benefit, not a safety boundary this
+        # line alone provides.
+        if max_risk_tier is RiskTier.R3:
             raise ValueError(
-                "the orchestration kernel is read-only; a higher risk ceiling requires the "
-                "policy gate and approval service, which this phase does not implement"
+                "risk tier r3 is destructive/irreversible and is never expressible as a "
+                "resolvable ceiling; no descriptor can be registered at that tier (SI-5)"
             )
         self._registry = registry
         self._max_risk_tier = max_risk_tier
@@ -277,7 +295,7 @@ class CapabilityResolver:
                 # not honoured. assert_matches_database would already have raised, so this
                 # is a belt-and-braces refusal rather than an expected path.
                 continue
-            if definition.risk_tier is not self._max_risk_tier:
+            if definition.risk_tier.rank > self._max_risk_tier.rank:
                 continue
             if not contract.permits_capability(definition.capability):
                 continue
@@ -301,12 +319,11 @@ class CapabilityResolver:
         dispatch. Checking once at menu time would leave a window in which a mutated or
         stale menu entry could reach an adapter.
         """
-        if descriptor.risk_tier is not self._max_risk_tier:
+        if descriptor.risk_tier.rank > self._max_risk_tier.rank:
             raise RiskTierNotPermitted(
                 f"{descriptor.name} is risk tier {descriptor.risk_tier.value}; this "
-                f"deployment executes {self._max_risk_tier.value} only. Remediation "
-                "requires the policy gate, approval service and executor, none of which "
-                "exist yet, so the request is refused rather than downgraded."
+                f"resolver's ceiling is {self._max_risk_tier.value}. A request above the "
+                "ceiling is refused, never downgraded to the nearest permitted tier."
             )
 
 

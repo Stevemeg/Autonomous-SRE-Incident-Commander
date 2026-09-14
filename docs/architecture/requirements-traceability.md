@@ -71,6 +71,26 @@ FR-INV-05 (per-domain analyser strategies in G4 - untouched), FR-INV-07/08 (alre
 partially true from Phase 4's step persistence; the redundant-call-rate *baseline* is
 explicitly a Phase 11 artefact), FR-EVD-01/02/04 (unchanged from Phase 4/6).
 
+## Phase 8 implementation evidence
+
+[`bounded-remediation.md`](./bounded-remediation.md), `tests/domain/test_policy.py`,
+`tests/domain/test_remediation_observations.py`, `tests/orchestration/test_remediation.py`
+and `test_remediation_security.py` implement the simulator-backed remediation boundary.
+They cover deterministic risk classification, exact-effect approval, dispatch-time role and
+expiry checks, typed broker-only execution, crash-window effect claims, resume without a new
+model proposal, strict preconditions and independent fail-closed verification. No live model,
+production adapter, remediation-quality score or automated compensation is claimed.
+
+| Requirement | Implemented evidence and limits |
+|---|---|
+| FR-REM-01..07 | Separate G6/G7/G8/G9/G10 contracts and graph; the proposal has no capability; policy and broker independently refuse unauthorized writes |
+| FR-REM-08..09 | Effect-key claim precedes dispatch; duplicate and crash-window tests; every declared precondition is checked against fresh explicit state |
+| FR-APR-01..05 | Autonomy matrix, durable wait, expiry, tenant/environment/risk-scoped role authority, immutable decision evidence and action-version binding |
+| FR-VRF-01..03 | Settling wait, fresh broker read and frozen criteria hash; empty evidence is inconclusive and executor output is absent from the verdict input |
+| FR-VRF-04 | Partially implemented: failure returns to investigation or escalates; automated compensation remains deferred |
+| NFR-SEC-01..02 | Tool Broker remains the sole provider boundary; write authorization is recomputed immediately before dispatch |
+| NFR-REL-06 | Checkpoints retain the original run identity, wall clock and consumed budget; durable remediation rows are re-read on resume |
+
 - **Status:** Authored — Architecture Package. **Most requirements below are not implemented**; the note beneath says exactly which are, and on what evidence.
 - **Requirement definitions:** [`../prd/SRS.md`](../prd/SRS.md)
 - **Master specification:** [`../spec/MASTER_PROJECT_PROMPT_V3.md`](../spec/MASTER_PROJECT_PROMPT_V3.md)
@@ -79,8 +99,8 @@ Every requirement identifier defined in the SRS appears here exactly once, mappe
 architecture component that will satisfy it, the phase in which it is built, how it will be
 validated, and the acceptance criterion.
 
-> **Implementation status.** Phases 3 and 4 are complete; every other phase is not
-> started. Rather than repeat a status column 138 times, the rule is: a requirement is
+> **Implementation status.** Phases 3 through 8 are complete; later phases are not started.
+> Rather than repeat a status column 138 times, the rule is: a requirement is
 > implemented **only** where a passing test is named in the Validation column *and* that
 > test exists and passes today.
 >

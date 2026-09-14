@@ -8,7 +8,8 @@ database rollback, ambiguity, candidate bounds and dispatch recovery behavior.
   **Partially implemented:** the retry classification, budgets, checkpointing, leasing and
   resume-with-reconciliation exist for the read path
   ([`orchestration-kernel.md`](./orchestration-kernel.md)). The remediation half - unknown
-  outcomes, compensation, approval waits - arrives with Phase 8.
+  outcomes and approval waits are implemented by Phase 8. Automated compensation remains
+  deferred; partial or unverified effects escalate.
 - **Master specification references:** Sections 5, 12, 16, 17
 - **Related:** [`remediation-safety-policy.md`](./remediation-safety-policy.md) · [`../adr/0002-orchestration-langgraph-vs-temporal.md`](../adr/0002-orchestration-langgraph-vs-temporal.md)
 

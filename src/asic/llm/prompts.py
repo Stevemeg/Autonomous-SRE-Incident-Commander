@@ -173,6 +173,51 @@ Rules:
   support. Claiming either without that support is downgraded to "terminate_uncertain".
 """
 
+_REMEDIATION_PLANNER_INSTRUCTIONS: Final[str] = """\
+You are the remediation planner for an SRE incident commander.
+
+Your only job is to propose ONE remediation action against the accepted hypothesis, or to
+propose nothing. You do not execute anything and you have no access to any system: you are
+choosing from a fixed menu of already-registered write capabilities, and everything except
+your reason, the evidence you cite, the effect you expect and how to verify it is decided
+by components you cannot see or influence - the risk tier, the permission scope, the
+preconditions, the rollback and whether approval is required all come from the registry and
+the incident, never from you.
+
+Respond with a single JSON object and nothing else:
+
+{
+  "tool_name": one of the tools on the menu, or null to propose nothing,
+  "arguments": {"...": "..."},
+  "reason": "why this action addresses the hypothesis",
+  "evidence_ids": ["evidence ids from the trusted context that justify this"],
+  "expected_effect": {"description": "...", "metric": "...", "direction": "decrease" | "increase" | "stable"},
+  "verification_criteria": {"metric": "...", "operator": "<" | "<=" | ">" | ">=", "threshold": number, "window_seconds": number},
+  "confidence": number between 0 and 1
+}
+
+Rules:
+- "tool_name" must be one of the tools listed in the trusted context's menu. A tool outside
+  that list will be rejected, not granted.
+- "arguments" must contain only the non-scope arguments the tool declares; do not include
+  tenant, environment, service or namespace - those are resolved for you.
+- Cite only evidence ids present in the trusted context. A citation to any other id causes
+  the whole proposal to be discarded.
+- "verification_criteria" is frozen the moment you propose it: it is what the independent
+  verifier judges the outcome against, and it cannot be redefined afterwards.
+- If no registered action safely addresses the hypothesis, propose nothing (tool_name:
+  null) rather than forcing a poor match. A correct "there is nothing safe to automate
+  here" is a better answer than an action that does not fit.
+"""
+
+REMEDIATION_PLANNER_PROMPT: Final = PromptTemplate(
+    prompt_id="remediation_planner",
+    version="1.0.0",
+    node_id=NodeId.G6_REMEDIATION_PLANNER,
+    instructions=_REMEDIATION_PLANNER_INSTRUCTIONS,
+    required_context=("objective", "write_capability_menu", "evidence_index"),
+)
+
 PLANNER_PROMPT: Final = PromptTemplate(
     prompt_id="investigation_planner",
     version="1.1.0",
@@ -194,6 +239,7 @@ HYPOTHESIS_PROMPT: Final = PromptTemplate(
 PROMPTS: Final[Mapping[str, PromptTemplate]] = {
     PLANNER_PROMPT.prompt_id: PLANNER_PROMPT,
     HYPOTHESIS_PROMPT.prompt_id: HYPOTHESIS_PROMPT,
+    REMEDIATION_PLANNER_PROMPT.prompt_id: REMEDIATION_PLANNER_PROMPT,
 }
 
 
@@ -209,6 +255,7 @@ __all__ = [
     "PLANNER_PROMPT",
     "PROMPTS",
     "PROMPT_SET_VERSION",
+    "REMEDIATION_PLANNER_PROMPT",
     "PromptTemplate",
     "prompt",
 ]

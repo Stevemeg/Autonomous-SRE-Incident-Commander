@@ -90,6 +90,14 @@ class SimulatorProvider:
             "logs.query",
             "metrics.query",
             "traces.query",
+            # Phase 8 write catalogue (ADR-0023). Simulated exactly like the read tools -
+            # a scenario's ``responses`` dict is keyed by capability, not by risk tier, so
+            # nothing here privileges one over the other; the risk ceiling and the policy
+            # gate are what actually govern whether a write is ever reached.
+            "k8s.deployment.rollback",
+            "k8s.hpa.adjust",
+            "k8s.node.cordon",
+            "k8s.node.uncordon",
         )
 
     def supports(self, descriptor: ToolDescriptor) -> bool:

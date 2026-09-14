@@ -152,3 +152,49 @@ class ModelProviderError(DomainError):
     def __init__(self, message: str, *, transient: bool = True) -> None:
         super().__init__(message)
         self.transient = transient
+
+
+# --------------------------------------------------------------- remediation safety (P8)
+
+
+class PolicyEvaluationFailed(DomainError):
+    """The deterministic policy gate could not reach a verdict.
+
+    SI-11: the system fails closed. Raised when a dependency the gate needs - the tenant's
+    policy configuration, the registry - is unavailable; the caller treats this exactly
+    like a deny, never like an allow.
+    """
+
+
+class ApprovalInvalid(DomainError):
+    """An approval exists but does not authorise the action as it currently stands.
+
+    Covers every way SI-6/SI-7 close the "approve a small change, execute a large one"
+    attack: the action's parameters changed since approval (hash mismatch), the approval
+    expired, it was already decided, or the approver was not authorised for this tier,
+    tenant and environment. Never distinguishes further for the caller - all of these mean
+    the same thing: do not execute.
+    """
+
+
+class SelfApprovalAttempt(DomainError):
+    """An actor attempted to approve an action they proposed.
+
+    SI-10: separation of duties applies to humans exactly as it does to nodes.
+    """
+
+
+class PreconditionDrift(DomainError):
+    """State re-checked immediately before execution no longer matches what was proposed.
+
+    SI-7. Raised by the executor after an approval is otherwise valid; the correct
+    response is to fail closed, not to execute against state that has moved on.
+    """
+
+
+class BlastRadiusExceeded(DomainError):
+    """A configured autonomous-remediation limit was reached.
+
+    Halts autonomous remediation for the scope the limit protects (tenant, incident or
+    service) and escalates, rather than continuing under an override no code path grants.
+    """

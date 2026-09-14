@@ -35,7 +35,7 @@ from __future__ import annotations
 
 import time
 import uuid
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeout
 from dataclasses import dataclass
@@ -47,8 +47,10 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
 from asic.contracts.nodes import NodeContract
+from asic.db.models.audit import AuditRecord
+from asic.db.models.remediation import RemediationAction
 from asic.db.models.tools import ToolExecution
-from asic.db.session import require_tenant
+from asic.db.session import apply_statement_timeouts, bind_tenant, require_tenant
 from asic.domain.clock import Clock
 from asic.domain.enums import (
     ActorType,
@@ -77,6 +79,7 @@ from asic.observability import metrics
 from asic.observability.audit import AuditWriter
 from asic.observability.redaction import redact_arguments, redact_mapping
 from asic.observability.tracing import SpanHandle, TraceRecorder
+from asic.remediation.authorization import require_write_authority
 from asic.tools.capability import (
     CapabilityMenu,
     CapabilityResolver,
@@ -108,6 +111,10 @@ class CapabilityRequest(BaseModel):
     incident_id: uuid.UUID
     correlation_id: uuid.UUID
     investigation_step_id: uuid.UUID | None = None
+    #: Set only by the remediation executor (Phase 8). The database itself requires this
+    #: for any non-``RO`` execution (``write_execution_requires_action``) - a write cannot
+    #: reach the broker without having gone through the policy gate that produced it.
+    remediation_action_id: uuid.UUID | None = None
     #: Why the call is being made. Recorded for audit; never consulted for authorization.
     purpose: str = ""
 
@@ -158,6 +165,7 @@ class ToolBroker:
 
     __slots__ = (
         "_audit",
+        "_claim_session_factory",
         "_clock",
         "_executor",
         "_menus",
@@ -177,6 +185,7 @@ class ToolBroker:
         audit: AuditWriter,
         tracer: TraceRecorder,
         clock: Clock,
+        claim_session_factory: Callable[[], Session] | None = None,
         sleep: Any = time.sleep,
     ) -> None:
         if not providers:
@@ -187,6 +196,7 @@ class ToolBroker:
         self._audit = audit
         self._tracer = tracer
         self._clock = clock
+        self._claim_session_factory = claim_session_factory
         self._sleep = sleep
         self._menus: dict[NodeId, CapabilityMenu] = {}
         self._executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="asic-tool")
@@ -269,15 +279,23 @@ class ToolBroker:
                 metrics.schema_violations_total.add(1, {"node": request.node_id.value})
                 return self._refused(request, failure)
 
+            key_arguments = {
+                name: _key_safe(value)
+                for name, value in sorted(bound.items())
+                if name in descriptor.idempotency_key_fields
+            }
+            if descriptor.risk_tier is RiskTier.RO and request.node_id in (
+                NodeId.G9_REMEDIATION_EXECUTOR,
+                NodeId.G10_VERIFIER,
+            ):
+                # A safety observation must read current state, including when the read
+                # descriptor's ordinary investigation key has no temporal component.
+                key_arguments["observation_id"] = uuid.uuid4().hex
             key = tool_execution_key(
                 tenant_id=self._scope.tenant_id,
                 tool_name=descriptor.name,
                 tool_major_version=descriptor.major_version,
-                scope_arguments={
-                    name: _key_safe(value)
-                    for name, value in sorted(bound.items())
-                    if name in descriptor.idempotency_key_fields
-                },
+                scope_arguments=key_arguments,
             )
 
             recorded = self._recorded_execution(session, key)
@@ -285,6 +303,15 @@ class ToolBroker:
                 span.set_attributes(deduplicated=True, idempotency_key=key)
                 span.tool_execution_id = recorded.id
                 return self._from_recorded(request, descriptor, recorded, resolved_scope)
+
+            if descriptor.risk_tier is not RiskTier.RO:
+                try:
+                    self._claim_write(session, request, descriptor, key)
+                except DomainError as exc:
+                    failure = _classify_refusal(stage_of(exc), exc)
+                    span.fail(failure.message)
+                    self._audit_refusal(session, request, failure)
+                    return self._refused(request, failure)
 
             return self._dispatch(
                 session,
@@ -300,6 +327,60 @@ class ToolBroker:
             )
 
     # --------------------------------------------------------------------- pipeline
+
+    def _claim_write(
+        self,
+        session: Session,
+        request: CapabilityRequest,
+        descriptor: ToolDescriptor,
+        effect_key: str,
+    ) -> None:
+        """Commit an append-only effect claim before any provider can receive a write.
+
+        The tenant lock serializes the claim check and insertion. An unresolved claim
+        survives a process crash even when no execution receipt was persisted. Such an
+        effect is never dispatched again; recovery must observe it or escalate.
+        """
+        if self._claim_session_factory is None:
+            raise CapabilityNotGranted("write broker has no durable effect-claim store")
+        claim_session = self._claim_session_factory()
+        try:
+            bind_tenant(claim_session, self._scope.tenant_id)
+            apply_statement_timeouts(claim_session)
+            claim_session.execute(
+                sa.text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
+                {"key": f"remediation:{self._scope.tenant_id}"},
+            )
+            claimed = claim_session.execute(
+                sa.select(AuditRecord.id)
+                .where(
+                    AuditRecord.tenant_id == self._scope.tenant_id,
+                    AuditRecord.event_type == AuditEventType.TOOL_AUTHORIZATION_EVALUATED,
+                    AuditRecord.payload_redacted["effect_key"].astext == effect_key,
+                )
+                .limit(1)
+            ).scalar_one_or_none()
+            if claimed is not None:
+                raise CapabilityNotGranted("effect already claimed; reconcile without redispatch")
+            self._audit.record(
+                claim_session,
+                event_type=AuditEventType.TOOL_AUTHORIZATION_EVALUATED,
+                outcome="allowed",
+                actor_type=ActorType.SYSTEM,
+                actor_id=request.node_id.value,
+                incident_id=request.incident_id,
+                correlation_id=request.correlation_id,
+                target_type="remediation_action",
+                target_id=str(request.remediation_action_id),
+                risk_tier=descriptor.risk_tier,
+                payload={"effect_key": effect_key, "dispatch_claimed": True},
+            )
+            claim_session.commit()
+        except BaseException:
+            claim_session.rollback()
+            raise
+        finally:
+            claim_session.close()
 
     def _authorize(
         self,
@@ -328,6 +409,21 @@ class ToolBroker:
         # 3. Capability resolution against tenant, environment and grant.
         menu = self.menu_for(session, contract)
         granted = menu.get(request.capability)
+        action = None
+        if not request.capability.startswith("read."):
+            action = session.execute(
+                sa.select(RemediationAction).where(
+                    RemediationAction.tenant_id == bound_tenant,
+                    RemediationAction.incident_id == request.incident_id,
+                    RemediationAction.id == request.remediation_action_id,
+                )
+            ).scalar_one_or_none()
+            if action is None:
+                raise CapabilityNotGranted("write requires a scoped remediation action")
+            selected = menu.get_by_tool_name(action.tool_name)
+            if selected is None or selected.capability != request.capability:
+                raise CapabilityNotGranted("action tool is not granted for this capability")
+            granted = selected
         descriptor = granted.descriptor
         if not descriptor.is_enabled:
             raise CapabilityNotGranted(f"{descriptor.name} is disabled in the registry")
@@ -335,6 +431,15 @@ class ToolBroker:
         # 4. Risk boundary, re-checked immediately before dispatch rather than trusted
         #    from menu-resolution time.
         self._resolver.assert_tier_permitted(descriptor)
+        if action is not None:
+            require_write_authority(
+                session,
+                action=action,
+                descriptor=descriptor,
+                arguments=request.arguments,
+                environment_id=self._scope.environment_id,
+                now=self._clock.now(),
+            )
         return granted
 
     def _recorded_execution(self, session: Session, key: str) -> ToolExecution | None:
@@ -391,14 +496,21 @@ class ToolBroker:
                 failure = None
                 break
             except ToolTimeout as exc:
+                # A read has no effect, so a read timeout is known-clean rather than
+                # unknown. A write timeout is not: the adapter may have applied the effect
+                # before abandoning the connection, so it is never retried and never
+                # assumed failed - it is reconciled by query (§5.2 of the safety policy).
+                is_write = descriptor.risk_tier is not RiskTier.RO
                 failure = BrokerFailure(
                     stage=BrokerStage.ADAPTER_INVOCATION,
                     error_type="ToolTimeout",
                     message=str(exc),
-                    # A read has no effect, so a read timeout is known-clean rather than
-                    # unknown. Only a write timeout needs reconciliation.
-                    operation_class=OperationClass.C1_PURE_READ,
-                    retryable=True,
+                    operation_class=(
+                        OperationClass.C4_UNKNOWN_OUTCOME
+                        if is_write
+                        else OperationClass.C1_PURE_READ
+                    ),
+                    retryable=not is_write,
                 )
             except ToolAdapterError as exc:
                 failure = BrokerFailure(
@@ -439,16 +551,27 @@ class ToolBroker:
             self._sleep(descriptor.retry_backoff_seconds * attempts)
 
         duration_ms = max(0, int((time.perf_counter() - began) * 1000))
-        outcome = (
-            ToolExecutionOutcome.SUCCEEDED if failure is None else ToolExecutionOutcome.FAILED_CLEAN
-        )
+        if failure is None:
+            outcome = ToolExecutionOutcome.SUCCEEDED
+        elif (
+            descriptor.risk_tier is not RiskTier.RO
+            or failure.operation_class is OperationClass.C4_UNKNOWN_OUTCOME
+        ):
+            # A write that timed out may have applied before the connection was abandoned.
+            # SI-8/§5.2: never assumed failed, never blindly retried - reconciled by query,
+            # which happens above the broker (the executor re-reads the target's own
+            # state), because only the caller knows what "the effect happened" looks like
+            # for this specific action.
+            outcome = ToolExecutionOutcome.UNKNOWN
+        else:
+            outcome = ToolExecutionOutcome.FAILED_CLEAN
         injection_flags = scan_structure(payload) if failure is None else ()
 
         execution = ToolExecution(
             tenant_id=self._scope.tenant_id,
             incident_id=request.incident_id,
             investigation_step_id=request.investigation_step_id,
-            remediation_action_id=None,
+            remediation_action_id=request.remediation_action_id,
             tool_definition_id=self._tool_definition_id(session, descriptor),
             tool_name=descriptor.name,
             tool_version=descriptor.version,

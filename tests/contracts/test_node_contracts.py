@@ -19,35 +19,39 @@ from asic.contracts.nodes import (
     NODE_CONTRACTS,
     contract_for,
 )
-from asic.contracts.state import IMMUTABLE_STATE_KEYS, STATE_KEYS
 from asic.domain.enums import NodeId
 from asic.domain.errors import ContractViolation
-from asic.orchestration.graph import GRAPH_NODES
+from asic.orchestration.graph import GRAPH_NODES as INVESTIGATION_GRAPH_NODES
+from asic.orchestration.remediation.graph import GRAPH_NODES as REMEDIATION_GRAPH_NODES
+
+#: Both graphs share one contract registry (ADR-0023), so "every graph node has a
+#: contract, and every contract belongs to a graph node" is checked against their union.
+ALL_GRAPH_NODES = (*INVESTIGATION_GRAPH_NODES, *REMEDIATION_GRAPH_NODES)
 
 
 class TestRegistry:
     def test_every_graph_node_has_a_contract(self) -> None:
-        missing = [name for name in GRAPH_NODES if name not in NODE_CONTRACTS]
+        missing = [name for name in ALL_GRAPH_NODES if name not in NODE_CONTRACTS]
         assert missing == [], (
             f"graph node(s) {missing} have no contract; a node with no contract cannot be "
             "scheduled because nothing would constrain what it writes"
         )
 
     def test_every_contract_belongs_to_a_graph_node(self) -> None:
-        assert set(NODE_CONTRACTS) == set(GRAPH_NODES)
+        assert set(NODE_CONTRACTS) == set(ALL_GRAPH_NODES)
 
     def test_an_unregistered_node_is_refused(self) -> None:
         with pytest.raises(ContractViolation, match="no contract registered"):
-            contract_for("remediation_executor")
+            contract_for("no_such_graph_node")
 
     def test_permitted_keys_are_real_state_keys(self) -> None:
         for name, contract in NODE_CONTRACTS.items():
-            unknown = contract.permitted_state_keys - STATE_KEYS
+            unknown = contract.permitted_state_keys - contract.state_keys
             assert unknown == frozenset(), f"{name} permits non-existent state key(s) {unknown}"
 
     def test_no_contract_permits_writing_immutable_run_state(self) -> None:
         for name, contract in NODE_CONTRACTS.items():
-            overlap = contract.permitted_state_keys & IMMUTABLE_STATE_KEYS
+            overlap = contract.permitted_state_keys & contract.immutable_state_keys
             assert overlap == frozenset(), (
                 f"{name} may write {overlap}, but identity, trace context and objective are "
                 "fixed for the lifetime of a run"
@@ -93,14 +97,24 @@ class TestStateMutationEnforcement:
 
 
 class TestCapabilityDeclarations:
-    def test_only_the_evidence_collector_has_capabilities(self) -> None:
+    def test_only_the_designated_nodes_have_capabilities(self) -> None:
+        # Phase 4: G4 is the sole read path. Phase 8 (ADR-0023) adds exactly two more -
+        # G9, the sole write path, and G10, which reads independently of G9 to verify
+        # (SI-9). No other node - in either graph - may reach an external system at all;
+        # giving a reasoning node capabilities would remove the separation the broker
+        # exists to enforce.
         with_capabilities = {
             name for name, contract in NODE_CONTRACTS.items() if contract.capabilities
         }
-        assert with_capabilities == {"evidence_collector"}, (
-            "exactly one node may reach an external system; giving a reasoning node "
-            "capabilities would remove the separation the broker exists to enforce"
-        )
+        assert with_capabilities == {"evidence_collector", "remediation_executor", "verifier"}
+
+    def test_only_the_executor_may_write(self) -> None:
+        for name, contract in NODE_CONTRACTS.items():
+            writes = [c for c in contract.capabilities if not c.startswith("read.")]
+            if name == "remediation_executor":
+                assert writes, "the executor is the one node this deployment lets write at all"
+            else:
+                assert writes == [], f"{name} declares non-read capability {writes}"
 
     def test_the_planner_cannot_request_any_capability(self) -> None:
         for capability in ("read.metrics", "read.logs", "mutate.k8s_deployment"):
@@ -108,14 +122,6 @@ class TestCapabilityDeclarations:
 
     def test_the_hypothesis_engine_cannot_request_any_capability(self) -> None:
         assert G5_HYPOTHESIS_ENGINE.capabilities == frozenset()
-
-    def test_no_contract_declares_a_write_capability(self) -> None:
-        for name, contract in NODE_CONTRACTS.items():
-            offenders = [c for c in contract.capabilities if not c.startswith("read.")]
-            assert offenders == [], (
-                f"{name} declares non-read capability {offenders}; this deployment is "
-                "read-only and has no policy gate to authorize a write"
-            )
 
 
 class TestContractCompleteness:

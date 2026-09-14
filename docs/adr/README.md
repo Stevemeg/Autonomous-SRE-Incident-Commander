@@ -1,14 +1,15 @@
 # Architecture Decision Records
 
-> **Twenty records. Fifteen are Accepted.**
+> **Twenty-one records. Sixteen are Accepted.**
 >
 > ADRs 0001-0011 were written during the Architecture Package. Later implementation phases
 > accepted the decisions whose evidence now exists; the table below is authoritative for
 > current status. ADRs 0012-0014 were raised during Phase 3, 0015-0018 during Phase 4 and
-> its migration-history correction, 0019 during Phase 5, and 0022 during Phase 7. ADR
-> numbers 0020 and 0021 are reserved by forward references left in the Phase 6 correction
-> (the `provider_kind` label defect and a retrieval-quality bound) and are not yet written;
-> Phase 7 numbers its own record 0022 rather than collide with them.
+> its migration-history correction, 0019 during Phase 5, 0022 during Phase 7, and 0023
+> during Phase 8. ADR numbers 0020 and 0021 are reserved by forward references left in the
+> Phase 6 correction (the `provider_kind` label defect and a retrieval-quality bound) and are
+> not yet written; Phase 7 and Phase 8 number their own records 0022 and 0023 rather than
+> collide with them.
 
 ## Why ADRs are mandatory here
 
@@ -87,6 +88,7 @@ not replace an accepted ADR.
 | [0018](./0018-migrations-are-historical-contracts.md) | Migrations are historical contracts and never read live application code | **`Accepted`** | 12, 15, 20 | 2026-09-09 |
 | [0019](./0019-transactional-signal-ingestion.md) | Transactional signal ingestion and durable investigation requests | **`Accepted`** | 12, 14, 15, 17 | 2026-09-11 |
 | [0022](./0022-bounded-reflection-without-a-new-node.md) | Bounded reflection extends the hypothesis engine's output, not a new graph node | **`Accepted`** | 3, 4, 15 | 2026-09-13 |
+| [0023](./0023-bounded-remediation-as-a-separate-graph.md) | Bounded remediation runs as a separate graph/kernel, entered only from a human-reopened investigation | **`Accepted`** | 3, 6, 17 | 2026-09-14 |
 
 ## Priority order for acceptance
 
@@ -132,6 +134,12 @@ during implementation become ADRs rather than being made silently:
 | ADR | Discovered because | Evidence |
 |---|---|---|
 | [0022](./0022-bounded-reflection-without-a-new-node.md) | Section 6.2 of the orchestration kernel doc named bounded reflection as deliberately deferred to Phase 7; building it required deciding whether it needed a thirteenth graph node or could extend the existing "model proposes, deterministic guard decides" pattern | `test_reflection.py`, `test_termination.py::TestReflectionDrivenTermination`, `test_hypothesis.py::TestBoundedReflection` |
+
+## Decisions raised by Phase 8
+
+| ADR | Discovered because | Evidence |
+|---|---|---|
+| [0023](./0023-bounded-remediation-as-a-separate-graph.md) | The already-accepted Phase 3 state machine has no `escalated -> awaiting_approval`/`remediating` edge, only a human-only `escalated -> investigating` one; building remediation required deciding whether it extends investigation's graph or is a separate one entered through that existing transition | `tests/orchestration/test_remediation.py`, `tests/domain/test_policy.py`, `TestRiskCeiling` in `test_broker.py` |
 
 ## Candidate decisions still to be written
 

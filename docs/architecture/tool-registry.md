@@ -1,10 +1,10 @@
 # Tool Registry and Capability Model
 
 - **Status:** Authored — Architecture Package (V3 §23 G). Formalised as [ADR-0003](../adr/0003-tool-boundary-native-adapters-mcp-ready.md).
-  **Partially implemented:** the registry, capability resolver and broker exist and the seven
-  read-only capabilities of §8 are registered ([`orchestration-kernel.md`](./orchestration-kernel.md)).
-  Every write tier in §8 is deliberately absent until the policy gate exists
-  ([ADR-0017](../adr/0017-read-only-capability-ceiling.md)).
+  **Implemented through Phase 8:** seven read capabilities remain isolated in the
+  investigation registry; four typed R1/R2 simulator-backed Kubernetes actions are available
+  only to the remediation executor through the policy and approval boundary
+  ([`bounded-remediation.md`](./bounded-remediation.md)). R3 remains unregistrable.
 - **Master specification references:** Sections 6, 7, 15, 23(G)
 - **Related:** [`remediation-safety-policy.md`](./remediation-safety-policy.md) · [`../security/THREAT_MODEL.md`](../security/THREAT_MODEL.md)
 

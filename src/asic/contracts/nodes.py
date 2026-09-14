@@ -25,6 +25,10 @@ from typing import Final
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from asic.contracts.remediation_state import (
+    REMEDIATION_IMMUTABLE_STATE_KEYS,
+    REMEDIATION_STATE_KEYS,
+)
 from asic.contracts.state import IMMUTABLE_STATE_KEYS, STATE_KEYS
 from asic.domain.enums import (
     AuditEventType,
@@ -96,6 +100,14 @@ class NodeContract(BaseModel):
     incident_events: tuple[IncidentEventType, ...] = ()
     span_kind: TraceSpanKind = TraceSpanKind.NODE_EXECUTE
 
+    #: The state-key universe this contract is validated against. Defaults to the
+    #: investigation graph's own (:mod:`asic.contracts.state`); the remediation graph's
+    #: contracts pass :data:`asic.contracts.remediation_state.REMEDIATION_STATE_KEYS`
+    #: instead (ADR-0023) - a separate universe, so a remediation node's contract cannot
+    #: accidentally be satisfied by an investigation-only key or vice versa.
+    state_keys: frozenset[str] = STATE_KEYS
+    immutable_state_keys: frozenset[str] = IMMUTABLE_STATE_KEYS
+
     def validate_update(self, update: Mapping[str, object]) -> None:
         """Reject a state update that exceeds this contract.
 
@@ -103,13 +115,13 @@ class NodeContract(BaseModel):
             ContractViolation: on an unknown key, an immutable key, or a key the contract
                 does not list.
         """
-        offending = [key for key in update if key not in STATE_KEYS]
+        offending = [key for key in update if key not in self.state_keys]
         if offending:
             raise ContractViolation(
                 f"{self.node_id.value} returned unknown state key(s) {sorted(offending)}; "
                 f"the graph state has no such field"
             )
-        immutable = [key for key in update if key in IMMUTABLE_STATE_KEYS]
+        immutable = [key for key in update if key in self.immutable_state_keys]
         if immutable:
             raise ContractViolation(
                 f"{self.node_id.value} attempted to rewrite immutable run state "
@@ -416,6 +428,290 @@ G2_TERMINATOR: Final = NodeContract(
 )
 
 
+# ------------------------------------------------------------- remediation (Phase 8)
+
+#: Write capability names the remediation executor may request. Mirrors
+#: ``_READ_CAPABILITIES`` above: the set the registry's write catalogue actually
+#: registers, not a guess at what it might one day contain.
+_WRITE_CAPABILITIES: Final[frozenset[str]] = frozenset(
+    {"mutate.k8s_deployment", "mutate.k8s_scale", "mutate.k8s_node"}
+)
+
+_REMEDIATION_RETRY = RetryContract(max_attempts=1, operation_class=OperationClass.C1_PURE_READ)
+
+G6_REMEDIATION_PLANNER: Final = NodeContract(
+    node_id=NodeId.G6_REMEDIATION_PLANNER,
+    node_version="1.0.0",
+    contract_version="1.0.0",
+    purpose=(
+        "Propose exactly one remediation action against the incident's accepted "
+        "hypothesis, selected from a pre-resolved menu of registered write capabilities. "
+        "Authors only reason, evidence references, expected effect and verification "
+        "criteria (master specification section 6 fields 2, 3, 4, 11); risk tier, "
+        "permission scope, preconditions, rollback, approval requirement and timeout are "
+        "resolved from the registry and the incident, never from the model."
+    ),
+    inputs=("objective", "hypothesis", "write_capability_menu"),
+    outputs=("remediation_action", "phase"),
+    permitted_state_keys=frozenset(
+        {
+            "phase",
+            "remediation_action",
+            "budget",
+            "failures",
+            "terminated",
+            "termination_reason",
+            "target_incident_status",
+        }
+    ),
+    # Deliberately empty, on the same principle as the investigation planner: this node
+    # reasons about what to propose and is structurally incapable of proposing anything
+    # that reaches an adapter. The broker refuses any request whose calling node does not
+    # declare the capability, and this node declares none.
+    capabilities=frozenset(),
+    model_backed=True,
+    timeout_seconds=90,
+    retry=RetryContract(
+        max_attempts=1,
+        schema_repair_attempts=1,
+        operation_class=OperationClass.C6_DETERMINISTIC_REJECTION,
+    ),
+    idempotency=(
+        "Keyed by (workflow_run_id, hypothesis_id, tool_name, scope) via "
+        "remediation_request_key; a re-proposal of the same effect against the same "
+        "hypothesis collides with the earlier row rather than duplicating it."
+    ),
+    failure_modes=(
+        "schema-invalid model output",
+        "model provider outage",
+        "selection of a capability outside the resolved write menu",
+        "a proposal naming a hypothesis this run's incident does not hold",
+        "no safe action expressible for this root cause class",
+    ),
+    termination_behaviour=(
+        "Terminates the run with no target incident status change if it proposes "
+        "nothing; the incident remains investigating and a human reviews it, exactly as "
+        "an escalation from the investigation kernel already would."
+    ),
+    incident_events=(
+        IncidentEventType.REMEDIATION_PROPOSED,
+        IncidentEventType.REMEDIATION_REJECTED_UNREGISTERED,
+    ),
+    span_kind=TraceSpanKind.NODE_EXECUTE,
+    state_keys=REMEDIATION_STATE_KEYS,
+    immutable_state_keys=REMEDIATION_IMMUTABLE_STATE_KEYS,
+)
+
+G7_POLICY_GATE: Final = NodeContract(
+    node_id=NodeId.G7_POLICY_GATE,
+    node_version="1.0.0",
+    contract_version="1.0.0",
+    purpose=(
+        "Decide, deterministically, whether a proposed action is allowed, denied, or "
+        "requires human approval, applying the risk-tier autonomy matrix and the five "
+        "ambiguity signals of the safety policy - never a model's stated confidence."
+    ),
+    inputs=("remediation_action",),
+    outputs=("policy_decision", "phase"),
+    permitted_state_keys=frozenset(
+        {
+            "phase",
+            "policy_decision",
+            "remediation_action",
+            "budget",
+            "failures",
+            "terminated",
+            "termination_reason",
+            "target_incident_status",
+        }
+    ),
+    capabilities=frozenset(),
+    model_backed=False,
+    timeout_seconds=10,
+    retry=_REMEDIATION_RETRY,
+    idempotency="Pure function of durable rows; re-running it against the same action yields the same verdict.",
+    failure_modes=("none - the rule set is total and every rule is deterministic",),
+    termination_behaviour=(
+        "Never terminates the run on its own; it routes to the approval service, the "
+        "executor, or a denial that ends the run in escalation, and always writes exactly "
+        "one policy_decision row (INV-6), including on allow."
+    ),
+    audit_events=(AuditEventType.POLICY_DECIDED,),
+    incident_events=(IncidentEventType.POLICY_EVALUATED,),
+    span_kind=TraceSpanKind.NODE_EXECUTE,
+    state_keys=REMEDIATION_STATE_KEYS,
+    immutable_state_keys=REMEDIATION_IMMUTABLE_STATE_KEYS,
+)
+
+G8_APPROVAL_SERVICE: Final = NodeContract(
+    node_id=NodeId.G8_APPROVAL_SERVICE,
+    node_version="1.0.0",
+    contract_version="1.0.0",
+    purpose=(
+        "Create a durable, time-bounded approval request bound to one action version, and "
+        "suspend the run until a human decides, the request expires, or the action's "
+        "version changes underneath it."
+    ),
+    inputs=("remediation_action", "policy_decision"),
+    outputs=("approval", "phase"),
+    permitted_state_keys=frozenset(
+        {
+            "phase",
+            "approval",
+            "remediation_action",
+            "budget",
+            "failures",
+            "terminated",
+            "termination_reason",
+            "target_incident_status",
+        }
+    ),
+    capabilities=frozenset(),
+    model_backed=False,
+    timeout_seconds=10,
+    retry=_REMEDIATION_RETRY,
+    idempotency=(
+        "Keyed by (action_id, action_version_hash) via approval_callback_key; a "
+        "re-proposed action with changed parameters requires a new decision rather than "
+        "being satisfied by an earlier reply (SI-6)."
+    ),
+    failure_modes=(
+        "approval expired before a human decided",
+        "approval decided by the same actor who proposed the action (SI-10)",
+        "action parameters changed after the approval was requested (SI-6)",
+    ),
+    termination_behaviour=(
+        "Suspends the run (a durable interrupt, not a crash) while a decision is "
+        "outstanding; the resumed run re-reads the approval row rather than trusting "
+        "in-memory state, so a decision made while the process was down is not missed."
+    ),
+    audit_events=(AuditEventType.APPROVAL_REQUESTED, AuditEventType.APPROVAL_DECIDED),
+    incident_events=(
+        IncidentEventType.APPROVAL_REQUESTED,
+        IncidentEventType.APPROVAL_GRANTED,
+        IncidentEventType.APPROVAL_REJECTED,
+        IncidentEventType.APPROVAL_EXPIRED,
+        IncidentEventType.APPROVAL_INVALIDATED_STALE,
+    ),
+    span_kind=TraceSpanKind.NODE_EXECUTE,
+    state_keys=REMEDIATION_STATE_KEYS,
+    immutable_state_keys=REMEDIATION_IMMUTABLE_STATE_KEYS,
+)
+
+G9_REMEDIATION_EXECUTOR: Final = NodeContract(
+    node_id=NodeId.G9_REMEDIATION_EXECUTOR,
+    node_version="1.0.0",
+    contract_version="1.0.0",
+    purpose=(
+        "Re-validate the action's version hash and preconditions immediately before "
+        "dispatch, then execute it through the tool broker - the only node besides the "
+        "evidence collector with any capability at all, and the only one that may write."
+    ),
+    inputs=("remediation_action", "policy_decision", "approval"),
+    outputs=("remediation_action", "phase"),
+    permitted_state_keys=frozenset(
+        {
+            "phase",
+            "remediation_action",
+            "budget",
+            "failures",
+            "terminated",
+            "termination_reason",
+            "target_incident_status",
+        }
+    ),
+    # Both write (to execute) and read (to re-validate preconditions against live state
+    # immediately before dispatch - SI-7) - the only node in either graph with both.
+    capabilities=_WRITE_CAPABILITIES | _READ_CAPABILITIES,
+    model_backed=False,
+    # Below the idle-in-transaction bound (docs/architecture/orchestration-kernel.md
+    # §11): the node's own DB transaction stays open for the duration of a tool call, so
+    # its declared timeout must leave headroom under the server-enforced bound, not just
+    # under the tool's own ceiling.
+    timeout_seconds=150,
+    retry=RetryContract(max_attempts=1, operation_class=OperationClass.C2_IDEMPOTENT_WRITE),
+    idempotency=(
+        "The broker keys the effect on business identifiers (tool, scope), not the "
+        "action id, so a repeated execution of the same effect returns the recorded "
+        "result rather than applying twice (SI-8)."
+    ),
+    failure_modes=(
+        "action_version_hash mismatch (approval no longer matches the action)",
+        "precondition drift since approval",
+        "adapter timeout (unknown outcome; reconciled by query, never blindly retried)",
+        "adapter error",
+        "malformed adapter result",
+    ),
+    termination_behaviour=(
+        "Never claims success on its own; it records what happened and hands the "
+        "observed outcome to the verifier, which is independent of it (SI-9)."
+    ),
+    audit_events=(AuditEventType.REMEDIATION_EXECUTED, AuditEventType.TOOL_EXECUTED),
+    incident_events=(
+        IncidentEventType.EXECUTION_STARTED,
+        IncidentEventType.EXECUTION_COMPLETED,
+        IncidentEventType.EXECUTION_FAILED,
+        IncidentEventType.COMPENSATION_STARTED,
+        IncidentEventType.COMPENSATION_COMPLETED,
+    ),
+    span_kind=TraceSpanKind.NODE_EXECUTE,
+    state_keys=REMEDIATION_STATE_KEYS,
+    immutable_state_keys=REMEDIATION_IMMUTABLE_STATE_KEYS,
+)
+
+G10_VERIFIER: Final = NodeContract(
+    node_id=NodeId.G10_VERIFIER,
+    node_version="1.0.0",
+    contract_version="1.0.0",
+    purpose=(
+        "Independently observe the target system's actual state through the read-only "
+        "broker path and compare it against the criteria frozen at proposal time. Never "
+        "receives, and never trusts, the executor's own claim of success (SI-9)."
+    ),
+    inputs=("remediation_action", "verification_criteria"),
+    outputs=("verification", "phase"),
+    permitted_state_keys=frozenset(
+        {
+            "phase",
+            "verification",
+            "remediation_action",
+            "budget",
+            "failures",
+            "terminated",
+            "termination_reason",
+            "target_incident_status",
+        }
+    ),
+    capabilities=_READ_CAPABILITIES,
+    model_backed=False,
+    timeout_seconds=90,
+    retry=_REMEDIATION_RETRY,
+    idempotency=(
+        "Keyed by (action_id, attempt) via verification_callback_key; a duplicated "
+        "callback for the same attempt returns the recorded verdict."
+    ),
+    failure_modes=(
+        "observation window has not yet settled (verification refuses to start early)",
+        "the read path itself fails (inconclusive, never assumed success)",
+        "criteria hash mismatch against the frozen proposal (redefinition after the fact)",
+    ),
+    termination_behaviour=(
+        "Always produces exactly one of verified, not_verified or inconclusive - never "
+        "silently omits a verdict. not_verified routes to compensation; inconclusive "
+        "escalates without compensating, because acting on an unknown state can itself "
+        "cause harm."
+    ),
+    audit_events=(AuditEventType.VERIFICATION_RECORDED,),
+    incident_events=(
+        IncidentEventType.VERIFICATION_STARTED,
+        IncidentEventType.VERIFICATION_RESULT,
+    ),
+    span_kind=TraceSpanKind.NODE_EXECUTE,
+    state_keys=REMEDIATION_STATE_KEYS,
+    immutable_state_keys=REMEDIATION_IMMUTABLE_STATE_KEYS,
+)
+
+
 #: Graph-node key -> contract. Keyed by the graph node name rather than by
 #: :class:`~asic.domain.enums.NodeId` because the coordinator contributes two nodes to the
 #: graph - entry routing and termination - with different permitted mutations.
@@ -425,6 +721,11 @@ NODE_CONTRACTS: Final[Mapping[str, NodeContract]] = {
     "evidence_collector": G4_EVIDENCE_COLLECTOR,
     "hypothesis_engine": G5_HYPOTHESIS_ENGINE,
     "terminator": G2_TERMINATOR,
+    "remediation_planner": G6_REMEDIATION_PLANNER,
+    "policy_gate": G7_POLICY_GATE,
+    "approval_service": G8_APPROVAL_SERVICE,
+    "remediation_executor": G9_REMEDIATION_EXECUTOR,
+    "verifier": G10_VERIFIER,
 }
 
 

@@ -27,6 +27,7 @@ returns nothing rather than returning data that happens to look right.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -142,6 +143,10 @@ class Scenario:
     planner_script: tuple[str, ...]
     hypothesis_script: tuple[str, ...]
     expectation: ScenarioExpectation
+    #: Phase 8: raw model output for G6 Remediation Planner, one entry per call. Empty for
+    #: every investigation-only scenario - the remediation graph is a separate run against
+    #: a completed investigation's hypothesis, not a continuation of this same script.
+    remediation_planner_script: tuple[str, ...] = ()
     budget: BudgetPolicy | None = None
     tags: tuple[str, ...] = field(default_factory=tuple)
 
@@ -374,7 +379,7 @@ def deployments_none(ctx: SimulationContext) -> Mapping[str, Any]:
 def k8s_workload_healthy_pods(ctx: SimulationContext) -> Mapping[str, Any]:
     return {
         "workloads": [
-            f"Deployment/{ctx.service} replicas=6/6 revision=847 image=v2.14.1",
+            f"Deployment/{ctx.service} replicas=6/6 revision=847 image=v2.14.1 rollout=idle",
             f"HorizontalPodAutoscaler/{ctx.service} current=6 min=4 max=12 cpu=41%",
         ],
         "events": [
@@ -403,6 +408,35 @@ def knowledge_pool_runbook(ctx: SimulationContext) -> Mapping[str, Any]:
         "schema_version": 1,
         "environment": ctx.environment,
         "service": ctx.service,
+    }
+
+
+def k8s_deployment_rollback_success(ctx: SimulationContext) -> Mapping[str, Any]:
+    return {
+        "previous_revision": 847,
+        "new_revision": int(ctx.arguments.get("to_revision", 846)),
+        "source": _SOURCE_K8S,
+        "schema_version": 1,
+    }
+
+
+def k8s_node_cordon_success(ctx: SimulationContext) -> Mapping[str, Any]:
+    del ctx
+    return {"was_schedulable": True, "source": _SOURCE_K8S, "schema_version": 1}
+
+
+def metrics_recovered(ctx: SimulationContext) -> Mapping[str, Any]:
+    """Post-remediation telemetry: latency back under the verification threshold."""
+    return {
+        "samples": _samples(ctx, (0.180, 0.178, 0.182, 0.179, 0.181)),
+        "unit": "seconds",
+        "source": _SOURCE_PROMETHEUS,
+        "schema_version": 1,
+        "series": f"http_request_duration_p95_seconds{{service={ctx.service}}}",
+        "environment": ctx.environment,
+        "service": ctx.service,
+        "window_start": ctx.window_start.isoformat(),
+        "window_end": ctx.window_end.isoformat(),
     }
 
 
@@ -503,6 +537,44 @@ def _hypothesis_with_reflection(
         f'"target_hypothesis_id": {target_json}, "gap": {gap_json}, '
         f'"confidence": {reflection_confidence}'
         "}}"
+    )
+
+
+def _remediation_plan(
+    *,
+    tool_name: str | None,
+    arguments: dict[str, Any] | None = None,
+    reason: str = "",
+    evidence_ids: str = "ALL",
+    metric: str = "http_request_duration_p95_seconds",
+    threshold: float = 0.25,
+    confidence: float = 0.7,
+) -> str:
+    """One scripted G6 Remediation Planner response.
+
+    ``evidence_ids: "ALL"`` is a sentinel this phase's fixtures resolve to every evidence
+    id linked to the hypothesis, mirroring the hypothesis engine's own ``ALL``/``NONE``
+    citation sentinels - a script cannot know a generated evidence id in advance either.
+    """
+    return json.dumps(
+        {
+            "tool_name": tool_name,
+            "arguments": arguments or {},
+            "reason": reason or "the hypothesis directly implicates this action",
+            "evidence_ids": [evidence_ids],
+            "expected_effect": {
+                "description": "latency returns to baseline",
+                "metric": metric,
+                "direction": "decrease",
+            },
+            "verification_criteria": {
+                "metric": metric,
+                "operator": "<",
+                "threshold": threshold,
+                "window_seconds": 300,
+            },
+            "confidence": confidence,
+        }
     )
 
 

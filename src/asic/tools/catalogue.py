@@ -18,10 +18,12 @@ marked ``scope_resolved``, so they are filled by the broker from the incident an
 supplying one is rejected. This is the mechanism behind "the model cannot widen its own
 reach".
 
-The write tiers named in ``docs/architecture/tool-registry.md`` section 8 - deployment
-rollback, HPA adjustment, pod deletion, node cordon, notification and ticketing - are
-deliberately **absent**. They belong to remediation, which this phase does not implement,
-and a capability that is absent cannot be misused.
+The write tiers named in ``docs/architecture/tool-registry.md`` section 8 are deliberately
+**absent from this module**. They are registered in the sibling
+:mod:`asic.tools.remediation_catalogue` instead (Phase 8, ADR-0023) - a separate catalogue,
+loaded by a separate :meth:`~asic.tools.registry.ToolRegistry.remediation` registry, so this
+module's own read-only guarantee (:func:`~asic.tools.descriptor.assert_no_write_capability`,
+asserted below) is unaffected by anything Phase 8 added elsewhere.
 """
 
 from __future__ import annotations
@@ -41,12 +43,19 @@ from asic.tools.descriptor import (
 #: a run can be attributed to the exact set of capabilities that existed when it ran.
 CATALOGUE_VERSION: Final[str] = "2026.09.07-ro-1"
 
-_SERVICE_NAME_PATTERN: Final[str] = r"[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?"
-_NAMESPACE_PATTERN: Final[str] = r"[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?"
+#: Shared with :mod:`asic.tools.remediation_catalogue`, which registers write tools over
+#: the same kind of scope (tenant/environment/service, plus namespace for k8s tools).
+SERVICE_NAME_PATTERN: Final[str] = r"[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?"
+NAMESPACE_PATTERN: Final[str] = r"[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?"
 
 
-def _scope_arguments() -> tuple[ArgumentSpec, ...]:
-    """The scope every read tool receives from the broker and never from a caller."""
+def scope_arguments() -> tuple[ArgumentSpec, ...]:
+    """The scope every tool receives from the broker and never from a caller.
+
+    Shared across the read and write catalogues: scope resolution is identical for
+    either - the broker fills these from the incident regardless of what the tool does
+    with them.
+    """
     return (
         ArgumentSpec(
             name="tenant_id",
@@ -67,7 +76,7 @@ def _scope_arguments() -> tuple[ArgumentSpec, ...]:
             kind=ArgumentKind.BOUNDED_STRING,
             description="Service resolved from the incident's affected services.",
             scope_resolved=True,
-            pattern=_SERVICE_NAME_PATTERN,
+            pattern=SERVICE_NAME_PATTERN,
         ),
     )
 
@@ -99,7 +108,7 @@ METRICS_QUERY: Final = ToolDescriptor(
     risk_tier=RiskTier.RO,
     provider_kind=ToolProviderKind.SIMULATOR,
     arguments=(
-        *_scope_arguments(),
+        *scope_arguments(),
         *_window_arguments(),
         ArgumentSpec(
             name="metric",
@@ -148,7 +157,7 @@ LOGS_QUERY: Final = ToolDescriptor(
     risk_tier=RiskTier.RO,
     provider_kind=ToolProviderKind.SIMULATOR,
     arguments=(
-        *_scope_arguments(),
+        *scope_arguments(),
         *_window_arguments(),
         ArgumentSpec(
             name="min_level",
@@ -197,7 +206,7 @@ TRACES_QUERY: Final = ToolDescriptor(
     risk_tier=RiskTier.RO,
     provider_kind=ToolProviderKind.SIMULATOR,
     arguments=(
-        *_scope_arguments(),
+        *scope_arguments(),
         *_window_arguments(),
         ArgumentSpec(
             name="min_duration_ms",
@@ -227,7 +236,7 @@ DEPLOY_LIST: Final = ToolDescriptor(
     description="List deployments and configuration changes for one service over a window.",
     risk_tier=RiskTier.RO,
     provider_kind=ToolProviderKind.SIMULATOR,
-    arguments=(*_scope_arguments(), *_window_arguments()),
+    arguments=(*scope_arguments(), *_window_arguments()),
     result_fields=(
         ResultField(name="deployments", kind=ArgumentKind.STRING_LIST, required=False),
         ResultField(name="source", kind=ArgumentKind.BOUNDED_STRING),
@@ -251,13 +260,13 @@ K8S_WORKLOAD_READ: Final = ToolDescriptor(
     risk_tier=RiskTier.RO,
     provider_kind=ToolProviderKind.SIMULATOR,
     arguments=(
-        *_scope_arguments(),
+        *scope_arguments(),
         ArgumentSpec(
             name="namespace",
             kind=ArgumentKind.BOUNDED_STRING,
             description="Namespace, resolved from the service's registered ownership.",
             scope_resolved=True,
-            pattern=_NAMESPACE_PATTERN,
+            pattern=NAMESPACE_PATTERN,
         ),
         ArgumentSpec(
             name="include_events",
@@ -290,7 +299,7 @@ KNOWLEDGE_SEARCH: Final = ToolDescriptor(
     risk_tier=RiskTier.RO,
     provider_kind=ToolProviderKind.SIMULATOR,
     arguments=(
-        *_scope_arguments(),
+        *scope_arguments(),
         ArgumentSpec(
             name="topic",
             kind=ArgumentKind.BOUNDED_STRING,

@@ -457,7 +457,7 @@ class TestUpgradePaths:
             with engine.connect() as conn:
                 assert (
                     conn.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one()
-                    == "0010_p6_correction"
+                    == "0011_remediation_safety"
                 )
         finally:
             engine.dispose()
@@ -470,7 +470,15 @@ class TestUpgradePaths:
         missing = tenant_scoped_tables() - _protected_tables(throwaway_database)
         assert missing == set(), f"unprotected after upgrade: {sorted(missing)}"
 
-    def test_the_catalogue_is_seeded_and_entirely_read_only(self, throwaway_database: str) -> None:
+    def test_the_catalogue_is_seeded_and_matches_the_accepted_ceiling(
+        self, throwaway_database: str
+    ) -> None:
+        """Phase 4-7: entirely read-only. Phase 8 (ADR-0023): r1/r2 join it, r3 never does.
+
+        The read catalogue's own rows (migration 0005) are unaffected by migration 0011 -
+        asserted separately below - so this is "the write catalogue arrived and nothing
+        about the read one changed", not "the ceiling was silently loosened everywhere".
+        """
         config = _alembic_config(throwaway_database)
         command.upgrade(config, "head")
         engine = sa.create_engine(throwaway_database)
@@ -481,8 +489,17 @@ class TestUpgradePaths:
                 ).all()
         finally:
             engine.dispose()
-        assert rows, "the catalogue seeding migration ran"
-        assert {tier for _, tier in rows} == {"ro"}
+        assert rows, "the catalogue seeding migrations ran"
+        tiers = {tier for _, tier in rows}
+        assert tiers == {"ro", "r1", "r2"}, tiers
+        assert "r3" not in tiers, "r3 is never expressible as a registered tool (SI-5)"
+
+        from asic.tools.catalogue import READ_ONLY_CATALOGUE
+
+        read_only_names = {d.name for d in READ_ONLY_CATALOGUE}
+        assert all(tier == "ro" for name, tier in rows if name in read_only_names), (
+            "the read catalogue's own rows must remain entirely read-only"
+        )
 
     def test_a_full_downgrade_leaves_no_orphan_enum_types(self, throwaway_database: str) -> None:
         """Downgrade is legitimately supported on a database with no execution history.

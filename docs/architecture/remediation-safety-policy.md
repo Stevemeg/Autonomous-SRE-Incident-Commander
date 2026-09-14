@@ -1,6 +1,8 @@
 # Safety and Remediation Policy Model
 
-- **Status:** Authored — Architecture Package (V3 §23 J). **Proposed; not implemented.**
+- **Status:** Implemented for the Phase 8 simulator-backed boundary described in
+  [`bounded-remediation.md`](./bounded-remediation.md). Production adapters and automated
+  compensation remain deferred.
 - **Master specification references:** Sections 6, 15, 23(J)
 - **Related:** [`tool-registry.md`](./tool-registry.md) · [`agent-topology.md`](./agent-topology.md) · [`../security/THREAT_MODEL.md`](../security/THREAT_MODEL.md)
 
@@ -226,6 +228,11 @@ catalogue — if we cannot verify it, we do not automate it.
 
 ### 5.3 Blast-radius limits
 
+> **Phase 8 implementation limit:** concurrent remediation in the same tenant/environment
+> is a deterministic policy signal, and typed argument bounds cap each registered action.
+> The per-incident and per-service rolling counters below remain design targets for a later
+> hardening phase; no current claim depends on them.
+
 Enforced by the broker, independent of the gate:
 
 | Limit | Default | Rationale |
@@ -254,8 +261,9 @@ any agent path**.
 | **Outcomes** | `verified` · `not_verified` · `inconclusive` — all three are legitimate |
 | **Headline metric** | **False-success rate.** Declaring success while symptoms persist is the most damaging error the system can make |
 
-`not_verified` triggers compensation, then escalation. `inconclusive` escalates without
-compensation — because compensating on an unknown state can itself cause harm.
+In Phase 8, `not_verified` returns the incident to investigation and `inconclusive`
+escalates. Automated compensation is deferred because compensating on an unknown state can
+itself cause harm; partial effects emit an audit/timeline signal for human handling.
 
 ---
 

@@ -58,7 +58,7 @@ os.environ.setdefault("LANGCHAIN_TRACING_V2", "false")
 
 #: The orchestration-kernel fixtures live in their own module and are registered here so
 #: every suite shares one definition of the scenario fixture set.
-pytest_plugins = ("tests.kernel_fixtures",)
+pytest_plugins = ("tests.kernel_fixtures", "tests.remediation_fixtures")
 
 TEST_URL_ENV = "ASIC_TEST_DATABASE_URL"
 

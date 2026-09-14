@@ -8,7 +8,7 @@ approval, verifies outcomes, and preserves operational memory.
 
 ---
 
-> ## Project status: bounded investigation agents now reflect on their own hypotheses
+> ## Project status: bounded remediation is safety-gated and independently verified
 >
 > A simulated incident can be investigated end to end through a typed, bounded,
 > tenant-aware orchestration graph — planning, evidence collection through a capability
@@ -17,17 +17,17 @@ approval, verifies outcomes, and preserves operational memory.
 > different gap, seek counter-evidence, revise a hypothesis by superseding it, or propose a
 > terminal outcome — every proposal validated by a deterministic guard, never trusted as
 > stated)**, deterministic termination, durable checkpointing and a full execution trace.
-> **It is still read-only in effect: no capability above risk tier `RO` is registered, and
-> none can be until the policy gate exists. Phase 6 added a governed write path for durable
-> operational memory, gated by human approval — it is not remediation. Phase 7 adds no
-> write capability of any kind.**
+> Phase 8 adds a separate remediation graph with typed simulator-backed R1/R2 actions,
+> deterministic policy, exact-effect human approval, broker-only execution, durable effect
+> claims and independent verification. Investigation remains restricted to its read-only
+> registry. R3 actions remain structurally unavailable.
 >
 > | | |
 > |---|---|
-> | **Completed** | Phase 0 bootstrap · Phase 1 requirements · Phase 2 architecture · Phase 3 persistence · Phase 4 orchestration · Phase 5 telemetry ingestion and correlation · Phase 6 operational knowledge, RAG and governed memory · **Phase 7 investigation agents, evidence reasoning and bounded reflection** |
-> | **In progress** | Nothing — Phase 7 is complete |
-> | **Next** | Not yet scoped. Remediation, approval and execution (Phase 8) require explicit review and approval before work begins |
-> | **Remediation, integrations, API, frontend** | None. Deliberately absent, and structurally prevented |
+> | **Completed** | Phase 0 bootstrap · Phase 1 requirements · Phase 2 architecture · Phase 3 persistence · Phase 4 orchestration · Phase 5 telemetry ingestion and correlation · Phase 6 operational knowledge, RAG and governed memory · Phase 7 bounded investigation · **Phase 8 remediation planning, policy, approval, execution and verification** |
+> | **In progress** | Nothing — Phase 8 is complete |
+> | **Next** | Phase 9 backend APIs and incident-command dashboard |
+> | **External integrations** | Deferred to Phase 10; Phase 8 execution uses deterministic simulators |
 >
 > Phase 4 delivered five graph nodes under enforced contracts, a tool broker that is the
 > sole egress point, six deterministic simulators, eleven scenarios, budgets checked before
@@ -44,7 +44,8 @@ approval, verifies outcomes, and preserves operational memory.
 > [telemetry ingestion](docs/architecture/telemetry-ingestion.md),
 > [memory and RAG](docs/architecture/memory-and-rag.md) and
 > [bounded reflection](docs/architecture/bounded-reflection.md) for guarantees, tests, and
-> explicit limitations.
+> explicit limitations, and [bounded remediation](docs/architecture/bounded-remediation.md)
+> for Phase 8's authorization, crash-recovery and verification boundaries.
 > The repository gates include the full pytest suite against an unprivileged PostgreSQL role,
 > strict typing, lint/format, migration drift and documentation/security validation.
 >

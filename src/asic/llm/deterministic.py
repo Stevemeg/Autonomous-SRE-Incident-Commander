@@ -54,6 +54,7 @@ class DeterministicModelProvider:
         self._scripts: dict[NodeId, tuple[str, ...]] = {
             NodeId.G3_INVESTIGATION_PLANNER: scenario.planner_script,
             NodeId.G5_HYPOTHESIS_ENGINE: scenario.hypothesis_script,
+            NodeId.G6_REMEDIATION_PLANNER: scenario.remediation_planner_script,
         }
         self._cursors: dict[NodeId, int] = dict.fromkeys(self._scripts, 0)
         self._fail_after = fail_after

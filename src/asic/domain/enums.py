@@ -363,6 +363,17 @@ class RiskTier(StrEnum):
     def is_agent_invocable(self) -> bool:
         return self is not RiskTier.R3
 
+    @property
+    def rank(self) -> int:
+        """Total order over the agent-invocable tiers, RO lowest.
+
+        Phase 8 (ADR-0023): a resolver's ``max_risk_tier`` is a *ceiling* - a run
+        authorised for R1 may still read - so callers compare rank rather than identity.
+        R3 has no meaningful rank: it is never resolved against because it is never
+        registered (SI-5), and comparing against it would imply a ceiling could admit it.
+        """
+        return {RiskTier.RO: 0, RiskTier.R1: 1, RiskTier.R2: 2}[self]
+
 
 @unique
 class ToolProviderKind(StrEnum):

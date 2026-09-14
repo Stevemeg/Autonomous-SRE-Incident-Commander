@@ -21,7 +21,6 @@ import sqlalchemy as sa
 from sqlalchemy.orm import Session
 
 from asic.db.models.tools import ToolDefinition
-from asic.domain.enums import RiskTier
 from asic.domain.errors import UnregisteredCapability
 from asic.tools.catalogue import CATALOGUE_VERSION, READ_ONLY_CATALOGUE
 from asic.tools.descriptor import ToolDescriptor, assert_no_write_capability
@@ -63,13 +62,55 @@ class ToolRegistry:
 
     @classmethod
     def read_only(cls) -> ToolRegistry:
-        """The read-only catalogue this phase ships.
+        """The read-only catalogue every investigation kernel uses. Unchanged since Phase 4.
 
         Asserts the catalogue's read-only property on construction, so a write tool
-        arriving in the catalogue fails at start-up rather than at first use.
+        arriving in this catalogue fails at start-up rather than at first use. This
+        assertion is unaffected by Phase 8: the read-only catalogue is a fixed module-level
+        tuple that Phase 8 never appends to - it added a *second*, separate catalogue
+        instead (:meth:`remediation`), which is exactly what ADR-0023 requires: the
+        investigation kernel's ceiling stays provably RO regardless of what remediation
+        adds elsewhere.
         """
         assert_no_write_capability(READ_ONLY_CATALOGUE)
         return cls(READ_ONLY_CATALOGUE, version=CATALOGUE_VERSION)
+
+    @classmethod
+    def remediation(cls) -> ToolRegistry:
+        """The write catalogue Phase 8 adds, alongside - never replacing - the read-only one.
+
+        Deliberately does not call :func:`assert_no_write_capability`: this catalogue's
+        entire purpose is R1/R2 write tools. What it does still assert, via
+        :class:`~asic.tools.descriptor.ToolDescriptor`'s own validators (SI-5), is that
+        nothing in it is R3.
+        """
+        from asic.tools.remediation_catalogue import (
+            REMEDIATION_CATALOGUE_VERSION,
+            WRITE_CATALOGUE,
+        )
+
+        return cls(WRITE_CATALOGUE, version=REMEDIATION_CATALOGUE_VERSION)
+
+    @classmethod
+    def remediation_full(cls) -> ToolRegistry:
+        """Read *and* write descriptors together, for the remediation kernel's one broker.
+
+        The remediation graph has both a read-only node (G10, observing independently of
+        the executor) and a write node (G9). ADR-0023's answer to "one broker or two" is
+        one: each node's own contract already restricts what it can see and call
+        (:meth:`CapabilityResolver.resolve` filters by ``contract.permits_capability``), so
+        a combined registry does not widen either node's reach - it only lets them share
+        one broker instance instead of duplicating the tool-broker pathway per node.
+        """
+        from asic.tools.remediation_catalogue import (
+            REMEDIATION_CATALOGUE_VERSION,
+            WRITE_CATALOGUE,
+        )
+
+        return cls(
+            (*READ_ONLY_CATALOGUE, *WRITE_CATALOGUE),
+            version=f"{CATALOGUE_VERSION}+{REMEDIATION_CATALOGUE_VERSION}",
+        )
 
     @property
     def version(self) -> str:
@@ -114,11 +155,20 @@ class ToolRegistry:
         return candidates[0]
 
     def assert_matches_database(self, session: Session) -> Mapping[str, RegisteredTool]:
-        """Compare the catalogue with ``tool_definition`` and return the joined view.
+        """Compare *this registry's own* catalogue with ``tool_definition``.
+
+        Checks only that every descriptor this registry declares has a matching, field-
+        correct database row - not that the database contains nothing else. Since Phase 8
+        (ADR-0023) more than one registry's catalogue can be live in the same database at
+        once (the read-only one and the remediation one), a row belonging to a sibling
+        catalogue is not this registry's business to judge. The combined check that no row
+        anywhere is unexplained by *any* known catalogue is
+        :func:`assert_no_orphan_tool_rows`, run once across every registry rather than
+        repeated on every call site that only ever needed its own tools resolved.
 
         Raises:
-            RegistryDrift: on a missing row, an extra row, or any disagreement on the
-                fields that determine what a tool may do.
+            RegistryDrift: on a missing row, or any disagreement on the fields that
+                determine what a tool this registry describes may do.
         """
         rows = list(
             session.execute(
@@ -143,13 +193,6 @@ class ToolRegistry:
                 descriptor=descriptor,
                 tool_definition_id=row.id,
                 credential_ref=row.credential_ref,
-            )
-
-        catalogue_keys = {(d.name, d.version) for d in self.descriptors()}
-        for name, version in sorted(set(by_key) - catalogue_keys):
-            problems.append(
-                f"{name}@{version} exists in tool_definition but not in the code "
-                "catalogue; a tool with no descriptor has nothing to validate it"
             )
 
         if problems:
@@ -180,8 +223,42 @@ def _compare(descriptor: ToolDescriptor, row: ToolDefinition) -> Iterable[str]:
     for field, expected, actual in checks:
         if expected != actual:
             yield f"{descriptor.name}: {field} is {actual!r} in the database, {expected!r} in code"
-    if row.risk_tier is not RiskTier.RO:
-        yield f"{descriptor.name}: database row is not read-only ({row.risk_tier.value})"
 
 
-__all__ = ["RegisteredTool", "RegistryDrift", "ToolRegistry"]
+def assert_no_orphan_tool_rows(session: Session, *registries: ToolRegistry) -> None:
+    """Assert every ``tool_definition`` row is explained by *some* known registry.
+
+    The per-registry check in :meth:`ToolRegistry.assert_matches_database` deliberately
+    does not do this - a registry only speaks for its own catalogue. This is the combined
+    check: a row that belongs to none of the registries passed here is a capability with no
+    descriptor anywhere to validate it, which is exactly the state ADR-0017 layer 1 exists
+    to make unreachable. Call it with every registry the deployment actually constructs
+    (today: :meth:`ToolRegistry.read_only` and :meth:`ToolRegistry.remediation`).
+
+    Raises:
+        RegistryDrift: naming every orphaned row.
+    """
+    known: set[tuple[str, str]] = set()
+    for registry in registries:
+        known.update((d.name, d.version) for d in registry.descriptors())
+
+    rows = list(
+        session.execute(
+            sa.select(ToolDefinition.name, ToolDefinition.version).order_by(
+                ToolDefinition.name, ToolDefinition.version
+            )
+        ).all()
+    )
+    orphans = [f"{name}@{version}" for name, version in rows if (name, version) not in known]
+    if orphans:
+        raise RegistryDrift(
+            "tool_definition row(s) with no descriptor in any known registry: " + ", ".join(orphans)
+        )
+
+
+__all__ = [
+    "RegisteredTool",
+    "RegistryDrift",
+    "ToolRegistry",
+    "assert_no_orphan_tool_rows",
+]

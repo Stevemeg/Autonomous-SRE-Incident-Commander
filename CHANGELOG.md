@@ -22,6 +22,21 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added — Phase 8 bounded remediation
+
+- Added a separate five-node remediation graph: model proposal, deterministic policy gate,
+  durable human approval, typed execution and independent verification.
+- Added four simulator-backed Kubernetes actions at R1/R2, while preserving investigation's
+  read-only registry and keeping destructive R3 actions unregistrable.
+- Bound approvals to the exact action version and current tenant/environment/risk-scoped
+  human authority, rechecked immediately before dispatch.
+- Added effect-level idempotency with a durable pre-dispatch claim, fresh-state
+  preconditions, unknown-outcome reconciliation and fail-closed empty verification evidence.
+- Added checkpoint/resume support that rehydrates durable rows, retains consumed budgets and
+  never asks the model to replace an already selected action.
+- Added migration `0011_remediation_safety`, ADR-0023, architecture documentation and
+  adversarial policy, approval, crash-window, tenancy and verification tests.
+
 ### Added — Phase 7 investigation agents, evidence reasoning and bounded reflection
 
 - Added bounded reflection: the hypothesis engine's structured output gains an optional
