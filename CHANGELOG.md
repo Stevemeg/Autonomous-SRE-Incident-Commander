@@ -22,6 +22,18 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed — final Phase-10 gate corrections
+
+- Require complete G10 remediation lineage before a T5 verified-outcome proposal or human
+  promotion: immutable target/action, append-only baseline, successful baseline and
+  post-action broker reads, deterministic profile/criteria, scope, time and observed values
+  must agree. Legacy non-empty JSON and forged `verified` rows now fail closed.
+- Narrow model-reservation updates to settlement columns and enforce the one-way
+  `reserved -> completed` transition in PostgreSQL. Completed usage, identity and replay
+  responses are immutable to the application role, including under concurrent settlement.
+- Added migration `0015_verified_memory_ledger` and database-backed adversarial tests. No
+  Phase 10 connector or live-provider functionality is introduced.
+
 ### Fixed — final pre-Phase-10 safety corrections
 
 - Bound each pre-write verification baseline to the immutable target, action, versioned

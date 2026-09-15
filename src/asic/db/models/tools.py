@@ -285,6 +285,14 @@ class ToolExecution(Base, TenantScoped, CreatedAtMixin):
         # One effect per idempotency key per tenant. This is the constraint that makes a
         # double-applied remediation impossible rather than unlikely.
         sa.UniqueConstraint("tenant_id", "idempotency_key", name="uq_tool_execution_idempotency"),
+        # Enables downstream evidence rows to bind a read execution to the exact
+        # remediation action structurally, rather than trusting a copied action id.
+        sa.UniqueConstraint(
+            "tenant_id",
+            "id",
+            "remediation_action_id",
+            name="uq_tool_execution_tenant_id_id_action",
+        ),
         sa.CheckConstraint("attempt >= 1", name="attempt_starts_at_one"),
         sa.CheckConstraint("duration_ms IS NULL OR duration_ms >= 0", name="duration_non_negative"),
         sa.CheckConstraint(

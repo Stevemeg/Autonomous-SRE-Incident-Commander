@@ -126,6 +126,8 @@ class VerificationFact:
     action_criteria_hash: str
     baseline: Mapping[str, Any] = field(default_factory=dict)
     observed: Mapping[str, Any] = field(default_factory=dict)
+    #: True only when the complete persisted G10 baseline/post-read lineage validates.
+    provenance_valid: bool = False
     #: The action's own denormalized lifecycle status, independently written.
     action_status: RemediationActionStatus = RemediationActionStatus.PROPOSED
 
@@ -178,6 +180,8 @@ def evaluate(
             return PolicyDecision(False, "verification_baseline_missing")
         if any(not v.observed for v in refs.verifications):
             return PolicyDecision(False, "verification_observed_missing")
+        if any(not v.provenance_valid for v in refs.verifications):
+            return PolicyDecision(False, "verification_provenance_invalid")
         # ACTION EXECUTED is not OUTCOME VERIFIED: the action's own independently written
         # status must agree that verification concluded ``verified`` - two append-only
         # records disagreeing is refused, not resolved optimistically.

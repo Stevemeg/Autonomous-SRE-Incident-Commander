@@ -469,8 +469,41 @@ class TestUpgradePaths:
             with engine.connect() as conn:
                 assert (
                     conn.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one()
-                    == "0014_pre_phase10_safety"
+                    == "0015_verified_memory_ledger"
                 )
+        finally:
+            engine.dispose()
+
+    def test_phase10_gate_migration_round_trips_from_0014(self, throwaway_database: str) -> None:
+        config = _alembic_config(throwaway_database)
+        command.upgrade(config, "0014_pre_phase10_safety")
+        engine = sa.create_engine(throwaway_database)
+        try:
+            assert "remediation_baseline_id" not in {
+                column["name"] for column in sa.inspect(engine).get_columns("verification")
+            }
+            command.upgrade(config, "0015_verified_memory_ledger")
+            assert "remediation_baseline_id" in {
+                column["name"] for column in sa.inspect(engine).get_columns("verification")
+            }
+            with engine.connect() as connection:
+                assert (
+                    connection.scalar(
+                        sa.text(
+                            "SELECT count(*) FROM pg_trigger WHERE tgname = "
+                            "'enforce_model_call_reservation_transition' AND NOT tgisinternal"
+                        )
+                    )
+                    == 1
+                )
+            command.downgrade(config, "0014_pre_phase10_safety")
+            assert "remediation_baseline_id" not in {
+                column["name"] for column in sa.inspect(engine).get_columns("verification")
+            }
+            command.upgrade(config, "0015_verified_memory_ledger")
+            assert "remediation_baseline_id" in {
+                column["name"] for column in sa.inspect(engine).get_columns("verification")
+            }
         finally:
             engine.dispose()
 

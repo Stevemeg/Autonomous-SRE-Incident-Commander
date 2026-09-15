@@ -76,6 +76,7 @@ from asic.memory.policy import (
     support_count,
 )
 from asic.observability.audit import AuditWriter
+from asic.remediation.trust import trusted_verified_outcome
 
 #: The permission a human needs to decide a promotion. Seeded by migration 0008.
 DECIDE_PERMISSION: Final[str] = "memory.promotion.decide"
@@ -283,6 +284,13 @@ class MemoryGovernanceService:
             refs = _resolve(session, tenant_id, request)
             decision = evaluate(request, proposer, refs)
             if not decision.allowed:
+                self._deny(
+                    session,
+                    tenant_id,
+                    promotion_id,
+                    approver,
+                    decision.reason,
+                )
                 raise MemoryGovernanceError(decision.reason)
             if decision.origin_provenance is not promotion.origin_provenance:
                 raise MemoryGovernanceError("provenance_changed_since_proposal")
@@ -477,24 +485,14 @@ def _resolve(
     verifications: list[VerificationFact] = []
     if request.verification_ids:
         for (
-            verification_id,
-            verdict,
-            action_id,
+            verification,
             incident_id,
-            criteria_hash,
-            observed,
-            baseline,
             action_criteria_hash,
             action_status,
         ) in session.execute(
             sa.select(
-                Verification.id,
-                Verification.verdict,
-                Verification.remediation_action_id,
+                Verification,
                 RemediationAction.incident_id,
-                Verification.criteria_hash,
-                Verification.observed,
-                Verification.baseline,
                 RemediationAction.verification_criteria_hash,
                 RemediationAction.status,
             )
@@ -512,14 +510,17 @@ def _resolve(
         ).all():
             verifications.append(
                 VerificationFact(
-                    verification_id=verification_id,
-                    verdict=verdict,
+                    verification_id=verification.id,
+                    verdict=verification.verdict,
                     incident_id=incident_id,
-                    remediation_action_id=action_id,
-                    criteria_hash=criteria_hash,
+                    remediation_action_id=verification.remediation_action_id,
+                    criteria_hash=verification.criteria_hash,
                     action_criteria_hash=action_criteria_hash,
-                    baseline=dict(baseline or {}),
-                    observed=dict(observed or {}),
+                    baseline=dict(verification.baseline or {}),
+                    observed=dict(verification.observed or {}),
+                    provenance_valid=trusted_verified_outcome(
+                        session, tenant_id=tenant_id, verification=verification
+                    ),
                     action_status=action_status,
                 )
             )

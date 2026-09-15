@@ -840,6 +840,14 @@ def _result_summary(payload: Mapping[str, Any]) -> dict[str, Any]:
     for key, value in payload.items():
         if isinstance(value, (list, tuple)):
             summary[f"{key}_count"] = len(value)
+    # G10 needs a durable, append-only link from the normalized scalar it judged back to
+    # the broker response. Persist only the bounded metric identity and final sample, not
+    # the full telemetry payload. Other result kinds retain the count-only policy above.
+    series = payload.get("series")
+    samples = payload.get("samples")
+    if isinstance(series, str) and isinstance(samples, (list, tuple)) and samples:
+        summary["measurement_series"] = series[:256]
+        summary["latest_sample"] = str(samples[-1])[:256]
     return summary
 
 

@@ -192,7 +192,7 @@ class TestAutonomousAllow:
         action = kernel_session.execute(
             sa.select(RemediationAction).where(RemediationAction.tenant_id == fixture.tenant_id)
         ).scalar_one()
-        assert action.status is RemediationActionStatus.SUCCEEDED
+        assert action.status is RemediationActionStatus.VERIFIED
         assert action.tool_name == "k8s.deployment.rollback"
 
         decision = kernel_session.execute(

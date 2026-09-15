@@ -22,9 +22,11 @@ from asic.db.models import (
     Incident,
     Permission,
     RemediationAction,
+    RemediationBaseline,
     Role,
     RolePermission,
     ToolDefinition,
+    ToolExecution,
     User,
     UserRoleAssignment,
     Verification,
@@ -40,10 +42,14 @@ from asic.domain.enums import (
     RemediationActionStatus,
     RiskTier,
     TerminationReason,
+    ToolExecutionOutcome,
     VerificationVerdict,
 )
+from asic.domain.idempotency import action_version_hash
 from asic.memory.policy import MemoryActor
 from asic.memory.service import DECIDE_PERMISSION, MemoryGovernanceService
+from asic.remediation.trust import baseline_json, baseline_provenance, observation_provenance
+from asic.remediation.verification import profile_for
 from tests.conftest import make_behaviour_version
 from tests.kernel_fixtures import build_fixture
 
@@ -68,7 +74,7 @@ class MemoryWorld:
     clock: FrozenClock
     service: MemoryGovernanceService
     #: Global-catalogue rows this world created, for teardown (see the ``world`` fixture).
-    _tool_definition_id: uuid.UUID
+    _tool_definition_id: uuid.UUID | None
     _role_ids: tuple[uuid.UUID, ...]
 
     @property
@@ -158,7 +164,9 @@ def _grant_decide_permission(
     return role.id
 
 
-def make_world(engine: sa.Engine, *, slug: str | None = None) -> MemoryWorld:
+def make_world(
+    engine: sa.Engine, *, slug: str | None = None, trusted_verification: bool = True
+) -> MemoryWorld:
     factory = sessionmaker(engine, expire_on_commit=False, autoflush=False)
     with factory() as session, session.begin():
         fixture = build_fixture(session, slug=slug or f"mem-{uuid.uuid4().hex[:12]}")
@@ -197,26 +205,19 @@ def make_world(engine: sa.Engine, *, slug: str | None = None) -> MemoryWorld:
         session.add(hypothesis)
         session.flush()
 
-        # ``tool_definition`` is a global catalogue table: (name, version) must be unique
-        # across every tenant, so each world needs its own.
-        tool_name = f"k8s.deployment.rollback.{uuid.uuid4().hex[:8]}"
-        tool = ToolDefinition(
-            id=uuid.uuid4(),
-            name=tool_name,
-            version="1.0.0",
-            major_version=1,
-            capability="mutate.k8s_deployment",
-            description="Roll a Deployment back to its previous revision.",
-            risk_tier=RiskTier.R1,
-            input_schema={"namespace": {"type": "string"}, "deployment": {"type": "string"}},
-            output_schema={"new_revision": {"type": "integer"}},
-            timeout_seconds=300,
-            settling_seconds=60,
-            is_idempotent=True,
-            rollback_tool_name=tool_name,
+        tool = session.scalar(
+            sa.select(ToolDefinition).where(
+                ToolDefinition.name == "k8s.deployment.rollback",
+                ToolDefinition.version == "1.0.0",
+            )
         )
-        session.add(tool)
-        session.flush()
+        read_tool = session.scalar(
+            sa.select(ToolDefinition).where(
+                ToolDefinition.name == "metrics.query", ToolDefinition.version == "1.0.0"
+            )
+        )
+        assert tool is not None and read_tool is not None
+        profile = profile_for(tool.name)
 
         from asic.db.models import RemediationTarget
 
@@ -239,8 +240,19 @@ def make_world(engine: sa.Engine, *, slug: str | None = None) -> MemoryWorld:
         session.add(target)
         session.flush()
 
+        action_id = uuid.uuid4()
+        criteria = profile.to_dict()
+        criteria_hash = action_version_hash(
+            action_id=action_id,
+            tool_name="verification_criteria",
+            tool_version="1",
+            arguments=criteria,
+            permission_scope={},
+            preconditions=(),
+            risk_tier=tool.risk_tier.value,
+        )
         action = RemediationAction(
-            id=uuid.uuid4(),
+            id=action_id,
             tenant_id=tenant_id,
             incident_id=incident.id,
             workflow_run_id=run.id,
@@ -255,8 +267,8 @@ def make_world(engine: sa.Engine, *, slug: str | None = None) -> MemoryWorld:
             rollback_tool_name=tool.rollback_tool_name,
             approval_required=True,
             timeout_seconds=300,
-            verification_criteria={"expr": "rate(http_5xx[5m]) < 0.005"},
-            verification_criteria_hash="c" * 64,
+            verification_criteria=criteria,
+            verification_criteria_hash=criteria_hash,
             tool_name=tool.name,
             tool_version=tool.version,
             arguments={"namespace": "checkout", "deployment": "checkout-api"},
@@ -271,20 +283,168 @@ def make_world(engine: sa.Engine, *, slug: str | None = None) -> MemoryWorld:
         session.add(action)
         session.flush()
 
+        baseline: RemediationBaseline | None = None
+        post_execution: ToolExecution | None = None
+        observed: dict[str, object]
+        if trusted_verification:
+            baseline_observed_at = action.executed_at - timedelta(seconds=90)
+            baseline_captured_at = action.executed_at - timedelta(seconds=30)
+            baseline_execution = ToolExecution(
+                id=uuid.uuid4(),
+                tenant_id=tenant_id,
+                incident_id=incident.id,
+                remediation_action_id=action.id,
+                tool_definition_id=read_tool.id,
+                tool_name=read_tool.name,
+                tool_version=read_tool.version,
+                capability=profile.source_capability,
+                risk_tier=RiskTier.RO,
+                resolved_scope={
+                    "service": fixture.service.name,
+                    "environment": fixture.environment.name,
+                },
+                arguments_redacted={"metric": profile.metric},
+                idempotency_key=uuid.uuid4().hex * 2,
+                actor_type=ActorType.AGENT_NODE,
+                requested_by_node=NodeId.G10_VERIFIER,
+                attempt=1,
+                outcome=ToolExecutionOutcome.SUCCEEDED,
+                observed_effect={
+                    "source": "prometheus-simulator",
+                    "samples_count": 1,
+                    "measurement_series": profile.metric,
+                    "latest_sample": f"{baseline_observed_at.isoformat()}=0.021",
+                },
+                started_at=action.executed_at - timedelta(minutes=2),
+                completed_at=baseline_captured_at,
+                duration_ms=1,
+                correlation_id=uuid.uuid4(),
+            )
+            session.add(baseline_execution)
+            session.flush()
+            baseline = RemediationBaseline(
+                id=uuid.uuid4(),
+                tenant_id=tenant_id,
+                incident_id=incident.id,
+                remediation_target_id=target.id,
+                remediation_action_id=action.id,
+                service_id=fixture.service.id,
+                environment_id=fixture.environment.id,
+                profile_id=profile.profile_id,
+                profile_version=profile.profile_version,
+                criteria_hash=criteria_hash,
+                metric=profile.metric,
+                source_capability=profile.source_capability,
+                source_provider="prometheus-simulator",
+                read_execution_id=baseline_execution.id,
+                observed_at=baseline_observed_at,
+                captured_at=baseline_captured_at,
+                observed_value=0.021,
+                provenance_hash="",
+            )
+            baseline.provenance_hash = baseline_provenance(baseline)
+            session.add(baseline)
+            action.baseline_snapshot = baseline_json(baseline)
+
+            post_observed_at = action.executed_at + timedelta(minutes=2)
+            post_execution = ToolExecution(
+                id=uuid.uuid4(),
+                tenant_id=tenant_id,
+                incident_id=incident.id,
+                remediation_action_id=action.id,
+                tool_definition_id=read_tool.id,
+                tool_name=read_tool.name,
+                tool_version=read_tool.version,
+                capability=profile.source_capability,
+                risk_tier=RiskTier.RO,
+                resolved_scope={
+                    "service": fixture.service.name,
+                    "environment": fixture.environment.name,
+                },
+                arguments_redacted={"metric": profile.metric},
+                idempotency_key=uuid.uuid4().hex * 2,
+                actor_type=ActorType.AGENT_NODE,
+                requested_by_node=NodeId.G10_VERIFIER,
+                attempt=1,
+                outcome=ToolExecutionOutcome.SUCCEEDED,
+                observed_effect={
+                    "source": "prometheus-simulator",
+                    "samples_count": 1,
+                    "measurement_series": profile.metric,
+                    "latest_sample": f"{post_observed_at.isoformat()}=0.001",
+                },
+                started_at=action.executed_at + timedelta(minutes=1),
+                completed_at=post_observed_at,
+                duration_ms=1,
+                correlation_id=uuid.uuid4(),
+            )
+            session.add(post_execution)
+            session.flush()
+            observed = {
+                "metric": profile.metric,
+                "observed_value": 0.001,
+                "observed_at": post_observed_at.isoformat(),
+                "source": "prometheus-simulator",
+                "tool_execution_id": str(post_execution.id),
+                "target_service_id": str(fixture.service.id),
+                "target_environment_id": str(fixture.environment.id),
+                "source_capability": profile.source_capability,
+                "profile_id": profile.profile_id,
+                "profile_version": profile.profile_version,
+                "baseline_value": 0.021,
+                "threshold": profile.threshold,
+                "threshold_passed": True,
+                "direction_passed": True,
+            }
+        else:
+            observed = {"http_5xx_rate": 0.001}
+
         verification = Verification(
             id=uuid.uuid4(),
             tenant_id=tenant_id,
             remediation_action_id=action.id,
+            remediation_baseline_id=baseline.id if baseline else None,
+            post_action_read_execution_id=post_execution.id if post_execution else None,
+            profile_id=profile.profile_id if baseline else None,
+            profile_version=profile.profile_version if baseline else None,
+            observed_metric=profile.metric if baseline else None,
+            observed_value=0.001 if baseline else None,
+            observed_at=(action.executed_at + timedelta(minutes=2)) if baseline else None,
+            observation_source_provider="prometheus-simulator" if baseline else None,
+            observation_source_capability=profile.source_capability if baseline else None,
+            observation_provenance_hash=(
+                observation_provenance(
+                    tenant_id=tenant_id,
+                    incident_id=incident.id,
+                    remediation_target_id=target.id,
+                    remediation_action_id=action.id,
+                    remediation_baseline_id=baseline.id,
+                    service_id=fixture.service.id,
+                    environment_id=fixture.environment.id,
+                    profile_id=profile.profile_id,
+                    profile_version=profile.profile_version,
+                    criteria_hash=criteria_hash,
+                    metric=profile.metric,
+                    source_capability=profile.source_capability,
+                    source_provider="prometheus-simulator",
+                    read_execution_id=post_execution.id,
+                    observed_at=action.executed_at + timedelta(minutes=2),
+                    observed_value=0.001,
+                )
+                if baseline is not None and post_execution is not None
+                else None
+            ),
             attempt=1,
             callback_idempotency_key=uuid.uuid4().hex * 2,
             criteria_hash=action.verification_criteria_hash,
             verdict=VerificationVerdict.VERIFIED,
             # Real evidentiary content (P6-05): a verdict with no recorded measurement is
             # an assertion, not a verification.
-            baseline={"http_5xx_rate": 0.021},
-            observed={"http_5xx_rate": 0.001},
-            observation_window_start=CLOCK_START - timedelta(minutes=50),
-            observation_window_end=CLOCK_START - timedelta(minutes=45),
+            baseline=baseline_json(baseline) if baseline else {"http_5xx_rate": 0.021},
+            observed=observed,
+            observation_window_start=action.executed_at + timedelta(minutes=1),
+            observation_window_end=action.executed_at + timedelta(minutes=3),
+            verified_at=action.executed_at + timedelta(minutes=3),
         )
         session.add(verification)
         session.flush()
@@ -325,7 +485,7 @@ def make_world(engine: sa.Engine, *, slug: str | None = None) -> MemoryWorld:
         approver_user_id=ids[6],
         second_approver_user_id=ids[7],
         unauthorized_user_id=ids[8],
-        _tool_definition_id=tool.id,
+        _tool_definition_id=None,
         _role_ids=role_ids,
         clock=clock,
         service=MemoryGovernanceService(factory, clock=clock),
@@ -397,10 +557,11 @@ def _teardown(owner_engine: sa.Engine, built: MemoryWorld) -> None:
             sa.text("DELETE FROM remediation_action WHERE tenant_id = :tid"),
             {"tid": built.tenant_id},
         )
-        conn.execute(
-            sa.text("DELETE FROM tool_definition WHERE id = :id"),
-            {"id": built._tool_definition_id},
-        )
+        if built._tool_definition_id is not None:
+            conn.execute(
+                sa.text("DELETE FROM tool_definition WHERE id = :id"),
+                {"id": built._tool_definition_id},
+            )
         conn.execute(
             sa.text("DELETE FROM user_role_assignment WHERE tenant_id = :tid"),
             {"tid": built.tenant_id},

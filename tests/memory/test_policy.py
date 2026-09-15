@@ -55,6 +55,7 @@ def verification_fact(
     action_criteria_hash: str = _CRITERIA_HASH,
     baseline: dict[str, object] | None = None,
     observed: dict[str, object] | None = None,
+    provenance_valid: bool = True,
     action_status: RemediationActionStatus = RemediationActionStatus.VERIFIED,
 ) -> VerificationFact:
     return VerificationFact(
@@ -66,6 +67,7 @@ def verification_fact(
         action_criteria_hash=action_criteria_hash,
         baseline=baseline if baseline is not None else {"p95_latency_ms": 850},
         observed=observed if observed is not None else {"p95_latency_ms": 210},
+        provenance_valid=provenance_valid,
         action_status=action_status,
     )
 
@@ -211,6 +213,12 @@ class TestVerifiedOutcomes:
 
     def test_empty_baseline_is_refused_even_with_a_verified_verdict(self) -> None:
         assert self._refused_for(verification_fact(baseline={})) == "verification_baseline_missing"
+
+    def test_untrusted_persisted_lineage_is_refused_even_with_measurements(self) -> None:
+        assert (
+            self._refused_for(verification_fact(provenance_valid=False))
+            == "verification_provenance_invalid"
+        )
 
     def test_empty_observed_evidence_is_refused_even_with_a_verified_verdict(self) -> None:
         assert self._refused_for(verification_fact(observed={})) == "verification_observed_missing"

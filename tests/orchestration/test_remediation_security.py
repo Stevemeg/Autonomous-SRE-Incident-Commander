@@ -28,11 +28,11 @@ from asic.domain.idempotency import action_version_hash
 from asic.llm.deterministic import DeterministicModelProvider
 from asic.orchestration.remediation.kernel import RemediationKernel
 from asic.orchestration.remediation.nodes.verifier import (
-    _baseline_provenance,
     _evaluate,
     trusted_baseline,
 )
 from asic.remediation.approval_service import decide
+from asic.remediation.trust import baseline_provenance
 from asic.remediation.verification import profile_for
 from asic.simulators.provider import SimulatorProvider
 from asic.simulators.scenarios import metrics_recovered, scenario
@@ -179,7 +179,7 @@ def test_baseline_binding_and_freshness_guards_are_load_bearing(
     assert trusted_baseline(deps, profile, baseline, action, target, dispatch_at=action.executed_at)
     original = getattr(baseline, field)
     setattr(baseline, field, replacement(baseline))
-    baseline.provenance_hash = _baseline_provenance(baseline)
+    baseline.provenance_hash = baseline_provenance(baseline)
     assert getattr(baseline, field) != original
     assert not trusted_baseline(
         deps, profile, baseline, action, target, dispatch_at=action.executed_at

@@ -274,6 +274,13 @@ direction, threshold, freshness window and minimum evidence are server policy. I
 escalates. Automated compensation is deferred because compensating on an unknown state can
 itself cause harm; partial effects emit an audit/timeline signal for human handling.
 
+A verified result also carries composite tenant/action foreign keys to that baseline and to
+the independent post-action read execution. The broker persists a bounded metric/sample
+summary on those append-only executions, allowing the trusted verifier to prove the values
+used in its comparison came from the named reads. The same validator is reused before T5
+memory proposal and again before promotion; non-empty legacy JSON or a copied `verified`
+verdict confers no authority.
+
 ---
 
 ## 7. Failure-to-safety mapping

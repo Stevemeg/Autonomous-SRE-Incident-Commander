@@ -17,8 +17,6 @@ re-checking the clock.
 
 from __future__ import annotations
 
-import hashlib
-import json
 import uuid
 from datetime import datetime, timedelta
 from typing import Any
@@ -38,7 +36,6 @@ from asic.db.models.remediation import (
     RemediationTarget,
     Verification,
 )
-from asic.db.models.tools import ToolExecution
 from asic.db.projections import append_incident_event, apply_transition
 from asic.domain.enums import (
     ActorType,
@@ -46,6 +43,7 @@ from asic.domain.enums import (
     IncidentEventType,
     IncidentStatus,
     NodeId,
+    RemediationActionStatus,
     TerminationReason,
     TraceSpanKind,
     VerificationVerdict,
@@ -56,6 +54,12 @@ from asic.domain.idempotency import (
     verification_callback_key,
 )
 from asic.orchestration.remediation.context import RemediationDependencies
+from asic.remediation.trust import (
+    baseline_json,
+    baseline_provenance,
+    observation_provenance,
+    trusted_baseline_record,
+)
 from asic.remediation.verification import VerificationProfile, profile_for
 from asic.tools.broker import CapabilityRequest
 from asic.tools.registry import ToolRegistry
@@ -145,9 +149,6 @@ def verifier_node(deps: RemediationDependencies) -> Any:
                     criteria_hash=action.verification_criteria_hash,
                     captured_at=captured_at.isoformat(),
                 )
-                provenance_hash = hashlib.sha256(
-                    json.dumps(baseline, sort_keys=True, separators=(",", ":")).encode()
-                ).hexdigest()
                 baseline_row = RemediationBaseline(
                     id=uuid.uuid4(),
                     tenant_id=deps.context.tenant_id,
@@ -166,8 +167,9 @@ def verifier_node(deps: RemediationDependencies) -> Any:
                     observed_at=datetime.fromisoformat(str(baseline["observed_at"])),
                     captured_at=captured_at,
                     observed_value=float(baseline["observed_value"]),
-                    provenance_hash=provenance_hash,
+                    provenance_hash="",  # filled from the typed row below
                 )
+                baseline_row.provenance_hash = baseline_provenance(baseline_row)
                 deps.session.add(baseline_row)
                 action.baseline_snapshot = baseline
                 deps.session.flush()
@@ -234,10 +236,50 @@ def verifier_node(deps: RemediationDependencies) -> Any:
 
             window_end = deps.clock.now()
             window_seconds = int(criteria.get("window_seconds", 300))
+            post_execution_id: uuid.UUID | None = None
+            post_observed_at: datetime | None = None
+            post_observed_value: float | None = None
+            post_source: str | None = None
+            post_provenance: str | None = None
+            if "observed_value" in observed and baseline_row is not None:
+                post_execution_id = uuid.UUID(str(observed["tool_execution_id"]))
+                post_observed_at = datetime.fromisoformat(str(observed["observed_at"]))
+                post_observed_value = float(observed["observed_value"])
+                post_source = str(observed["source"])
+                post_provenance = observation_provenance(
+                    tenant_id=deps.context.tenant_id,
+                    incident_id=action.incident_id,
+                    remediation_target_id=target.id,
+                    remediation_action_id=action.id,
+                    remediation_baseline_id=baseline_row.id,
+                    service_id=target.service_id,
+                    environment_id=target.environment_id,
+                    profile_id=profile.profile_id,
+                    profile_version=profile.profile_version,
+                    criteria_hash=action.verification_criteria_hash,
+                    metric=profile.metric,
+                    source_capability=profile.source_capability,
+                    source_provider=post_source,
+                    read_execution_id=post_execution_id,
+                    observed_at=post_observed_at,
+                    observed_value=post_observed_value,
+                )
             record = Verification(
                 id=uuid.uuid4(),
                 tenant_id=deps.context.tenant_id,
                 remediation_action_id=action.id,
+                remediation_baseline_id=baseline_row.id if post_execution_id else None,
+                post_action_read_execution_id=post_execution_id,
+                profile_id=profile.profile_id if post_execution_id else None,
+                profile_version=profile.profile_version if post_execution_id else None,
+                observed_metric=profile.metric if post_execution_id else None,
+                observed_value=post_observed_value,
+                observed_at=post_observed_at,
+                observation_source_provider=post_source,
+                observation_source_capability=(
+                    profile.source_capability if post_execution_id else None
+                ),
+                observation_provenance_hash=post_provenance,
                 attempt=attempt,
                 callback_idempotency_key=verification_callback_key(
                     tenant_id=deps.context.tenant_id, action_id=action.id, attempt=attempt
@@ -245,12 +287,18 @@ def verifier_node(deps: RemediationDependencies) -> Any:
                 criteria_hash=criteria_hash,
                 verdict=verdict,
                 observed=observed,
-                baseline=_baseline_json(baseline_row) if baseline_row else {},
+                baseline=baseline_json(baseline_row) if baseline_row else {},
                 margin=margin,
                 observation_window_start=window_end - timedelta(seconds=window_seconds),
                 observation_window_end=window_end,
+                verified_at=window_end,
             )
             deps.session.add(record)
+            action.status = {
+                VerificationVerdict.VERIFIED: RemediationActionStatus.VERIFIED,
+                VerificationVerdict.NOT_VERIFIED: RemediationActionStatus.NOT_VERIFIED,
+                VerificationVerdict.INCONCLUSIVE: RemediationActionStatus.INCONCLUSIVE,
+            }[verdict]
             deps.session.flush()
 
             deps.audit.record(
@@ -465,66 +513,18 @@ def trusted_baseline(
     *,
     dispatch_at: datetime,
 ) -> bool:
-    execution = deps.session.scalar(
-        sa.select(ToolExecution).where(
-            ToolExecution.id == baseline.read_execution_id,
-            ToolExecution.remediation_action_id == action.id,
-            ToolExecution.capability == profile.source_capability,
-        )
+    return trusted_baseline_record(
+        deps.session,
+        tenant_id=deps.context.tenant_id,
+        profile=profile,
+        baseline=baseline,
+        action=action,
+        target=target,
+        service_name=deps.objective.service_name,
+        environment_name=deps.objective.environment_name,
+        dispatch_at=dispatch_at,
+        as_of=deps.clock.now(),
     )
-    if execution is None or execution.outcome is None or execution.outcome.value != "succeeded":
-        return False
-    now = deps.clock.now()
-    return bool(
-        baseline.tenant_id == deps.context.tenant_id
-        and baseline.incident_id == action.incident_id == target.incident_id
-        and baseline.remediation_action_id == action.id
-        and baseline.remediation_target_id == target.id == action.remediation_target_id
-        and baseline.service_id == target.service_id
-        and baseline.environment_id == target.environment_id
-        and baseline.profile_id == profile.profile_id
-        and baseline.profile_version == profile.profile_version
-        and baseline.criteria_hash == action.verification_criteria_hash
-        and baseline.metric == profile.metric
-        and baseline.source_capability == profile.source_capability
-        and baseline.source_provider in profile.approved_sources
-        and baseline.provenance_hash == _baseline_provenance(baseline)
-        and execution.resolved_scope.get("service") == deps.objective.service_name
-        and execution.resolved_scope.get("environment") == deps.objective.environment_name
-        and baseline.observed_at <= baseline.captured_at <= dispatch_at <= now
-        and dispatch_at - baseline.observed_at
-        <= timedelta(seconds=profile.max_baseline_age_seconds)
-    )
-
-
-def _baseline_json(row: RemediationBaseline) -> dict[str, Any]:
-    return {
-        "tenant_id": str(row.tenant_id),
-        "incident_id": str(row.incident_id),
-        "remediation_target_id": str(row.remediation_target_id),
-        "remediation_action_id": str(row.remediation_action_id),
-        "target_service_id": str(row.service_id),
-        "target_environment_id": str(row.environment_id),
-        "profile_id": row.profile_id,
-        "profile_version": row.profile_version,
-        "criteria_hash": row.criteria_hash,
-        "metric": row.metric,
-        "source_capability": row.source_capability,
-        "source": row.source_provider,
-        "tool_execution_id": str(row.read_execution_id),
-        "observed_at": row.observed_at.isoformat(),
-        "captured_at": row.captured_at.isoformat(),
-        "observed_value": float(row.observed_value),
-        "provenance_hash": row.provenance_hash,
-    }
-
-
-def _baseline_provenance(row: RemediationBaseline) -> str:
-    value = _baseline_json(row)
-    value.pop("provenance_hash")
-    return hashlib.sha256(
-        json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
-    ).hexdigest()
 
 
 def _action_ref(action: RemediationAction, capability: str) -> RemediationActionRef:

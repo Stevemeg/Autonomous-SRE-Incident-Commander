@@ -192,6 +192,13 @@ survives schema-repair failure, node rollback and resume. A future
 live, streaming or asynchronous provider must add durable cross-process reservation
 accounting before adoption; the current code does not claim that provider class exists.
 
+The database enforces the reservation lifecycle as `reserved -> completed`. The application
+role has only column-level settlement permission; identity and reservation bounds cannot be
+updated. A trigger requires every insert to begin reserved and unsettled, then rejects every
+update to a completed row, including response or usage replacement and status reversal.
+Concurrent settlers serialize on the row: one completion wins and later attempts replay the
+immutable original response. `DELETE` remains denied.
+
 Wall clock is the one dimension that is **observed rather than accumulated**. Summing node
 durations would undercount: it would miss the gaps between nodes and the time a suspended
 run spent waiting. It is measured as *now minus the run's start*, taken from

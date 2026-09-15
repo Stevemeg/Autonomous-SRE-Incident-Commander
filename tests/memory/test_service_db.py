@@ -61,6 +61,225 @@ def _outcome_request(world: MemoryWorld, **overrides: object) -> MemoryWriteRequ
 
 
 class TestProposeIsGoverned:
+    def test_forged_verified_row_without_trusted_lineage_is_rejected_and_audited(
+        self, app_engine: sa.Engine, owner_engine: sa.Engine
+    ) -> None:
+        forged = make_world(
+            app_engine,
+            slug=f"mem-forged-{uuid.uuid4().hex[:8]}",
+            trusted_verification=False,
+        )
+        try:
+            before = forged.count_decisions()
+            outcome = forged.service.propose(
+                forged.tenant_id, _outcome_request(forged), forged.agent
+            )
+            assert outcome.outcome is MemoryDecisionOutcome.REJECTED
+            assert outcome.reason == "verification_provenance_invalid"
+            assert outcome.promotion_id is None
+            assert forged.count_decisions() == before + 1
+        finally:
+            _teardown(owner_engine, forged)
+
+    def test_trusted_lineage_guard_is_load_bearing(
+        self,
+        app_engine: sa.Engine,
+        owner_engine: sa.Engine,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        forged = make_world(
+            app_engine,
+            slug=f"mem-mutation-{uuid.uuid4().hex[:8]}",
+            trusted_verification=False,
+        )
+        try:
+            request = _outcome_request(forged)
+            blocked = forged.service.propose(forged.tenant_id, request, forged.agent)
+            assert blocked.outcome is MemoryDecisionOutcome.REJECTED
+            monkeypatch.setattr(
+                "asic.memory.service.trusted_verified_outcome", lambda *args, **kwargs: True
+            )
+            unsafe = forged.service.propose(forged.tenant_id, request, forged.agent)
+            assert unsafe.outcome is MemoryDecisionOutcome.PROPOSED
+        finally:
+            _teardown(owner_engine, forged)
+
+    @pytest.mark.parametrize("execution_kind", ["baseline", "post_action"])
+    def test_failed_independent_read_execution_invalidates_t5_lineage(
+        self,
+        execution_kind: str,
+        app_engine: sa.Engine,
+        owner_engine: sa.Engine,
+    ) -> None:
+        from asic.db.models import RemediationBaseline, ToolExecution, Verification
+        from asic.domain.enums import ToolExecutionOutcome
+
+        built = make_world(app_engine, slug=f"mem-failed-read-{uuid.uuid4().hex[:8]}")
+        try:
+            with built.factory() as session, session.begin():
+                bind_tenant(session, built.tenant_id)
+                verification = session.get(Verification, built.verification_id)
+                assert verification is not None
+                if execution_kind == "baseline":
+                    baseline = session.get(
+                        RemediationBaseline, verification.remediation_baseline_id
+                    )
+                    assert baseline is not None
+                    execution_id = baseline.read_execution_id
+                else:
+                    assert verification.post_action_read_execution_id is not None
+                    execution_id = verification.post_action_read_execution_id
+            with owner_engine.begin() as connection:
+                connection.execute(
+                    sa.update(ToolExecution)
+                    .where(ToolExecution.id == execution_id)
+                    .values(
+                        outcome=ToolExecutionOutcome.FAILED_CLEAN,
+                        observed_effect={},
+                        failure_reason="adversarial failed read",
+                    )
+                )
+            outcome = built.service.propose(built.tenant_id, _outcome_request(built), built.agent)
+            assert outcome.outcome is MemoryDecisionOutcome.REJECTED
+            assert outcome.reason == "verification_provenance_invalid"
+        finally:
+            _teardown(owner_engine, built)
+
+    @pytest.mark.parametrize(
+        ("field", "replacement"),
+        [
+            ("profile_id", "attacker-profile"),
+            ("profile_version", 999),
+            ("observed_metric", "unrelated_metric"),
+            ("observation_source_provider", "unapproved-provider"),
+            ("observation_source_capability", "read.logs"),
+            ("observation_provenance_hash", "0" * 64),
+        ],
+    )
+    def test_tampered_verification_lineage_is_rejected(
+        self,
+        field: str,
+        replacement: object,
+        app_engine: sa.Engine,
+        owner_engine: sa.Engine,
+    ) -> None:
+        from asic.db.models import Verification
+
+        built = make_world(app_engine, slug=f"mem-lineage-{uuid.uuid4().hex[:8]}")
+        try:
+            with owner_engine.begin() as connection:
+                connection.execute(
+                    sa.update(Verification)
+                    .where(Verification.id == built.verification_id)
+                    .values({field: replacement})
+                )
+            outcome = built.service.propose(built.tenant_id, _outcome_request(built), built.agent)
+            assert outcome.outcome is MemoryDecisionOutcome.REJECTED
+            assert outcome.reason == "verification_provenance_invalid"
+        finally:
+            _teardown(owner_engine, built)
+
+    @pytest.mark.parametrize(
+        ("field", "replacement"),
+        [
+            ("metric", "unrelated_metric"),
+            ("source_capability", "read.logs"),
+            ("source_provider", "unapproved-provider"),
+            ("provenance_hash", "0" * 64),
+        ],
+    )
+    def test_tampered_baseline_lineage_is_rejected(
+        self,
+        field: str,
+        replacement: object,
+        app_engine: sa.Engine,
+        owner_engine: sa.Engine,
+    ) -> None:
+        from asic.db.models import RemediationBaseline
+
+        built = make_world(app_engine, slug=f"mem-baseline-{uuid.uuid4().hex[:8]}")
+        try:
+            with owner_engine.begin() as connection:
+                connection.execute(
+                    sa.update(RemediationBaseline)
+                    .where(RemediationBaseline.remediation_action_id == built.remediation_action_id)
+                    .values({field: replacement})
+                )
+            outcome = built.service.propose(built.tenant_id, _outcome_request(built), built.agent)
+            assert outcome.outcome is MemoryDecisionOutcome.REJECTED
+            assert outcome.reason == "verification_provenance_invalid"
+        finally:
+            _teardown(owner_engine, built)
+
+    @pytest.mark.parametrize(
+        ("field", "replacement"),
+        [
+            ("measurement_series", "unrelated_metric"),
+            ("latest_sample", "2026-09-11T09:12:00+00:00=999"),
+        ],
+    )
+    def test_post_read_summary_must_match_the_value_used_for_the_verdict(
+        self,
+        field: str,
+        replacement: object,
+        app_engine: sa.Engine,
+        owner_engine: sa.Engine,
+    ) -> None:
+        from asic.db.models import ToolExecution, Verification
+
+        built = make_world(app_engine, slug=f"mem-post-summary-{uuid.uuid4().hex[:8]}")
+        try:
+            with owner_engine.begin() as connection:
+                post_id = connection.scalar(
+                    sa.select(Verification.post_action_read_execution_id).where(
+                        Verification.id == built.verification_id
+                    )
+                )
+                assert post_id is not None
+                effect = connection.scalar(
+                    sa.select(ToolExecution.observed_effect).where(ToolExecution.id == post_id)
+                )
+                assert effect is not None
+                changed = dict(effect)
+                changed[field] = replacement
+                connection.execute(
+                    sa.update(ToolExecution)
+                    .where(ToolExecution.id == post_id)
+                    .values(observed_effect=changed)
+                )
+            outcome = built.service.propose(built.tenant_id, _outcome_request(built), built.agent)
+            assert outcome.outcome is MemoryDecisionOutcome.REJECTED
+            assert outcome.reason == "verification_provenance_invalid"
+        finally:
+            _teardown(owner_engine, built)
+
+    def test_cross_tenant_baseline_cannot_be_attached_to_verification(
+        self, app_engine: sa.Engine, owner_engine: sa.Engine
+    ) -> None:
+        from asic.db.models import RemediationBaseline, Verification
+
+        built = make_world(app_engine, slug=f"mem-baseline-a-{uuid.uuid4().hex[:8]}")
+        other = make_world(app_engine, slug=f"mem-baseline-b-{uuid.uuid4().hex[:8]}")
+        try:
+            with owner_engine.connect() as connection:
+                transaction = connection.begin()
+                other_baseline_id = connection.scalar(
+                    sa.select(RemediationBaseline.id).where(
+                        RemediationBaseline.tenant_id == other.tenant_id
+                    )
+                )
+                assert other_baseline_id is not None
+                with pytest.raises(sa.exc.IntegrityError):
+                    connection.execute(
+                        sa.update(Verification)
+                        .where(Verification.id == built.verification_id)
+                        .values(remediation_baseline_id=other_baseline_id)
+                    )
+                transaction.rollback()
+        finally:
+            _teardown(owner_engine, other)
+            _teardown(owner_engine, built)
+
     def test_operational_knowledge_from_a_closed_incident_proposes(
         self, world: MemoryWorld
     ) -> None:
@@ -175,6 +394,51 @@ class TestProposeIsGoverned:
 
 
 class TestDecideIsGoverned:
+    def test_human_approval_revalidates_lineage_and_audits_a_late_failure(
+        self, world: MemoryWorld, owner_engine: sa.Engine
+    ) -> None:
+        from asic.db.models import AuditRecord, ToolExecution, Verification
+        from asic.domain.enums import AuditEventType
+
+        proposed = world.service.propose(world.tenant_id, _outcome_request(world), world.agent)
+        assert proposed.promotion_id is not None
+        with owner_engine.begin() as connection:
+            post_id = connection.scalar(
+                sa.select(Verification.post_action_read_execution_id).where(
+                    Verification.id == world.verification_id
+                )
+            )
+            assert post_id is not None
+            connection.execute(
+                sa.update(ToolExecution)
+                .where(ToolExecution.id == post_id)
+                .values(observed_effect={"source": "prometheus-simulator"})
+            )
+
+        with pytest.raises(MemoryGovernanceError, match="verification_provenance_invalid"):
+            world.service.decide(
+                world.tenant_id, proposed.promotion_id, world.approver, approve=True
+            )
+        with world.factory() as session, session.begin():
+            bind_tenant(session, world.tenant_id)
+            assert (
+                session.scalar(
+                    sa.select(sa.func.count())
+                    .select_from(MemoryEntry)
+                    .where(MemoryEntry.tenant_id == world.tenant_id)
+                )
+                == 0
+            )
+            denial = session.scalar(
+                sa.select(AuditRecord).where(
+                    AuditRecord.tenant_id == world.tenant_id,
+                    AuditRecord.event_type == AuditEventType.AUTHORIZATION_DENIED,
+                    AuditRecord.target_id == str(proposed.promotion_id),
+                )
+            )
+            assert denial is not None
+            assert denial.payload_redacted["reason"] == "verification_provenance_invalid"
+
     def test_verified_outcome_produces_a_verified_fact_entry(self, world: MemoryWorld) -> None:
         proposed = world.service.propose(world.tenant_id, _outcome_request(world), world.agent)
         assert proposed.promotion_id is not None
@@ -295,18 +559,24 @@ class TestDecideIsGoverned:
     def test_a_verification_with_empty_baseline_and_observed_is_refused(
         self, world: MemoryWorld
     ) -> None:
-        from asic.db.models import Verification
+        from asic.db.models import RemediationAction, Verification
         from asic.domain.enums import VerificationVerdict
 
         with world.factory() as session, session.begin():
             bind_tenant(session, world.tenant_id)
+            criteria_hash = session.scalar(
+                sa.select(RemediationAction.verification_criteria_hash).where(
+                    RemediationAction.id == world.remediation_action_id
+                )
+            )
+            assert criteria_hash is not None
             empty = Verification(
                 id=uuid.uuid4(),
                 tenant_id=world.tenant_id,
                 remediation_action_id=world.remediation_action_id,
                 attempt=2,
                 callback_idempotency_key=uuid.uuid4().hex * 2,
-                criteria_hash="c" * 64,  # matches the fixture action's frozen criteria
+                criteria_hash=criteria_hash,
                 verdict=VerificationVerdict.VERIFIED,
                 # No baseline, no observed: a verdict with no measurement behind it.
                 observation_window_start=world.clock.now(),

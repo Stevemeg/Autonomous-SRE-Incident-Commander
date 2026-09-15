@@ -374,6 +374,24 @@ class Verification(Base, TenantScoped, CreatedAtMixin):
 
     id: Mapped[uuid.UUID] = uuid_pk()
     remediation_action_id: Mapped[uuid.UUID] = mapped_column(pg.UUID(as_uuid=True), nullable=False)
+    #: Nullable only for historical rows written before migration 0015. Such rows remain
+    #: readable incident history but can never qualify for a T5 verified outcome.
+    remediation_baseline_id: Mapped[uuid.UUID | None] = mapped_column(
+        pg.UUID(as_uuid=True), nullable=True
+    )
+    post_action_read_execution_id: Mapped[uuid.UUID | None] = mapped_column(
+        pg.UUID(as_uuid=True), nullable=True
+    )
+    profile_id: Mapped[str | None] = mapped_column(sa.String(128), nullable=True)
+    profile_version: Mapped[int | None] = mapped_column(sa.Integer, nullable=True)
+    observed_metric: Mapped[str | None] = mapped_column(sa.String(128), nullable=True)
+    observed_value: Mapped[float | None] = mapped_column(sa.Numeric(18, 6), nullable=True)
+    observed_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)
+    observation_source_provider: Mapped[str | None] = mapped_column(sa.String(128), nullable=True)
+    observation_source_capability: Mapped[str | None] = mapped_column(sa.String(128), nullable=True)
+    observation_provenance_hash: Mapped[str | None] = mapped_column(
+        sa.String(KEY_LENGTH), nullable=True
+    )
     #: Verification may be re-attempted within the settling window; each attempt is a row.
     attempt: Mapped[int] = mapped_column(sa.Integer, nullable=False, server_default=sa.text("1"))
     callback_idempotency_key: Mapped[str] = mapped_column(sa.String(KEY_LENGTH), nullable=False)
@@ -409,17 +427,61 @@ class Verification(Base, TenantScoped, CreatedAtMixin):
             ondelete="CASCADE",
             name="fk_verification_action",
         ),
+        sa.ForeignKeyConstraint(
+            ["tenant_id", "remediation_baseline_id", "remediation_action_id"],
+            [
+                "remediation_baseline.tenant_id",
+                "remediation_baseline.id",
+                "remediation_baseline.remediation_action_id",
+            ],
+            ondelete="RESTRICT",
+            name="fk_verification_baseline",
+        ),
+        sa.ForeignKeyConstraint(
+            ["tenant_id", "post_action_read_execution_id", "remediation_action_id"],
+            [
+                "tool_execution.tenant_id",
+                "tool_execution.id",
+                "tool_execution.remediation_action_id",
+            ],
+            ondelete="RESTRICT",
+            name="fk_verification_post_read_execution",
+        ),
         sa.UniqueConstraint(
             "tenant_id", "callback_idempotency_key", name="uq_verification_callback"
         ),
         sa.UniqueConstraint(
             "tenant_id", "remediation_action_id", "attempt", name="uq_verification_attempt"
         ),
+        sa.UniqueConstraint(
+            "tenant_id",
+            "post_action_read_execution_id",
+            name="uq_verification_post_read_execution",
+        ),
         sa.CheckConstraint("attempt >= 1", name="attempt_starts_at_one"),
         sa.CheckConstraint(
             "observation_window_end >= observation_window_start", name="window_ordered"
         ),
+        sa.CheckConstraint(
+            "((remediation_baseline_id IS NULL) AND "
+            "(post_action_read_execution_id IS NULL) AND (profile_id IS NULL) AND "
+            "(profile_version IS NULL) AND (observed_metric IS NULL) AND "
+            "(observed_value IS NULL) AND (observed_at IS NULL) AND "
+            "(observation_source_provider IS NULL) AND "
+            "(observation_source_capability IS NULL) AND "
+            "(observation_provenance_hash IS NULL)) OR "
+            "((remediation_baseline_id IS NOT NULL) AND "
+            "(post_action_read_execution_id IS NOT NULL) AND (profile_id IS NOT NULL) AND "
+            "(profile_version IS NOT NULL) AND (profile_version > 0) AND "
+            "(observed_metric IS NOT NULL) AND (observed_value IS NOT NULL) AND "
+            "(observed_at IS NOT NULL) AND (observation_source_provider IS NOT NULL) AND "
+            "(observation_source_capability IS NOT NULL) AND "
+            "(observation_provenance_hash IS NOT NULL))",
+            name="trusted_lineage_all_or_none",
+        ),
         sa.Index("ix_verification_action", "tenant_id", "remediation_action_id"),
+        sa.Index("ix_verification_baseline", "tenant_id", "remediation_baseline_id"),
+        sa.Index("ix_verification_post_read", "tenant_id", "post_action_read_execution_id"),
         sa.Index("ix_verification_verdict", "tenant_id", "verdict", "verified_at"),
     )
 
@@ -465,14 +527,24 @@ class RemediationBaseline(Base, TenantScoped, CreatedAtMixin):
         ),
         tenant_fk("service_id", "service", name="fk_remediation_baseline_service"),
         tenant_fk("environment_id", "environment", name="fk_remediation_baseline_environment"),
-        tenant_fk(
-            "read_execution_id",
-            "tool_execution",
+        sa.ForeignKeyConstraint(
+            ["tenant_id", "read_execution_id", "remediation_action_id"],
+            [
+                "tool_execution.tenant_id",
+                "tool_execution.id",
+                "tool_execution.remediation_action_id",
+            ],
             ondelete="RESTRICT",
             name="fk_remediation_baseline_read_execution",
         ),
         sa.UniqueConstraint(
             "tenant_id", "remediation_action_id", name="uq_remediation_baseline_action"
+        ),
+        sa.UniqueConstraint(
+            "tenant_id",
+            "id",
+            "remediation_action_id",
+            name="uq_remediation_baseline_tenant_id_id_action",
         ),
         sa.CheckConstraint("profile_version > 0", name="profile_version_positive"),
         sa.CheckConstraint("observed_at <= captured_at", name="observed_before_capture"),

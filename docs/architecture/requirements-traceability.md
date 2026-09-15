@@ -68,7 +68,7 @@ this count previously drifted apart), not production benchmarks.
 | FR-MEM-01 | `MemoryCategory` (five values) enforced by `asic.memory.policy.evaluate()`: `working_state`/`incident_history`/`model_inference` are refused outright (T1/T2/T3 are not writable through this path at all — T3 already has its own append-only path); only `operational_knowledge` and `verified_outcome` can become a proposal, each requiring a different reference shape |
 | FR-MEM-02 | `MemoryEntry.promotion_id` is NOT NULL under the `governed_entry` check constraint (NOT VALID, applies to new rows); `TestMemoryIsNotDirectlyWritable` proves a direct INSERT bypassing `MemoryGovernanceService.decide()` is rejected by the database itself, not merely by application code |
 | FR-MEM-03 | `support_count()` counts independent incidents; the policy and the entry-construction code do not special-case `support_count == 1` into automatic promotion — every promotion, single-incident or not, still requires the same human decision. No auto-promotion path exists to guard against |
-| FR-MEM-04 | `MemoryGovernanceService.decide()`: human-only, not-the-proposer, permission-checked (`memory.promotion.decide`, seeded by migration `0008`), re-evaluates the policy at decision time; every decision — approve, decline, and every rejection at propose time — is recorded in the append-only `memory_write_decision` table. Mutation-tested: disabling the VERIFIED-verdict requirement in `evaluate()` makes `test_only_a_verified_verdict_counts` fail for both `not_verified` and `inconclusive` |
+| FR-MEM-04 | `MemoryGovernanceService.decide()`: human-only, not-the-proposer, permission-checked (`memory.promotion.decide`, seeded by migration `0008`), re-evaluates policy and the complete G10 baseline/post-read lineage at decision time; every decision — approve, decline, and every rejection at propose time — is recorded in the append-only `memory_write_decision` table. Mutation-tested: bypassing trusted-lineage resolution makes a forged legacy `VERIFIED` row promotable, while the intact guard rejects it |
 
 ## Phase 7 implementation evidence
 
@@ -218,7 +218,7 @@ missing here or if an identifier appears here that the SRS does not define.
 | FR-MEM-01 | MEM, DB | 6 | Schema and lifetime tests | Five tiers physically separated with distinct write authority |
 | FR-MEM-02 | G12, MEM | 6 | Ungated-write test (SI-15) | Memory write without an approval record is rejected |
 | FR-MEM-03 | G12, HARN | 6, 11 | Single-incident guard | `support_count = 1` never auto-promotes |
-| FR-MEM-04 | G12, DB | 6 | Promotion workflow test | Every promotion has an approval and creates a version (INV-15) |
+| FR-MEM-04 | G12, G10, DB | 6, 8 | Real G10 promotion + forged-lineage tests | Every promotion has human approval and creates a version (INV-15); T5 verified outcomes also resolve an action-bound baseline and independent post-read provenance |
 
 ## 5. Remediation, policy, approval, verification
 

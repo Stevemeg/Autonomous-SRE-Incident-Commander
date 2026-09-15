@@ -214,6 +214,21 @@ The five labels, their authority and their rules, are defined normatively in
 **Labels are applied at the boundary where origin is known** — the broker, the retriever,
 the API — never by asking a model to label its own output. A node cannot promote a label.
 
+### 3.1 Trusted T5 remediation lineage
+
+A remediation verdict is not sufficient evidence for T5. Both proposal and human decision
+re-resolve the authoritative G10 lineage: the action and immutable target, its append-only
+pre-action baseline and successful read execution, and the independent successful
+post-action read execution. Tenant, action, service, environment, deterministic profile and
+criteria hash, metric, approved provider/capability, timestamps, normalized values and
+provenance hashes must agree. The broker's append-only result summary binds each normalized
+measurement to the metric sample actually returned. Legacy or caller-created verification
+rows without that structural lineage are rejected as `verification_provenance_invalid`.
+
+Human approval remains mandatory for promotion, but it cannot repair absent or inconsistent
+evidence. A legitimate G10 result therefore becomes a `VERIFIED_FACT` only after both
+machine-verifiable provenance and separate current human governance succeed.
+
 ---
 
 ## 4. Prompt-injection defenses

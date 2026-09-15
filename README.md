@@ -88,7 +88,7 @@ people do.
 | Intelligent alert correlation into coherent incidents | **Deterministic v2 built** — database-filtered service, environment, category and fixed time window with a stable tie-break; no LLM correlation |
 | Autonomous investigation across logs, metrics, traces, Kubernetes, deployments and configuration changes | **Simulator-backed** — orchestration, authorization and the evidence path are built; no real adapter exists |
 | Ranked RCA hypotheses with evidence, confidence and counter-evidence | **Structure built** — citation integrity and the confidence ceiling are enforced in code; reasoning quality is unmeasured |
-| Operational RAG over runbooks, service docs, known errors and postmortems | Not started — a simulator-backed `knowledge.search` capability exists; there is no retrieval pipeline |
+| Operational RAG over runbooks, service docs, known errors and postmortems | **Phase 6 built** — governed ingestion, authorization-first hybrid retrieval and current-authority citation replay; semantic quality is unmeasured |
 | Evidence-backed incident timeline reconstruction | **Built** — a deterministic projection over the event log |
 | Risk-classified remediation planning | **Phase 8 simulator-backed** |
 | Human approval before risky or irreversible actions | **Phase 8 exact-effect approval** |
@@ -96,7 +96,7 @@ people do.
 | Independent post-remediation verification | **Phase 8 fail-closed verifier** |
 | Slack/Teams collaboration and PagerDuty/Jira workflows | Not started |
 | Historical incident replay for testing and evaluation | Not started |
-| Governed operational memory and learning | Not started |
+| Governed operational memory and learning | **Phase 6/8 built** — human-gated T4/T5 promotion; verified remediation memory requires complete trusted G10 baseline and independent post-read lineage |
 
 Where a row says *built*, it means built against deterministic simulators and covered by
 tests — not exercised against production telemetry, which is Phase 10.
