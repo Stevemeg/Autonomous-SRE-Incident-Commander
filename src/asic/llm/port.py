@@ -72,6 +72,31 @@ class ModelResponse:
         return self.input_tokens + self.output_tokens
 
 
+@dataclass(frozen=True, slots=True)
+class ModelCallEstimate:
+    """A provider-enforced upper bound used before a hard-budget call.
+
+    Providers that cannot bound a request must refuse it rather than return an optimistic
+    estimate.  Actual usage is checked against these bounds after completion.
+    """
+
+    max_input_tokens: int
+    max_output_tokens: int
+    max_cost_usd: float
+    #: True only when an interrupted call can be replayed without consuming an external
+    #: token/cost allowance. The deterministic scripted provider has this property. A live
+    #: provider must remain false until durable cross-process reservations are implemented.
+    replay_safe_without_durable_reservation: bool = False
+
+    def __post_init__(self) -> None:
+        if min(self.max_input_tokens, self.max_output_tokens) < 0 or self.max_cost_usd < 0:
+            raise ValueError("model call estimates must be non-negative")
+
+    @property
+    def max_total_tokens(self) -> int:
+        return self.max_input_tokens + self.max_output_tokens
+
+
 @runtime_checkable
 class ModelProvider(Protocol):
     """A source of model completions."""
@@ -94,5 +119,8 @@ class ModelProvider(Protocol):
                 gathered is expensive and worth keeping.
         """
 
+    def estimate(self, request: ModelRequest) -> ModelCallEstimate:
+        """Return a hard upper bound without consuming or advancing the request."""
 
-__all__ = ["ModelProvider", "ModelRequest", "ModelResponse"]
+
+__all__ = ["ModelCallEstimate", "ModelProvider", "ModelRequest", "ModelResponse"]

@@ -73,12 +73,19 @@ class Principal:
     service_id: uuid.UUID | None = None
     environment_id: uuid.UUID | None = None
 
-    def allows(self, permission: str, environment_id: uuid.UUID | None = None) -> bool:
+    def allows_environment(self, permission: str, environment_id: uuid.UUID) -> bool:
         return any(
-            grant.permission == permission
-            and (environment_id is None or grant.environment_id in (None, environment_id))
+            grant.permission == permission and grant.environment_id in (None, environment_id)
             for grant in self.grants
         )
+
+    def allows_tenant_wide(self, permission: str) -> bool:
+        return any(
+            grant.permission == permission and grant.environment_id is None for grant in self.grants
+        )
+
+    def allows_any_environment(self, permission: str) -> bool:
+        return any(grant.permission == permission for grant in self.grants)
 
     def visible_environments(self, permission: str) -> frozenset[uuid.UUID] | None:
         matching = [grant.environment_id for grant in self.grants if grant.permission == permission]
@@ -175,12 +182,38 @@ def principal_dependency(
 CurrentPrincipal = Annotated[Principal, Depends(principal_dependency)]
 
 
-def require(principal: Principal, permission: str, environment_id: uuid.UUID | None = None) -> None:
-    if not principal.allows(permission, environment_id):
+def _forbidden() -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail={"code": "forbidden", "message": "principal lacks required authority"},
+    )
+
+
+def require_environment(principal: Principal, permission: str, environment_id: uuid.UUID) -> None:
+    if not principal.allows_environment(permission, environment_id):
+        raise _forbidden()
+
+
+def require_tenant_wide(principal: Principal, permission: str) -> None:
+    if not principal.allows_tenant_wide(permission):
+        raise _forbidden()
+
+
+def require_any_environment(principal: Principal, permission: str) -> None:
+    if not principal.allows_any_environment(permission):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail={"code": "forbidden", "message": "principal lacks required authority"},
         )
 
 
-__all__ = ["ApiSettings", "CurrentPrincipal", "Grant", "Principal", "authenticate", "require"]
+__all__ = [
+    "ApiSettings",
+    "CurrentPrincipal",
+    "Grant",
+    "Principal",
+    "authenticate",
+    "require_any_environment",
+    "require_environment",
+    "require_tenant_wide",
+]

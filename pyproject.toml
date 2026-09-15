@@ -10,10 +10,10 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "UNLICENSED" }
 
-# Phase 4 scope: domain model, persistence and the orchestration kernel. LangGraph is
-# ADR-0002; OpenTelemetry is ADR-0010. Deliberately absent: any model provider SDK
-# (ADR-0016), any web framework, and any infrastructure client - those arrive with the
-# phases that need them, and scripts/validate_docs.py fails the build if one appears early.
+# Runtime dependencies through Phase 9. LangGraph is ADR-0002, OpenTelemetry is ADR-0010,
+# FastAPI is ADR-0024, and the deterministic internal model port remains ADR-0016.
+# Deliberately absent: live model-provider SDKs and infrastructure clients; those arrive
+# only with a phase that implements and validates their security boundary.
 dependencies = [
     "SQLAlchemy>=2.0.23,<2.1",
     "alembic>=1.13,<2.0",

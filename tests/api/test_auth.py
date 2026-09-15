@@ -5,6 +5,7 @@ from __future__ import annotations
 import time
 import uuid
 from collections.abc import Callable
+from typing import Any, cast
 
 import jwt
 import pytest
@@ -12,9 +13,12 @@ import sqlalchemy as sa
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session, sessionmaker
 from tests.kernel_fixtures import Fixture, build_fixture
+from tests.orchestration.test_remediation import _remediation_scenario, _run_remediation
+from tests.orchestration.test_remediation_security import _prepared
 
 from asic.api import ApiSettings, create_app
-from asic.db.models import Role, User, UserRoleAssignment
+from asic.db.models import Environment, IncidentEvent, Role, User, UserRoleAssignment
+from asic.db.models.remediation import RemediationAction
 from asic.db.session import bind_tenant
 from asic.domain.enums import IncidentStatus, UserStatus
 
@@ -50,7 +54,14 @@ def _token(tenant_id: uuid.UUID, subject: str, **claims: object) -> str:
     return jwt.encode(payload, SECRET, algorithm="HS256")
 
 
-def _principal(session: Session, fixture: Fixture, role_key: str, subject: str) -> User:
+def _principal(
+    session: Session,
+    fixture: Fixture,
+    role_key: str,
+    subject: str,
+    *,
+    environment_id: object = Ellipsis,
+) -> User:
     bind_tenant(session, fixture.tenant_id)
     user = User(
         id=uuid.uuid4(),
@@ -70,7 +81,11 @@ def _principal(session: Session, fixture: Fixture, role_key: str, subject: str) 
             tenant_id=fixture.tenant_id,
             user_id=user.id,
             role_id=role.id,
-            environment_id=fixture.environment.id,
+            environment_id=(
+                fixture.environment.id
+                if environment_id is Ellipsis
+                else cast(uuid.UUID | None, environment_id)
+            ),
         )
     )
     session.commit()
@@ -233,3 +248,221 @@ def test_correlation_id_is_validated_and_returned() -> None:
     correlation_id = str(uuid.uuid4())
     response = client.get("/healthz", headers={"X-Correlation-ID": correlation_id})
     assert response.headers["X-Correlation-ID"] == correlation_id
+
+
+def test_idempotency_replay_does_not_bypass_current_revocation(
+    api_factory: Callable[[], Session], api_arranger: Session, worlds: tuple[Fixture, Fixture]
+) -> None:
+    own, _ = worlds
+    user = _principal(api_arranger, own, "responder", "revoked-replay")
+    client = TestClient(create_app(settings=SETTINGS, factory=api_factory))
+    headers = {
+        "Authorization": f"Bearer {_token(own.tenant_id, 'revoked-replay')}",
+        "Idempotency-Key": "revocation-replay-0001",
+    }
+    body = {"justification": "Initial authorized escalation."}
+    first = client.post(f"/api/v1/incidents/{own.incident.id}/escalate", headers=headers, json=body)
+    assert first.status_code == 200
+    bind_tenant(api_arranger, own.tenant_id)
+    before = api_arranger.scalar(
+        sa.select(sa.func.count())
+        .select_from(IncidentEvent)
+        .where(IncidentEvent.incident_id == own.incident.id)
+    )
+    api_arranger.execute(sa.delete(UserRoleAssignment).where(UserRoleAssignment.user_id == user.id))
+    api_arranger.commit()
+    replay = client.post(
+        f"/api/v1/incidents/{own.incident.id}/escalate", headers=headers, json=body
+    )
+    # Once the final grant is removed the resource is deliberately non-discoverable.
+    assert replay.status_code == 404
+    bind_tenant(api_arranger, own.tenant_id)
+    after = api_arranger.scalar(
+        sa.select(sa.func.count())
+        .select_from(IncidentEvent)
+        .where(IncidentEvent.incident_id == own.incident.id)
+    )
+    assert after == before
+
+
+def test_approval_replay_does_not_bypass_current_revocation(
+    api_factory: Callable[[], Session],
+    api_arranger: Session,
+    resolver: Any,
+    remediation_resolver: Any,
+    clock: Any,
+) -> None:
+    fixture, hypothesis_id = _prepared(
+        api_arranger,
+        api_factory,
+        resolver,
+        clock,
+        f"api-approval-replay-{uuid.uuid4().hex[:8]}",
+        True,
+    )
+    outcome = _run_remediation(
+        api_factory,
+        remediation_resolver,
+        clock,
+        fixture,
+        hypothesis_id,
+        _remediation_scenario(),
+    )
+    action = api_arranger.scalar(
+        sa.select(RemediationAction).where(
+            RemediationAction.workflow_run_id == outcome.workflow_run_id
+        )
+    )
+    assert action is not None
+    user = _principal(api_arranger, fixture, "sre_approver", "revoked-approval-replay")
+    headers = {
+        "Authorization": f"Bearer {_token(fixture.tenant_id, 'revoked-approval-replay')}",
+        "Idempotency-Key": "approval-revocation-replay-0001",
+    }
+    body = {
+        "decision": "approved",
+        "action_version_hash": action.action_version_hash,
+        "justification": "Reviewed exact frozen action.",
+    }
+    client = TestClient(create_app(settings=SETTINGS, factory=api_factory))
+    first = client.post(f"/api/v1/approvals/{action.id}/decide", headers=headers, json=body)
+    assert first.status_code == 200
+    bind_tenant(api_arranger, fixture.tenant_id)
+    api_arranger.execute(sa.delete(UserRoleAssignment).where(UserRoleAssignment.user_id == user.id))
+    api_arranger.commit()
+    replay = client.post(f"/api/v1/approvals/{action.id}/decide", headers=headers, json=body)
+    assert replay.status_code == 403
+
+
+def test_environment_scoped_ingestion_cannot_widen_to_production(
+    api_factory: Callable[[], Session], api_arranger: Session, worlds: tuple[Fixture, Fixture]
+) -> None:
+    own, _ = worlds
+    bind_tenant(api_arranger, own.tenant_id)
+    staging = Environment(
+        id=uuid.uuid4(),
+        tenant_id=own.tenant_id,
+        name="staging",
+        display_name="Staging",
+        is_production=False,
+    )
+    api_arranger.add(staging)
+    api_arranger.flush()
+    _principal(
+        api_arranger,
+        own,
+        "system_operator",
+        "staging-connector",
+        environment_id=staging.id,
+    )
+    client = TestClient(create_app(settings=SETTINGS, factory=api_factory))
+    payload = {
+        "schema_version": 1,
+        "source_event_id": "scope-alert-1",
+        "fingerprint": "scope-fingerprint",
+        "severity": "high",
+        "state": "firing",
+        "title": "Environment authorization probe",
+        "started_at": "2026-09-14T12:00:00Z",
+        "observed_at": "2026-09-14T12:00:01Z",
+    }
+
+    def token(environment_id: uuid.UUID) -> str:
+        return _token(
+            own.tenant_id,
+            "staging-connector",
+            connector_id="scoped-connector",
+            source="simulator",
+            service_id=str(own.service.id),
+            environment_id=str(environment_id),
+        )
+
+    production = client.post(
+        "/api/v1/ingest/alerts",
+        headers={
+            "Authorization": f"Bearer {token(own.environment.id)}",
+            "Idempotency-Key": "prod-with-stage-grant",
+        },
+        json=payload,
+    )
+    assert production.status_code == 403
+    staging_response = client.post(
+        "/api/v1/ingest/alerts",
+        headers={
+            "Authorization": f"Bearer {token(staging.id)}",
+            "Idempotency-Key": "stage-with-stage-grant",
+        },
+        json={**payload, "source_event_id": "scope-alert-2"},
+    )
+    assert staging_response.status_code == 200
+
+
+def test_administration_requires_a_tenant_wide_grant(
+    api_factory: Callable[[], Session], api_arranger: Session, worlds: tuple[Fixture, Fixture]
+) -> None:
+    own, _ = worlds
+    _principal(api_arranger, own, "platform_admin", "scoped-admin")
+    _principal(
+        api_arranger,
+        own,
+        "platform_admin",
+        "tenant-admin",
+        environment_id=None,
+    )
+    client = TestClient(create_app(settings=SETTINGS, factory=api_factory))
+    assert (
+        client.get(
+            "/api/v1/admin/services",
+            headers={"Authorization": f"Bearer {_token(own.tenant_id, 'scoped-admin')}"},
+        ).status_code
+        == 403
+    )
+    assert (
+        client.get(
+            "/api/v1/admin/services",
+            headers={"Authorization": f"Bearer {_token(own.tenant_id, 'tenant-admin')}"},
+        ).status_code
+        == 200
+    )
+    headers = {"Authorization": f"Bearer {_token(own.tenant_id, 'tenant-admin')}"}
+    first_page = client.get("/api/v1/admin/tools?limit=1", headers=headers)
+    assert first_page.status_code == 200
+    first_body = first_page.json()
+    assert len(first_body["items"]) == 1
+    assert first_body["next_cursor"]
+    second_page = client.get(
+        f"/api/v1/admin/tools?limit=1&cursor={first_body['next_cursor']}", headers=headers
+    )
+    assert second_page.status_code == 200
+    assert second_page.json()["items"][0]["id"] != first_body["items"][0]["id"]
+
+
+def test_annotation_is_authorized_idempotent_and_durable(
+    api_factory: Callable[[], Session], api_arranger: Session, worlds: tuple[Fixture, Fixture]
+) -> None:
+    own, _ = worlds
+    _principal(api_arranger, own, "responder", "annotator")
+    client = TestClient(create_app(settings=SETTINGS, factory=api_factory))
+    headers = {
+        "Authorization": f"Bearer {_token(own.tenant_id, 'annotator')}",
+        "Idempotency-Key": "incident-annotation-0001",
+    }
+    body = {"justification": "Customer impact confirmed by the on-call operator."}
+    first = client.post(f"/api/v1/incidents/{own.incident.id}/annotate", headers=headers, json=body)
+    replay = client.post(
+        f"/api/v1/incidents/{own.incident.id}/annotate", headers=headers, json=body
+    )
+    assert first.status_code == replay.status_code == 200
+    assert first.json() == replay.json()
+    bind_tenant(api_arranger, own.tenant_id)
+    assert (
+        api_arranger.scalar(
+            sa.select(sa.func.count())
+            .select_from(IncidentEvent)
+            .where(
+                IncidentEvent.incident_id == own.incident.id,
+                IncidentEvent.event_type == "incident.annotated",
+            )
+        )
+        == 1
+    )

@@ -23,7 +23,7 @@ from typing import Final
 
 from asic.domain.enums import NodeId
 from asic.domain.errors import ModelProviderError
-from asic.llm.port import ModelRequest, ModelResponse
+from asic.llm.port import ModelCallEstimate, ModelRequest, ModelResponse
 from asic.simulators.scenarios import Scenario
 
 #: Rough characters-per-token ratio used to derive plausible counts from text length. An
@@ -106,6 +106,28 @@ class DeterministicModelProvider:
         text = script[cursor]
         self._cursors[request.node_id] = cursor + 1
         return _respond(request.prompt_text, text)
+
+    def estimate(self, request: ModelRequest) -> ModelCallEstimate:
+        """Exactly price the next scripted response without advancing its cursor."""
+        script = self._scripts.get(request.node_id)
+        if script is None:
+            raise ModelProviderError(
+                f"no script for {request.node_id.value}; request cannot be bounded",
+                transient=False,
+            )
+        cursor = self._cursors[request.node_id]
+        if cursor >= len(script):
+            raise ModelProviderError(
+                f"{request.node_id.value} has no remaining bounded scripted response",
+                transient=False,
+            )
+        response = _respond(request.prompt_text, script[cursor])
+        return ModelCallEstimate(
+            max_input_tokens=response.input_tokens,
+            max_output_tokens=response.output_tokens,
+            max_cost_usd=response.cost_usd,
+            replay_safe_without_durable_reservation=True,
+        )
 
     def script_for(self, node_id: NodeId) -> Sequence[str]:
         return self._scripts.get(node_id, ())

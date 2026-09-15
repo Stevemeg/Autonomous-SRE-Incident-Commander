@@ -51,7 +51,7 @@ from dataclasses import dataclass
 import pytest
 
 from asic.knowledge.citations import resolve_citation
-from tests.knowledge.conftest import IMPORTER, KnowledgeWorld
+from tests.knowledge.conftest import KnowledgeWorld
 
 pytestmark = pytest.mark.postgres
 
@@ -239,9 +239,7 @@ class TestGoldenCorpus:
             title="Revoked guidance",
         )
         assert revoked_outcome.version_id is not None
-        world.ingestion.revoke_version(
-            world.tenant_id, revoked_outcome.version_id, actor=IMPORTER, reason="incorrect"
-        )
+        world.revoke_version(revoked_outcome.version_id, reason="incorrect")
         world.clock.advance(2 * 24 * 3600)
         return world
 

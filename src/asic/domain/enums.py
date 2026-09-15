@@ -230,6 +230,7 @@ class IncidentEventType(StrEnum):
     INCIDENT_SEVERITY_CHANGED = "incident.severity_changed"
     INCIDENT_STATE_CHANGED = "incident.state_changed"
     INCIDENT_TERMINATED = "incident.terminated"
+    INCIDENT_ANNOTATED = "incident.annotated"
 
     # correlation
     ALERT_RECEIVED = "alert.received"

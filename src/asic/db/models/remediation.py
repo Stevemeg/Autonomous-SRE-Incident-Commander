@@ -47,6 +47,60 @@ from asic.domain.enums import (
 from asic.domain.idempotency import KEY_LENGTH
 
 
+class RemediationTarget(Base, TenantScoped, CreatedAtMixin):
+    """Immutable, server-resolved objective for exactly one remediation run.
+
+    This row is created before planning.  It is the durable authority for every later
+    target decision; mutable incident alerts are never consulted to reconstruct scope on
+    resume.
+    """
+
+    __tablename__ = "remediation_target"
+    __append_only__ = True
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    workflow_run_id: Mapped[uuid.UUID] = mapped_column(pg.UUID(as_uuid=True), nullable=False)
+    incident_id: Mapped[uuid.UUID] = mapped_column(pg.UUID(as_uuid=True), nullable=False)
+    investigation_run_id: Mapped[uuid.UUID] = mapped_column(pg.UUID(as_uuid=True), nullable=False)
+    hypothesis_id: Mapped[uuid.UUID] = mapped_column(pg.UUID(as_uuid=True), nullable=False)
+    service_id: Mapped[uuid.UUID] = mapped_column(pg.UUID(as_uuid=True), nullable=False)
+    environment_id: Mapped[uuid.UUID] = mapped_column(pg.UUID(as_uuid=True), nullable=False)
+    resolved_permission_scope: Mapped[dict[str, Any]] = mapped_column(pg.JSONB, nullable=False)
+
+    __table_args__ = (
+        *tenant_identity_constraints("remediation_target"),
+        tenant_fk(
+            "workflow_run_id", "workflow_run", ondelete="CASCADE", name="fk_remediation_target_run"
+        ),
+        tenant_fk(
+            "incident_id", "incident", ondelete="CASCADE", name="fk_remediation_target_incident"
+        ),
+        tenant_fk(
+            "investigation_run_id",
+            "workflow_run",
+            ondelete="RESTRICT",
+            name="fk_remediation_target_investigation_run",
+        ),
+        tenant_fk(
+            "hypothesis_id",
+            "hypothesis",
+            ondelete="RESTRICT",
+            name="fk_remediation_target_hypothesis",
+        ),
+        tenant_fk(
+            "service_id", "service", ondelete="RESTRICT", name="fk_remediation_target_service"
+        ),
+        tenant_fk(
+            "environment_id",
+            "environment",
+            ondelete="RESTRICT",
+            name="fk_remediation_target_environment",
+        ),
+        sa.UniqueConstraint("tenant_id", "workflow_run_id", name="uq_remediation_target_run"),
+        sa.Index("ix_remediation_target_incident", "tenant_id", "incident_id"),
+    )
+
+
 class RemediationAction(Base, TenantScoped, TimestampMixin):
     """A proposed action and its lifecycle.
 
@@ -67,6 +121,7 @@ class RemediationAction(Base, TenantScoped, TimestampMixin):
     #: is a guess.
     hypothesis_id: Mapped[uuid.UUID] = mapped_column(pg.UUID(as_uuid=True), nullable=False)
     tool_definition_id: Mapped[uuid.UUID] = mapped_column(pg.UUID(as_uuid=True), nullable=False)
+    remediation_target_id: Mapped[uuid.UUID] = mapped_column(pg.UUID(as_uuid=True), nullable=False)
 
     # -- section 6 field 2: reason -------------------------------------------------
     reason: Mapped[str] = mapped_column(sa.Text, nullable=False)
@@ -149,6 +204,12 @@ class RemediationAction(Base, TenantScoped, TimestampMixin):
             ["tool_definition.id"],
             ondelete="RESTRICT",
             name="fk_remediation_action_tool_definition",
+        ),
+        tenant_fk(
+            "remediation_target_id",
+            "remediation_target",
+            ondelete="RESTRICT",
+            name="fk_remediation_action_target",
         ),
         sa.UniqueConstraint(
             "tenant_id", "request_idempotency_key", name="uq_remediation_action_request"

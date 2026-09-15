@@ -675,6 +675,7 @@ G10_VERIFIER: Final = NodeContract(
             "phase",
             "verification",
             "remediation_action",
+            "baseline_captured",
             "budget",
             "failures",
             "terminated",

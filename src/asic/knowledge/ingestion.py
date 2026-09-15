@@ -66,6 +66,7 @@ from asic.knowledge.contracts import (
     ImportActor,
     ImportContext,
     IngestionResult,
+    LifecyclePrincipal,
     SourceAccessPolicy,
     SourceDocument,
 )
@@ -83,6 +84,7 @@ MAX_TITLE_CHARS: Final[int] = 300
 #: The permission required to change a knowledge source's access policy (P6-04). Seeded by
 #: migration 0010, the same way ``memory.promotion.decide`` was seeded by migration 0008.
 ACCESS_MANAGE_PERMISSION: Final[str] = "knowledge.source.access.manage"
+LIFECYCLE_MANAGE_PERMISSION: Final[str] = "knowledge.source.lifecycle.manage"
 
 _REASON = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 
@@ -477,7 +479,13 @@ class KnowledgeIngestionService:
     # ----------------------------------------------------------------- lifecycle
 
     def revoke_source(
-        self, tenant_id: uuid.UUID, source_id: uuid.UUID, *, reason: str, actor: ImportActor
+        self,
+        tenant_id: uuid.UUID,
+        source_id: uuid.UUID,
+        *,
+        reason: str,
+        actor: ImportActor,
+        principal: LifecyclePrincipal,
     ) -> None:
         """Withdraw a source from every read path, including replay of past retrievals."""
         self._set_source_status(
@@ -486,11 +494,18 @@ class KnowledgeIngestionService:
             KnowledgeSourceStatus.REVOKED,
             reason=reason,
             actor=actor,
+            principal=principal,
             event=AuditEventType.CONFIGURATION_CHANGED,
         )
 
     def delete_source(
-        self, tenant_id: uuid.UUID, source_id: uuid.UUID, *, reason: str, actor: ImportActor
+        self,
+        tenant_id: uuid.UUID,
+        source_id: uuid.UUID,
+        *,
+        reason: str,
+        actor: ImportActor,
+        principal: LifecyclePrincipal,
     ) -> None:
         """Logically delete a source. Physical purge is retention automation (C8)."""
         self._set_source_status(
@@ -499,16 +514,37 @@ class KnowledgeIngestionService:
             KnowledgeSourceStatus.DELETED,
             reason=reason,
             actor=actor,
+            principal=principal,
             event=AuditEventType.DATA_DELETED,
         )
 
     def revoke_version(
-        self, tenant_id: uuid.UUID, version_id: uuid.UUID, *, reason: str, actor: ImportActor
+        self,
+        tenant_id: uuid.UUID,
+        version_id: uuid.UUID,
+        *,
+        reason: str,
+        actor: ImportActor,
+        principal: LifecyclePrincipal,
     ) -> None:
         """Withdraw one version. If it was current, the source has no current version."""
         with self._factory() as session, session.begin():
             bind_tenant(session, tenant_id)
             apply_statement_timeouts(session)
+            if not _may_manage_permission(
+                session, tenant_id, principal, LIFECYCLE_MANAGE_PERMISSION, self._clock.now()
+            ):
+                _audit_lifecycle_denial(
+                    session,
+                    tenant_id,
+                    actor,
+                    principal,
+                    "knowledge_version",
+                    version_id,
+                    self._clock,
+                )
+                session.commit()
+                raise KnowledgeRejected("lifecycle_manage_not_authorized")
             version = session.scalars(
                 sa.select(KnowledgeDocument).where(
                     KnowledgeDocument.tenant_id == tenant_id,
@@ -528,7 +564,11 @@ class KnowledgeIngestionService:
                 actor_id=actor.actor_id,
                 target_type="knowledge_version",
                 target_id=str(version_id),
-                payload={"change": "version_revoked", "reason": _reason(reason)},
+                payload={
+                    "change": "version_revoked",
+                    "reason": _reason(reason),
+                    "authorized_principal_id": str(principal.user_id),
+                },
             )
 
     def update_source_access(
@@ -614,11 +654,26 @@ class KnowledgeIngestionService:
         *,
         reason: str,
         actor: ImportActor,
+        principal: LifecyclePrincipal,
         event: AuditEventType,
     ) -> None:
         with self._factory() as session, session.begin():
             bind_tenant(session, tenant_id)
             apply_statement_timeouts(session)
+            if not _may_manage_permission(
+                session, tenant_id, principal, LIFECYCLE_MANAGE_PERMISSION, self._clock.now()
+            ):
+                _audit_lifecycle_denial(
+                    session,
+                    tenant_id,
+                    actor,
+                    principal,
+                    "knowledge_source",
+                    source_id,
+                    self._clock,
+                )
+                session.commit()
+                raise KnowledgeRejected("lifecycle_manage_not_authorized")
             source = _source_by_id(session, tenant_id, source_id)
             namespace, key = source_lock_key(tenant_id, source.provider, source.source_ref)
             session.execute(
@@ -639,7 +694,11 @@ class KnowledgeIngestionService:
                 actor_id=actor.actor_id,
                 target_type="knowledge_source",
                 target_id=str(source_id),
-                payload={"status": status.value, "reason": source.status_reason},
+                payload={
+                    "status": status.value,
+                    "reason": source.status_reason,
+                    "authorized_principal_id": str(principal.user_id),
+                },
             )
 
 
@@ -741,6 +800,65 @@ def _may_manage_access(
     )
 
 
+def _may_manage_permission(
+    session: Session,
+    tenant_id: uuid.UUID,
+    principal: LifecyclePrincipal,
+    permission: str,
+    now: datetime,
+) -> bool:
+    return (
+        session.scalar(
+            sa.select(sa.literal(1))
+            .select_from(User)
+            .join(
+                UserRoleAssignment,
+                sa.and_(
+                    UserRoleAssignment.tenant_id == User.tenant_id,
+                    UserRoleAssignment.user_id == User.id,
+                ),
+            )
+            .join(RolePermission, RolePermission.role_id == UserRoleAssignment.role_id)
+            .join(Permission, Permission.id == RolePermission.permission_id)
+            .where(
+                User.tenant_id == tenant_id,
+                User.id == principal.user_id,
+                User.status == UserStatus.ACTIVE,
+                Permission.key == permission,
+                sa.or_(
+                    UserRoleAssignment.expires_at.is_(None), UserRoleAssignment.expires_at > now
+                ),
+            )
+            .limit(1)
+        )
+        is not None
+    )
+
+
+def _audit_lifecycle_denial(
+    session: Session,
+    tenant_id: uuid.UUID,
+    actor: ImportActor,
+    principal: LifecyclePrincipal,
+    target_type: str,
+    target_id: uuid.UUID,
+    clock: Clock,
+) -> None:
+    AuditWriter(tenant_id=tenant_id, clock=clock).record(
+        session,
+        event_type=AuditEventType.AUTHORIZATION_DENIED,
+        outcome="denied",
+        actor_type=actor.actor_type,
+        actor_id=actor.actor_id,
+        target_type=target_type,
+        target_id=str(target_id),
+        payload={
+            "reason": "lifecycle_manage_not_authorized",
+            "attempted_principal_id": str(principal.user_id),
+        },
+    )
+
+
 def _current_version(
     session: Session, tenant_id: uuid.UUID, source_id: uuid.UUID
 ) -> KnowledgeDocument | None:
@@ -815,6 +933,7 @@ def _missing_scope(
 
 __all__ = [
     "ACCESS_MANAGE_PERMISSION",
+    "LIFECYCLE_MANAGE_PERMISSION",
     "SOURCE_LOCK_NAMESPACE",
     "KnowledgeIngestionService",
     "source_lock_key",

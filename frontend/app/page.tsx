@@ -7,10 +7,11 @@ function age(timestamp: string) {
   return minutes < 60 ? `${minutes}m` : `${Math.floor(minutes / 60)}h`;
 }
 
-export default async function IncidentsPage() {
+export default async function IncidentsPage({ searchParams }: { searchParams: Promise<{ cursor?: string }> }) {
+  const { cursor } = await searchParams;
   let data: Collection<Incident>;
   try {
-    data = await api<Collection<Incident>>("/incidents");
+    data = await api<Collection<Incident>>(`/incidents${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ""}`);
   } catch (error) {
     if (error instanceof AuthenticationRequired) return <Empty title="Authentication required" detail="The trusted identity proxy must provide the secure asic_session cookie." />;
     throw error;
@@ -23,5 +24,6 @@ export default async function IncidentsPage() {
         <h2>{incident.title}</h2><p className="reference">{incident.reference}</p>
         <div className="card-bottom"><span className="status"><i />{incident.status.replaceAll("_", " ")}</span><span>View command room →</span></div>
       </Link>)}</section>}
+    {data.next_cursor ? <p><Link href={`/?cursor=${encodeURIComponent(data.next_cursor)}`}>Next page →</Link></p> : null}
   </>;
 }

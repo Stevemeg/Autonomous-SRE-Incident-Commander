@@ -196,6 +196,7 @@ TIMELINE_RULES: Final[dict[IncidentEventType, TimelineRule]] = {
     IncidentEventType.INCIDENT_SEVERITY_CHANGED: TimelineRule(TimelineCategory.COMMUNICATION),
     IncidentEventType.INCIDENT_STATE_CHANGED: TimelineRule(TimelineCategory.RESOLUTION),
     IncidentEventType.INCIDENT_TERMINATED: TimelineRule(TimelineCategory.RESOLUTION),
+    IncidentEventType.INCIDENT_ANNOTATED: TimelineRule(TimelineCategory.COMMUNICATION),
     IncidentEventType.POSTMORTEM_DRAFTED: TimelineRule(TimelineCategory.RESOLUTION),
     IncidentEventType.MEMORY_PROMOTION_PROPOSED: TimelineRule(
         TimelineCategory.RESOLUTION, visible=False

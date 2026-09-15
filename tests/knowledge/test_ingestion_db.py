@@ -12,10 +12,12 @@ import pytest
 import sqlalchemy as sa
 
 from asic.db.models import (
+    AuditRecord,
     KnowledgeChunk,
     KnowledgeDocument,
     KnowledgeIngestion,
     KnowledgeSource,
+    UserRoleAssignment,
 )
 from asic.db.session import bind_tenant
 from asic.domain.enums import (
@@ -25,7 +27,12 @@ from asic.domain.enums import (
     KnowledgeSourceStatus,
     KnowledgeVersionState,
 )
-from asic.knowledge.contracts import ImportActor, SourceAccessPolicy, SourceDocument
+from asic.knowledge.contracts import (
+    ImportActor,
+    LifecyclePrincipal,
+    SourceAccessPolicy,
+    SourceDocument,
+)
 from asic.knowledge.embedding import EmbeddingService
 from asic.knowledge.errors import EmbeddingFailure, EmbeddingTimeout, KnowledgeRejected
 from asic.knowledge.ingestion import KnowledgeIngestionService
@@ -166,9 +173,7 @@ class TestVersioning:
     ) -> None:
         first = world.ingest("runbooks/pool.md", POOL_V1)
         assert first.version_id is not None
-        world.ingestion.revoke_version(
-            world.tenant_id, first.version_id, reason="wrong_procedure", actor=IMPORTER
-        )
+        world.revoke_version(first.version_id, reason="wrong_procedure")
         (version,) = _versions(world, first.source_id)
         assert version.lifecycle is KnowledgeVersionState.REVOKED
         assert world.retrieve("PoolTimeoutError").results == ()
@@ -176,9 +181,7 @@ class TestVersioning:
     def test_a_revoked_source_refuses_further_imports(self, world: KnowledgeWorld) -> None:
         first = world.ingest("runbooks/pool.md", POOL_V1)
         assert first.source_id is not None
-        world.ingestion.revoke_source(
-            world.tenant_id, first.source_id, reason="source_compromised", actor=IMPORTER
-        )
+        world.revoke_source(first.source_id, reason="source_compromised")
         refused = world.ingest("runbooks/pool.md", POOL_V2)
         assert (refused.outcome, refused.reason) == (
             KnowledgeIngestionOutcome.REJECTED,
@@ -538,16 +541,100 @@ class TestImmutability:
     ) -> None:
         result = world.ingest("runbooks/pool.md", POOL_V1)
         assert result.source_id is not None
-        world.ingestion.delete_source(
-            world.tenant_id, result.source_id, reason="retired", actor=IMPORTER
-        )
+        world.delete_source(result.source_id, reason="retired")
         with world.factory() as session:
             bind_tenant(session, world.tenant_id)
             source = session.get(KnowledgeSource, result.source_id)
             assert source is not None and source.status is KnowledgeSourceStatus.DELETED
         with pytest.raises(KnowledgeRejected, match="source_deleted"):
+            world.revoke_source(result.source_id, reason="x")
+
+
+class TestLifecycleAuthority:
+    @pytest.mark.parametrize("operation", ["revoke_source", "delete_source", "revoke_version"])
+    def test_attribution_object_never_grants_lifecycle_authority(
+        self, world: KnowledgeWorld, operation: str
+    ) -> None:
+        result = world.ingest(f"runbooks/{operation}.md", POOL_V1)
+        target_id = result.version_id if operation == "revoke_version" else result.source_id
+        assert target_id is not None
+        with pytest.raises(KnowledgeRejected, match="lifecycle_manage_not_authorized"):
+            getattr(world.ingestion, operation)(
+                world.tenant_id,
+                target_id,
+                reason="audit_probe",
+                actor=IMPORTER,
+                principal=LifecyclePrincipal(user_id=uuid.uuid4()),
+            )
+        with world.factory() as session:
+            bind_tenant(session, world.tenant_id)
+            denial = session.scalar(
+                sa.select(AuditRecord)
+                .where(AuditRecord.target_id == str(target_id), AuditRecord.outcome == "denied")
+                .order_by(AuditRecord.occurred_at.desc())
+                .limit(1)
+            )
+            assert denial is not None
+
+    def test_authorized_lifecycle_change_records_the_authority_identity(
+        self, world: KnowledgeWorld
+    ) -> None:
+        result = world.ingest("runbooks/authorized-lifecycle.md", POOL_V1)
+        assert result.source_id is not None
+        actor, principal = world.authorized_lifecycle_manager("audited-lifecycle-admin")
+        world.ingestion.revoke_source(
+            world.tenant_id,
+            result.source_id,
+            reason="retired",
+            actor=actor,
+            principal=principal,
+        )
+        with world.factory() as session:
+            bind_tenant(session, world.tenant_id)
+            success = session.scalar(
+                sa.select(AuditRecord)
+                .where(
+                    AuditRecord.target_id == str(result.source_id),
+                    AuditRecord.outcome == "succeeded",
+                )
+                .order_by(AuditRecord.occurred_at.desc())
+                .limit(1)
+            )
+            assert success is not None
+            assert success.payload_redacted["authorized_principal_id"] == str(principal.user_id)
+
+    def test_current_role_revocation_immediately_removes_lifecycle_authority(
+        self, world: KnowledgeWorld
+    ) -> None:
+        result = world.ingest("runbooks/revoked-admin.md", POOL_V1)
+        assert result.source_id is not None
+        actor, principal = world.authorized_lifecycle_manager("revoked-lifecycle-admin")
+        with world.factory() as session, session.begin():
+            bind_tenant(session, world.tenant_id)
+            session.execute(
+                sa.delete(UserRoleAssignment).where(UserRoleAssignment.user_id == principal.user_id)
+            )
+        with pytest.raises(KnowledgeRejected, match="lifecycle_manage_not_authorized"):
             world.ingestion.revoke_source(
-                world.tenant_id, result.source_id, reason="x", actor=IMPORTER
+                world.tenant_id,
+                result.source_id,
+                reason="must_fail",
+                actor=actor,
+                principal=principal,
+            )
+
+    def test_cross_tenant_lifecycle_authority_fails_closed(self, world: KnowledgeWorld) -> None:
+        result = world.ingest("runbooks/cross-tenant.md", POOL_V1)
+        assert result.source_id is not None
+        other = make_world(world.factory.kw["bind"])
+        actor, principal = other.authorized_lifecycle_manager("other-tenant-admin")
+        with pytest.raises(KnowledgeRejected, match="lifecycle_manage_not_authorized"):
+            world.ingestion.revoke_source(
+                world.tenant_id,
+                result.source_id,
+                reason="cross_tenant",
+                actor=actor,
+                principal=principal,
             )
 
 

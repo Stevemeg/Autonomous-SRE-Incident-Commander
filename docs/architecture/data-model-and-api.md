@@ -2,9 +2,13 @@
 
 Phase 5 adds delivery receipts, source-state projections and durable investigation requests;
 see [telemetry ingestion](./telemetry-ingestion.md) for the implemented contract. The HTTP
-surface below remains a Phase 9 design, not an authenticated endpoint implemented here.
+surface below is implemented as the authenticated, read-focused Phase 9 API described in
+[`phase9-api-dashboard.md`](./phase9-api-dashboard.md); deferred operations are called out
+in §7.
 
-- **Status:** **Implemented in Phase 3.** The conceptual model below is realised as 36 tables in `src/asic/db/models/`, migrated by `migrations/versions/`, and verified by `tests/db/`. The API boundary in §7 remains **conceptual** — no endpoint is implemented.
+- **Status:** Persistence is implemented through Phase 9 and the §7 authenticated API is
+  implemented at its documented read-focused boundary. Production external adapters and
+  evaluation execution remain deferred.
 - **Master specification references:** Sections 8, 12, 13, 15, 16, 23(M)
 - **Related:** [`../security/THREAT_MODEL.md`](../security/THREAT_MODEL.md) · [`memory-and-rag.md`](./memory-and-rag.md)
 
@@ -256,7 +260,9 @@ genuinely differ — not for tidiness (FR-API-01).
 
 ### 7.1 Resource boundaries
 
-Conceptual shape only; no implementation, no OpenAPI document yet (Phase 9).
+Implemented Phase 9 shape. Collection responses are cursor-paginated with hard caps;
+protected mutations resolve current resource/environment authority before durable
+idempotency replay.
 
 ```
 INGESTION
@@ -295,6 +301,11 @@ ADMINISTRATION
   GET/POST /admin/knowledge-sources
   GET      /admin/audit                   security_auditor only
 ```
+
+Incident annotation and administration GET routes for tools, policies, tenants, services,
+knowledge and audit are implemented. Evaluation execution remains Phase 11. Administrative
+POST mutation of tool/policy/tenant/service/knowledge catalogues is intentionally outside
+the read-focused Phase 9 boundary; external connector configuration begins in Phase 10.
 
 ### 7.2 Cross-cutting API rules
 

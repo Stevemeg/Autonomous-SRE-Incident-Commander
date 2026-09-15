@@ -199,7 +199,7 @@ def remediation_executor_node(deps: RemediationDependencies) -> Any:
                 request=CapabilityRequest(
                     node_id=NodeId.G9_REMEDIATION_EXECUTOR,
                     capability=descriptor.capability,
-                    service_name=deps.context.scope.service_names[0],
+                    service_name=deps.objective.service_name,
                     arguments=dict(action.arguments),
                     incident_id=deps.context.incident_id,
                     correlation_id=deps.context.correlation_id,
@@ -328,7 +328,7 @@ def _drifted_precondition(
             request=CapabilityRequest(
                 node_id=NodeId.G9_REMEDIATION_EXECUTOR,
                 capability=capability,
-                service_name=deps.context.scope.service_names[0],
+                service_name=deps.objective.service_name,
                 arguments=_read_arguments(capability, deps),
                 incident_id=deps.context.incident_id,
                 correlation_id=deps.context.correlation_id,
@@ -362,7 +362,7 @@ def _reconcile(
         request=CapabilityRequest(
             node_id=NodeId.G9_REMEDIATION_EXECUTOR,
             capability=capability,
-            service_name=deps.context.scope.service_names[0],
+            service_name=deps.objective.service_name,
             arguments=_read_arguments(capability, deps),
             incident_id=deps.context.incident_id,
             correlation_id=deps.context.correlation_id,

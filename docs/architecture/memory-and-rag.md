@@ -169,6 +169,16 @@ is reciprocal rank fusion (`FusionPolicy`, `k=60`, versioned as part of the retr
 identifier). No reranker or query-expansion code exists in the codebase — there is nothing
 to enable, consistent with "disabled until measured to help."
 
+### 2.3.1 Lifecycle authority
+
+`ImportActor` records attribution only and grants no authority. Source revoke/delete and
+version revoke require a separate `LifecyclePrincipal` whose current database role owns
+`knowledge.source.lifecycle.manage` for the tenant. The service rechecks this permission at
+mutation time; removal of the role assignment takes effect immediately. Both permitted and
+denied attempts are audited. A future trusted connector may receive explicit lifecycle
+authority only when Phase 10 defines that identity; a connector label or arbitrary system
+actor does not grant it today.
+
 ### 2.4 Citations
 
 Every retrieved chunk returns with `document_id`, `chunk_id`, `document_version`,

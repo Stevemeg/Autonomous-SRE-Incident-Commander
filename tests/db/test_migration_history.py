@@ -156,7 +156,8 @@ class TestPinnedListsMatchHistory:
         # migration. `tenant_scoped_tables()` reads the current models, so this set is
         # every tenant-scoped table added since Phase 3 - Phase 4/5's four, Phase 6's
         # five new knowledge/memory tables (`knowledge_document`, `knowledge_chunk`,
-        # `memory_entry` and `memory_promotion` are Phase 3 tables that 0008 only extends).
+        # `memory_entry` and `memory_promotion` are Phase 3 tables that 0008 only extends),
+        # Phase 9's API ledger and the audit correction's immutable remediation target.
         added = tenant_scoped_tables() - set(phase_3_tables["tenant"])
         assert added == {
             "workflow_checkpoint",
@@ -169,6 +170,7 @@ class TestPinnedListsMatchHistory:
             "knowledge_retrieval_result",
             "memory_write_decision",
             "api_idempotency_record",
+            "remediation_target",
         }
 
     def test_post_phase_3_append_only_additions(self, phase_3_tables: dict[str, list[str]]) -> None:
@@ -182,6 +184,7 @@ class TestPinnedListsMatchHistory:
             "knowledge_retrieval_result",
             "memory_write_decision",
             "api_idempotency_record",
+            "remediation_target",
         }
 
 
@@ -444,6 +447,7 @@ class TestUpgradePaths:
             "knowledge_retrieval_result",
             "memory_write_decision",
             "api_idempotency_record",
+            "remediation_target",
         }
 
     def test_accepted_phase_5_head_upgrades_to_current_head(self, throwaway_database: str) -> None:
@@ -458,7 +462,7 @@ class TestUpgradePaths:
             with engine.connect() as conn:
                 assert (
                     conn.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one()
-                    == "0012_phase9_api_rbac"
+                    == "0013_audit_corrections"
                 )
         finally:
             engine.dispose()

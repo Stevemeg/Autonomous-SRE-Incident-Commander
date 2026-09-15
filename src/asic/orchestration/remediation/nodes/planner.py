@@ -42,13 +42,15 @@ from asic.domain.enums import (
     TerminationReason,
     TraceSpanKind,
 )
-from asic.domain.errors import ModelProviderError, SchemaViolation
+from asic.domain.errors import BudgetExhausted, ModelProviderError, SchemaViolation
 from asic.domain.idempotency import action_version_hash, remediation_request_key
 from asic.domain.untrusted import UntrustedBlock
+from asic.llm.budgeted import complete_with_budget
 from asic.llm.port import ModelRequest
 from asic.llm.prompts import REMEDIATION_PLANNER_PROMPT
 from asic.observability import metrics
 from asic.orchestration.remediation.context import RemediationDependencies
+from asic.remediation.verification import require_permitted_proposal
 
 SCHEMA_REPAIR_ATTEMPTS: Final[int] = 1
 
@@ -98,8 +100,10 @@ def remediation_planner_node(deps: RemediationDependencies) -> Any:
             evidence_index = _evidence_index(deps)
 
             try:
-                proposal, tokens, cost = _ask_model(deps, menu.tool_names(), evidence_index, span)
-            except (SchemaViolation, ModelProviderError) as exc:
+                proposal, tokens, cost = _ask_model(
+                    deps, menu.tool_names(), evidence_index, span, budget
+                )
+            except (BudgetExhausted, SchemaViolation, ModelProviderError) as exc:
                 span.fail(str(exc))
                 metrics.schema_violations_total.add(
                     1, {"node": NodeId.G6_REMEDIATION_PLANNER.value}
@@ -160,7 +164,18 @@ def remediation_planner_node(deps: RemediationDependencies) -> Any:
                     recoverable=True,
                 )
 
-            action_ref = _persist_action(deps, proposal, granted, cited_evidence=cited)
+            try:
+                action_ref = _persist_action(deps, proposal, granted, cited_evidence=cited)
+            except SchemaViolation as exc:
+                span.set_decision(proposed=True, rejected_reason=str(exc))
+                return _terminate(
+                    contract,
+                    deps,
+                    charged,
+                    reason=str(exc),
+                    error_type="VerificationProfileRejected",
+                    recoverable=False,
+                )
 
             span.set_decision(
                 proposed=True,
@@ -232,6 +247,7 @@ def _ask_model(
     menu_names: tuple[str, ...],
     evidence_index: dict[str, dict[str, Any]],
     span: Any,
+    budget: BudgetState,
 ) -> tuple[RemediationProposal, int, float]:
     objective = deps.objective
     context = {
@@ -240,7 +256,7 @@ def _ask_model(
             f"{objective.hypothesis_statement}"
         ),
         "root_cause_class": objective.root_cause_class,
-        "services": list(objective.service_names),
+        "services": [objective.service_name],
         "environment": objective.environment_name,
         "is_production": objective.is_production,
         "write_capability_menu": sorted(menu_names),
@@ -270,7 +286,11 @@ def _ask_model(
                 "attempt": str(attempt + 1),
             },
         )
-        response = deps.model.complete(request)
+        response, _ = complete_with_budget(
+            deps.model,
+            request,
+            budget.charge(tokens=tokens, cost_usd=cost),
+        )
         tokens += response.total_tokens
         cost += response.cost_usd
         span.set_model_call(
@@ -306,6 +326,9 @@ def _persist_action(
 ) -> RemediationActionRef:
     assert proposal.tool_name is not None
     descriptor = granted.descriptor
+    verification_profile = require_permitted_proposal(
+        descriptor.name, proposal.verification_criteria
+    ).to_dict()
     incident_id = deps.context.incident_id
     hypothesis_id = uuid.UUID(deps.objective.hypothesis_id)
     # Generated once, up front: both hashes below bind to this exact id, and the
@@ -315,12 +338,12 @@ def _persist_action(
     action_id = uuid.uuid4()
 
     scope = deps.context.scope
-    resolved_scope = scope.resolve_arguments(descriptor, service_name=scope.service_names[0])
-    permission_scope = {
-        "tenant_id": str(deps.context.tenant_id),
-        "environment": deps.objective.environment_name,
-        **{k: v for k, v in resolved_scope.items() if k not in ("tenant_id", "environment")},
-    }
+    resolved_scope = scope.resolve_arguments(descriptor, service_name=deps.objective.service_name)
+    # The durable action carries the complete frozen objective scope, even when a specific
+    # descriptor needs only a subset (for example a node operation has no service argument).
+    # The broker resolves that subset independently and dispatch authorization checks it is
+    # contained in this exact target rather than allowing omission to erase target identity.
+    permission_scope = dict(deps.objective.permission_scope)
 
     version_hash = action_version_hash(
         action_id=action_id,
@@ -343,7 +366,7 @@ def _persist_action(
         action_id=action_id,
         tool_name="verification_criteria",
         tool_version="1",
-        arguments=proposal.verification_criteria,
+        arguments=verification_profile,
         permission_scope={},
         preconditions=(),
         risk_tier=descriptor.risk_tier.value,
@@ -365,6 +388,7 @@ def _persist_action(
         workflow_run_id=deps.context.workflow_run_id,
         hypothesis_id=hypothesis_id,
         tool_definition_id=granted.tool_definition_id,
+        remediation_target_id=_target_id(deps),
         reason=proposal.reason[:4000],
         expected_effect=proposal.expected_effect,
         risk_tier=descriptor.risk_tier,
@@ -374,7 +398,7 @@ def _persist_action(
         rollback_arguments={},
         approval_required=descriptor.risk_tier is not RiskTier.RO,
         timeout_seconds=descriptor.timeout_seconds,
-        verification_criteria=proposal.verification_criteria,
+        verification_criteria=verification_profile,
         verification_criteria_hash=verification_criteria_hash,
         baseline_snapshot={},
         tool_name=descriptor.name,
@@ -407,6 +431,23 @@ def _persist_action(
     )
 
     return _ref(action, capability=descriptor.capability)
+
+
+def _target_id(deps: RemediationDependencies) -> uuid.UUID:
+    from asic.db.models.remediation import RemediationTarget
+
+    target = deps.session.execute(
+        sa.select(RemediationTarget).where(
+            RemediationTarget.tenant_id == deps.context.tenant_id,
+            RemediationTarget.workflow_run_id == deps.context.workflow_run_id,
+            RemediationTarget.hypothesis_id == uuid.UUID(deps.objective.hypothesis_id),
+            RemediationTarget.service_id == uuid.UUID(deps.objective.service_id),
+            RemediationTarget.environment_id == uuid.UUID(deps.objective.environment_id),
+        )
+    ).scalar_one_or_none()
+    if target is None:
+        raise SchemaViolation("immutable remediation target is missing or mismatched")
+    return target.id
 
 
 def _ref(action: RemediationAction, *, capability: str) -> RemediationActionRef:

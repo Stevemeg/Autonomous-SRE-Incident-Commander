@@ -55,6 +55,7 @@ from asic.domain.enums import (
     TraceSpanKind,
 )
 from asic.domain.errors import BudgetExhausted, ModelProviderError, SchemaViolation
+from asic.llm.budgeted import complete_with_budget
 from asic.llm.port import ModelRequest
 from asic.llm.prompts import PLANNER_PROMPT
 from asic.observability import metrics
@@ -119,7 +120,7 @@ def planner_node(deps: NodeDependencies) -> Any:
 
             # 2. The model proposes.
             try:
-                decision, tokens, cost = _ask_model(deps, state, available, span)
+                decision, tokens, cost = _ask_model(deps, state, available, span, charged)
             except SchemaViolation as exc:
                 metrics.schema_violations_total.add(
                     1, {"node": NodeId.G3_INVESTIGATION_PLANNER.value}
@@ -225,6 +226,7 @@ def _ask_model(
     state: GraphState,
     available: frozenset[EvidenceDomain],
     span: Any,
+    budget: BudgetState,
 ) -> tuple[PlannerDecision, int, float]:
     """One model call, with a single repair attempt on unparseable output."""
     objective = deps.objective
@@ -267,7 +269,11 @@ def _ask_model(
                 "attempt": str(attempt + 1),
             },
         )
-        response = deps.model.complete(request)
+        response, _ = complete_with_budget(
+            deps.model,
+            request,
+            budget.charge(tokens=tokens, cost_usd=cost),
+        )
         tokens += response.total_tokens
         cost += response.cost_usd
         span.set_model_call(

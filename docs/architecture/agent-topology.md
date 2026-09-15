@@ -93,7 +93,7 @@ A tick means *meaningfully* different from the node it is being compared against
 | 12 | Risk/Policy Gate | ✅ | ✅ | ✅ | ✅ | ✅ | **Keep — G7, deterministic and non-LLM** | The security chokepoint. **Must not be a model.** A probabilistic authorizer is not an authorizer. Separation of duties from G6 is a security invariant: the proposer must not be the approver. |
 | 13 | Human Approval | ✅ | — | ✅ | ✅ | — | **Keep — G8, workflow state, not an agent** | Nothing here reasons. It is a durable interrupt plus an authenticated decision record. Implementing it as an agent would add a model to a path whose entire purpose is that a *human* decides. |
 | 14 | Remediation Executor | ✅ | ✅ | ✅ | ✅ | ✅ | **Keep — G9, deterministic dispatch** | The only write path. Different credentials, idempotency obligations, and compensation logic. Selects from a registered catalogue; performs no free-form generation (FR-REM-06). |
-| 15 | Verification | ✅ | — | — | ✅ | ✅ | **Keep — G10** | Must be *independent* of the executor to be worth anything. Merging it into G9 would let the component that acted also grade itself — the exact failure it exists to prevent. |
+| 15 | Verification | ✅ | — | — | ✅ | ✅ | **Keep — G10, deterministic and non-LLM** | Must be *independent* of the executor to be worth anything. Merging it into G9 would let the component that acted also grade itself — the exact failure it exists to prevent. |
 | 16 | Timeline | — | — | — | — | — | **Not a node — derived projection S1** | Every node already emits incident events. A timeline agent would re-derive, with a model, information the event log already holds deterministically — adding hallucination risk to a solved problem. |
 | 17 | Notification/Collaboration | ✅ | ✅ | ✅ | ✅ | — | **Not a reasoning node — service S2** | Templating and delivery. Deterministic. Its egress still goes through the Tool Broker, so scope and audit are unchanged. |
 | 18 | Postmortem | ✅ | — | — | ✅ | ✅ | **Keep — G11, batch** | Runs after resolution, offline, on a different latency budget, with its own quality metric (citation validity). |
@@ -148,7 +148,7 @@ flowchart TB
         G7["<b>G7 Policy Gate</b><br/><i>deterministic · non-LLM</i>"]
         G8["<b>G8 Approval Service</b><br/><i>durable interrupt</i>"]
         G9["<b>G9 Remediation Executor</b><br/><i>deterministic dispatch</i>"]
-        G10["<b>G10 Verifier</b><br/><i>LLM · independent</i>"]
+        G10["<b>G10 Verifier</b><br/><i>deterministic · independent read</i>"]
     end
 
     subgraph POST["Post-resolution (batch)"]
@@ -369,12 +369,12 @@ project brief. `RO` = read-only capability tier; risk tiers are defined in
 | **Deterministic exit** | Exactly one of: `succeeded`, `failed_clean` (no effect), `failed_partial` (compensation required), `unknown` (reconciliation required) |
 | **Evaluation** | Idempotency tests under duplicate delivery; fault-injection for partial failure; zero double-application |
 
-### G10 — Verifier *(LLM, independent)*
+### G10 — Verifier *(deterministic, independent)*
 
 | Attribute | Specification |
 |---|---|
 | **Responsibility** | Independently determine whether the incident's symptoms actually resolved |
-| **Inputs** | Verification criteria **fixed at proposal time**; post-action telemetry; pre-action baseline |
+| **Inputs** | Server-defined verification profile **fixed at proposal time**; fresh post-action telemetry; persisted pre-action baseline |
 | **Outputs** | `verified` \| `not_verified` \| `inconclusive`, with the evidence supporting the verdict |
 | **Tools** | Read-only telemetry tools — the same tier as G4, deliberately not the executor's |
 | **Permission scope** | Read-only |

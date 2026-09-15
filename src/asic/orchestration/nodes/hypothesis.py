@@ -56,9 +56,10 @@ from asic.domain.enums import (
     ReflectionAction,
     TraceSpanKind,
 )
-from asic.domain.errors import ModelProviderError, SchemaViolation
+from asic.domain.errors import BudgetExhausted, ModelProviderError, SchemaViolation
 from asic.domain.untrusted import UntrustedBlock
 from asic.knowledge.errors import RetrievalRefused
+from asic.llm.budgeted import complete_with_budget
 from asic.llm.port import ModelRequest
 from asic.llm.prompts import HYPOTHESIS_PROMPT
 from asic.observability import metrics
@@ -158,8 +159,8 @@ def hypothesis_node(deps: NodeDependencies) -> Any:
                 return update
 
             try:
-                output, tokens, cost = _ask_model(deps, state, evidence, span)
-            except (SchemaViolation, ModelProviderError) as exc:
+                output, tokens, cost = _ask_model(deps, state, evidence, span, budget)
+            except (BudgetExhausted, SchemaViolation, ModelProviderError) as exc:
                 metrics.schema_violations_total.add(1, {"node": NodeId.G5_HYPOTHESIS_ENGINE.value})
                 span.fail(str(exc))
                 update = {
@@ -245,6 +246,7 @@ def _ask_model(
     state: GraphState,
     evidence: list[EvidenceRef],
     span: Any,
+    budget: BudgetState,
 ) -> tuple[HypothesisOutput, int, float]:
     objective = deps.objective
     context = {
@@ -319,7 +321,11 @@ def _ask_model(
                 "attempt": str(attempt + 1),
             },
         )
-        response = deps.model.complete(request)
+        response, _ = complete_with_budget(
+            deps.model,
+            request,
+            budget.charge(tokens=tokens, cost_usd=cost),
+        )
         tokens += response.total_tokens
         cost += response.cost_usd
         span.set_model_call(

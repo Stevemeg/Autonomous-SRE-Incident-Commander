@@ -22,6 +22,25 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed — Phase 6–9 architecture and security audit corrections
+
+- Froze remediation incident, investigation, hypothesis, service, environment and permission
+  scope in an append-only target before planning; resume and dispatch now reject target drift.
+- Re-resolve write grants/tool enablement at dispatch and bind actions to current policy,
+  approval and exact target scope.
+- Replaced model-authored verification thresholds with typed server profiles and a durable
+  independent pre-action baseline plus fresh post-action comparison.
+- Added pre-call token/cost bounds for every model path, explicit environment versus
+  tenant-wide RBAC, and authorization-before-idempotency replay.
+- Separated knowledge lifecycle attribution from current lifecycle authority, including
+  audited denials and immediate role revocation.
+- Added cursor caps and batched action reads, moved synchronous ingestion off the async event
+  loop, implemented incident annotation and administration policy/tenant reads, and removed
+  the dashboard's fabricated healthy-policy status.
+- Added migration `0013_audit_corrections`, ADR-0025 and adversarial/non-vacuity coverage for
+  the corrected boundaries. No production adapter, live model or distributed limiter is
+  introduced or claimed.
+
 ### Added — Phase 9 API and incident-command dashboard
 
 - Added independently authorized, tenant-scoped FastAPI surfaces for incidents, approvals,

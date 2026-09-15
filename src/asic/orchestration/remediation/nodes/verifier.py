@@ -18,13 +18,17 @@ re-checking the clock.
 from __future__ import annotations
 
 import uuid
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
 import sqlalchemy as sa
 
 from asic.contracts.nodes import G10_VERIFIER
-from asic.contracts.remediation_state import RemediationGraphState, VerificationRef
+from asic.contracts.remediation_state import (
+    RemediationActionRef,
+    RemediationGraphState,
+    VerificationRef,
+)
 from asic.db.models.incident import Incident
 from asic.db.models.remediation import RemediationAction, Verification
 from asic.db.projections import append_incident_event, apply_transition
@@ -44,15 +48,9 @@ from asic.domain.idempotency import (
     verification_callback_key,
 )
 from asic.orchestration.remediation.context import RemediationDependencies
+from asic.remediation.verification import VerificationProfile, profile_for
 from asic.tools.broker import CapabilityRequest
 from asic.tools.registry import ToolRegistry
-
-_OPERATORS: dict[str, Any] = {
-    "<": lambda observed, threshold: observed < threshold,
-    "<=": lambda observed, threshold: observed <= threshold,
-    ">": lambda observed, threshold: observed > threshold,
-    ">=": lambda observed, threshold: observed >= threshold,
-}
 
 
 def verifier_node(deps: RemediationDependencies) -> Any:
@@ -76,14 +74,71 @@ def verifier_node(deps: RemediationDependencies) -> Any:
                 )
             ).scalar_one()
             descriptor = ToolRegistry.remediation_full().by_name(action.tool_name)
+            profile = profile_for(action.tool_name)
 
-            assert action.executed_at is not None  # guarded by the graph's routing
+            # G10 runs once before policy/approval to freeze a real independent baseline,
+            # then again after execution to judge a fresh observation. The node boundary
+            # between these invocations durably commits the baseline before any write.
+            if not action.baseline_snapshot:
+                if action.executed_at is not None:
+                    span.fail("executed action has no pre-action baseline")
+                    incident = deps.session.execute(
+                        sa.select(Incident).where(
+                            Incident.tenant_id == deps.context.tenant_id,
+                            Incident.id == deps.context.incident_id,
+                        )
+                    ).scalar_one()
+                    apply_transition(
+                        deps.session,
+                        incident=incident,
+                        target=IncidentStatus.ESCALATED,
+                        actor_type=ActorType.SYSTEM,
+                        source=NodeId.G10_VERIFIER.value,
+                        correlation_id=deps.context.correlation_id,
+                        termination_reason=TerminationReason.HUMAN_ESCALATION,
+                    )
+                    baseline_failure_update: dict[str, Any] = {
+                        "phase": "terminated",
+                        "terminated": True,
+                        "termination_reason": "executed action has no trusted pre-action baseline",
+                        "target_incident_status": IncidentStatus.ESCALATED.value,
+                    }
+                    contract.validate_update(baseline_failure_update)
+                    return baseline_failure_update
+                baseline = _observe(deps, profile, purpose="pre-action baseline")
+                if "observed_value" not in baseline:
+                    span.fail(str(baseline.get("reason", "baseline unavailable")))
+                    failure_update: dict[str, Any] = {
+                        "phase": "terminated",
+                        "terminated": True,
+                        "termination_reason": "independent pre-action baseline unavailable",
+                        "target_incident_status": None,
+                    }
+                    contract.validate_update(failure_update)
+                    return failure_update
+                baseline["remediation_action_id"] = str(action.id)
+                action.baseline_snapshot = baseline
+                deps.session.flush()
+                baseline_update: dict[str, Any] = {
+                    "phase": "baseline_captured",
+                    "baseline_captured": True,
+                    "remediation_action": _action_ref(action, descriptor.capability),
+                    "terminated": False,
+                }
+                contract.validate_update(baseline_update)
+                return baseline_update
+
+            if action.executed_at is None:
+                raise RuntimeError("verifier reached post-action path before execution")
             settled_at = action.executed_at + timedelta(seconds=descriptor.settling_seconds)
             if deps.clock.now() < settled_at:
                 span.set_decision(settled=False, settled_at=settled_at.isoformat())
-                update: dict[str, Any] = {"phase": "awaiting_settling", "terminated": False}
-                contract.validate_update(update)
-                return update
+                settling_update: dict[str, Any] = {
+                    "phase": "awaiting_settling",
+                    "terminated": False,
+                }
+                contract.validate_update(settling_update)
+                return settling_update
 
             attempt = (
                 1
@@ -113,7 +168,9 @@ def verifier_node(deps: RemediationDependencies) -> Any:
             if criteria_hash != action.verification_criteria_hash:  # pragma: no cover - defensive
                 verdict, observed, margin = VerificationVerdict.INCONCLUSIVE, {}, None
             else:
-                verdict, observed, margin = _evaluate(deps, criteria)
+                verdict, observed, margin = _evaluate(
+                    deps, profile, criteria, action.baseline_snapshot, action.id
+                )
 
             window_end = deps.clock.now()
             window_seconds = int(criteria.get("window_seconds", 300))
@@ -226,61 +283,119 @@ def verifier_node(deps: RemediationDependencies) -> Any:
 
 
 def _evaluate(
-    deps: RemediationDependencies, criteria: dict[str, Any]
+    deps: RemediationDependencies,
+    profile: VerificationProfile,
+    criteria: dict[str, Any],
+    baseline: dict[str, Any],
+    action_id: uuid.UUID,
 ) -> tuple[VerificationVerdict, dict[str, Any], float | None]:
-    """Independently observe the criteria's metric and judge it. Never trusts the executor."""
-    metric = criteria.get("metric")
-    operator = criteria.get("operator")
-    threshold = criteria.get("threshold")
-    window_seconds = int(criteria.get("window_seconds", 300))
-    if not metric or operator not in _OPERATORS or threshold is None:
+    """Judge server-defined policy against independent baseline and observation."""
+    if criteria != profile.to_dict():
         return VerificationVerdict.INCONCLUSIVE, {"reason": "malformed verification criteria"}, None
+    if (
+        baseline.get("metric") != profile.metric
+        or baseline.get("remediation_action_id") != str(action_id)
+        or "observed_value" not in baseline
+    ):
+        return VerificationVerdict.INCONCLUSIVE, {"reason": "missing trusted baseline"}, None
+    observed = _observe(deps, profile, purpose="independent post-remediation verification")
+    if "observed_value" not in observed:
+        return VerificationVerdict.INCONCLUSIVE, observed, None
+    baseline_value = float(baseline["observed_value"])
+    observed_value = float(observed["observed_value"])
+    threshold_passed = observed_value < profile.threshold
+    direction_passed = (
+        observed_value < baseline_value
+        if profile.direction == "decrease"
+        else observed_value > baseline_value
+    )
+    passed = threshold_passed and (direction_passed or not profile.require_improvement)
+    margin = round(observed_value - profile.threshold, 6)
+    observed.update(
+        {
+            "baseline_value": baseline_value,
+            "threshold": profile.threshold,
+            "threshold_passed": threshold_passed,
+            "direction_passed": direction_passed,
+            "profile_id": profile.profile_id,
+        }
+    )
+    return (
+        VerificationVerdict.VERIFIED if passed else VerificationVerdict.NOT_VERIFIED,
+        observed,
+        margin,
+    )
 
+
+def _observe(
+    deps: RemediationDependencies, profile: VerificationProfile, *, purpose: str
+) -> dict[str, Any]:
     now = deps.clock.now()
+    window_start = now - timedelta(seconds=profile.window_seconds)
     result = deps.broker.invoke(
         deps.session,
         request=CapabilityRequest(
             node_id=NodeId.G10_VERIFIER,
-            capability="read.metrics",
-            service_name=deps.context.scope.service_names[0],
+            capability=profile.source_capability,
+            service_name=deps.objective.service_name,
             arguments={
-                "window_start": now - timedelta(seconds=window_seconds),
+                "window_start": window_start,
                 "window_end": now,
-                "metric": metric,
+                "metric": profile.metric,
             },
             incident_id=deps.context.incident_id,
             correlation_id=deps.context.correlation_id,
-            purpose="independent post-remediation verification",
+            purpose=purpose,
         ),
         contract=G10_VERIFIER,
     )
     if not result.succeeded:
-        return (
-            VerificationVerdict.INCONCLUSIVE,
-            {"reason": result.failure.message if result.failure else "read failed"},
-            None,
-        )
+        return {"reason": result.failure.message if result.failure else "read failed"}
 
     samples = result.payload.get("samples") or []
-    if not samples:
-        return (
-            VerificationVerdict.INCONCLUSIVE,
-            {"reason": "no samples in observation window"},
-            None,
-        )
+    if len(samples) < profile.minimum_samples:
+        return {"reason": "insufficient samples in observation window"}
 
     try:
-        observed_value = float(str(samples[-1]).split("=")[-1])
+        timestamp_text, value_text = str(samples[-1]).rsplit("=", 1)
+        sample_time = datetime.fromisoformat(timestamp_text)
+        observed_value = float(value_text)
     except (ValueError, IndexError):
-        return VerificationVerdict.INCONCLUSIVE, {"reason": "could not parse observed sample"}, None
+        return {"reason": "could not parse observed sample"}
+    if sample_time < window_start or sample_time > now:
+        return {"reason": "post-action evidence is stale or future-dated"}
+    series = str(result.payload.get("series", ""))
+    if profile.metric not in series:
+        return {"reason": "observation returned an unrelated metric"}
+    source = str(result.payload.get("source", "")).strip()
+    if not source or result.tool_execution_id is None:
+        return {"reason": "observation has no independently attributable source"}
+    if (
+        result.resolved_scope.get("service") != deps.objective.service_name
+        or result.resolved_scope.get("environment") != deps.objective.environment_name
+    ):
+        return {"reason": "observation scope differs from immutable remediation target"}
+    return {
+        "metric": profile.metric,
+        "observed_value": observed_value,
+        "observed_at": sample_time.isoformat(),
+        "source": source,
+        "tool_execution_id": str(result.tool_execution_id),
+        "target_service_id": deps.objective.service_id,
+        "target_environment_id": deps.objective.environment_id,
+    }
 
-    passed = _OPERATORS[operator](observed_value, float(threshold))
-    margin = round(observed_value - float(threshold), 6)
-    verdict = VerificationVerdict.VERIFIED if passed else VerificationVerdict.NOT_VERIFIED
-    return (
-        verdict,
-        {"metric": metric, "observed_value": observed_value, "threshold": threshold},
-        margin,
+
+def _action_ref(action: RemediationAction, capability: str) -> RemediationActionRef:
+    return RemediationActionRef(
+        action_id=str(action.id),
+        tool_name=action.tool_name,
+        tool_version=action.tool_version,
+        capability=capability,
+        risk_tier=action.risk_tier,
+        status=action.status,
+        action_version_hash=action.action_version_hash,
+        approval_required=action.approval_required,
     )
 
 

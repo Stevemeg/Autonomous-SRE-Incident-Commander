@@ -53,6 +53,7 @@ from asic.db.models.remediation import (
     Approval,
     PolicyDecision,
     RemediationAction,
+    RemediationTarget,
     Verification,
 )
 from asic.db.models.tenancy import (
@@ -137,6 +138,7 @@ __all__ = [
     "PolicyDecision",
     "Postmortem",
     "RemediationAction",
+    "RemediationTarget",
     "Role",
     "RolePermission",
     "Service",

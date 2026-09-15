@@ -13,12 +13,20 @@ from typing import Annotated, Any, cast
 
 import sqlalchemy as sa
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Query, Request, Response
+from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from opentelemetry import trace
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session, sessionmaker
 
-from asic.api.auth import ApiSettings, CurrentPrincipal, Principal, require
+from asic.api.auth import (
+    ApiSettings,
+    CurrentPrincipal,
+    Principal,
+    require_any_environment,
+    require_environment,
+    require_tenant_wide,
+)
 from asic.api.rate_limit import RateLimiter
 from asic.db.models import (
     ApiIdempotencyRecord,
@@ -33,11 +41,12 @@ from asic.db.models import (
     PolicyDecision,
     RemediationAction,
     Service,
+    Tenant,
     TimelineEvent,
     ToolDefinition,
     Verification,
 )
-from asic.db.projections import apply_transition
+from asic.db.projections import append_incident_event, apply_transition
 from asic.db.session import (
     apply_statement_timeouts,
     bind_tenant,
@@ -45,8 +54,15 @@ from asic.db.session import (
     session_factory,
 )
 from asic.domain.clock import SystemClock
-from asic.domain.enums import ActorType, ApprovalDecision, IncidentStatus, TerminationReason
+from asic.domain.enums import (
+    ActorType,
+    ApprovalDecision,
+    IncidentEventType,
+    IncidentStatus,
+    TerminationReason,
+)
 from asic.domain.errors import ApprovalInvalid, IllegalStateTransition
+from asic.domain.idempotency import incident_event_key
 from asic.ingestion.contracts import ConnectorContext, IngestionRejected
 from asic.ingestion.service import IngestionService
 from asic.remediation.approval_service import decide
@@ -192,7 +208,7 @@ def _visible_incident(session: Session, principal: Principal, incident_id: uuid.
             Incident.tenant_id == principal.tenant_id, Incident.id == incident_id
         )
     )
-    if incident is None or not principal.allows(INCIDENT_READ, incident.environment_id):
+    if incident is None or not principal.allows_environment(INCIDENT_READ, incident.environment_id):
         raise HTTPException(404, detail={"code": "not_found", "message": "incident not found"})
     return incident
 
@@ -226,7 +242,7 @@ def list_incidents(
     limit: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = 50,
     cursor: str | None = None,
 ) -> dict[str, Any]:
-    require(principal, INCIDENT_READ)
+    require_any_environment(principal, INCIDENT_READ)
     statement = sa.select(Incident).where(Incident.tenant_id == principal.tenant_id)
     environments = principal.visible_environments(INCIDENT_READ)
     if environments is not None:
@@ -247,16 +263,20 @@ def get_incident(
 
 @incidents.get("/{incident_id}/timeline")
 def get_timeline(
-    incident_id: uuid.UUID, principal: CurrentPrincipal, session: DbSession
+    incident_id: uuid.UUID,
+    principal: CurrentPrincipal,
+    session: DbSession,
+    limit: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = 50,
+    cursor: str | None = None,
 ) -> dict[str, Any]:
     _visible_incident(session, principal, incident_id)
-    rows = session.scalars(
-        sa.select(TimelineEvent)
-        .where(TimelineEvent.incident_id == incident_id)
-        .order_by(TimelineEvent.sequence)
-    )
-    return {
-        "items": [
+    statement = sa.select(TimelineEvent).where(TimelineEvent.incident_id == incident_id)
+    after = _decode_cursor(cursor)
+    if after is not None:
+        statement = statement.where(TimelineEvent.id > after)
+    rows = list(session.scalars(statement.order_by(TimelineEvent.id).limit(limit + 1)))
+    return _page(
+        [
             _row(
                 id=x.id,
                 sequence=x.sequence,
@@ -267,22 +287,27 @@ def get_timeline(
                 source_evidence_id=x.source_evidence_id,
             )
             for x in rows
-        ]
-    }
+        ],
+        limit,
+    )
 
 
 @incidents.get("/{incident_id}/evidence")
 def get_evidence(
-    incident_id: uuid.UUID, principal: CurrentPrincipal, session: DbSession
+    incident_id: uuid.UUID,
+    principal: CurrentPrincipal,
+    session: DbSession,
+    limit: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = 50,
+    cursor: str | None = None,
 ) -> dict[str, Any]:
     _visible_incident(session, principal, incident_id)
-    rows = session.scalars(
-        sa.select(Evidence)
-        .where(Evidence.incident_id == incident_id)
-        .order_by(Evidence.gathered_at, Evidence.id)
-    )
-    return {
-        "items": [
+    statement = sa.select(Evidence).where(Evidence.incident_id == incident_id)
+    after = _decode_cursor(cursor)
+    if after is not None:
+        statement = statement.where(Evidence.id > after)
+    rows = list(session.scalars(statement.order_by(Evidence.id).limit(limit + 1)))
+    return _page(
+        [
             _row(
                 id=x.id,
                 domain=x.domain,
@@ -294,22 +319,27 @@ def get_evidence(
                 injection_flagged=x.injection_flagged,
             )
             for x in rows
-        ]
-    }
+        ],
+        limit,
+    )
 
 
 @incidents.get("/{incident_id}/hypotheses")
 def get_hypotheses(
-    incident_id: uuid.UUID, principal: CurrentPrincipal, session: DbSession
+    incident_id: uuid.UUID,
+    principal: CurrentPrincipal,
+    session: DbSession,
+    limit: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = 50,
+    cursor: str | None = None,
 ) -> dict[str, Any]:
     _visible_incident(session, principal, incident_id)
-    rows = session.scalars(
-        sa.select(Hypothesis)
-        .where(Hypothesis.incident_id == incident_id)
-        .order_by(Hypothesis.rank, Hypothesis.id)
-    )
-    return {
-        "items": [
+    statement = sa.select(Hypothesis).where(Hypothesis.incident_id == incident_id)
+    after = _decode_cursor(cursor)
+    if after is not None:
+        statement = statement.where(Hypothesis.id > after)
+    rows = list(session.scalars(statement.order_by(Hypothesis.id).limit(limit + 1)))
+    return _page(
+        [
             _row(
                 id=x.id,
                 rank=x.rank,
@@ -322,35 +352,44 @@ def get_hypotheses(
                 remaining_gaps=x.remaining_gaps,
             )
             for x in rows
-        ]
-    }
+        ],
+        limit,
+    )
 
 
 @incidents.get("/{incident_id}/actions")
 def get_actions(
-    incident_id: uuid.UUID, principal: CurrentPrincipal, session: DbSession
+    incident_id: uuid.UUID,
+    principal: CurrentPrincipal,
+    session: DbSession,
+    limit: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = 50,
+    cursor: str | None = None,
 ) -> dict[str, Any]:
     _visible_incident(session, principal, incident_id)
-    rows = session.scalars(
-        sa.select(RemediationAction)
-        .where(RemediationAction.incident_id == incident_id)
-        .order_by(RemediationAction.proposed_at, RemediationAction.id)
-    )
-    return {"items": [_action_json(session, x) for x in rows]}
+    statement = sa.select(RemediationAction).where(RemediationAction.incident_id == incident_id)
+    after = _decode_cursor(cursor)
+    if after is not None:
+        statement = statement.where(RemediationAction.id > after)
+    rows = list(session.scalars(statement.order_by(RemediationAction.id).limit(limit + 1)))
+    return _page(_actions_json(session, rows), limit)
 
 
 @incidents.get("/{incident_id}/trace")
 def get_trace(
-    incident_id: uuid.UUID, principal: CurrentPrincipal, session: DbSession
+    incident_id: uuid.UUID,
+    principal: CurrentPrincipal,
+    session: DbSession,
+    limit: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = 50,
+    cursor: str | None = None,
 ) -> dict[str, Any]:
     _visible_incident(session, principal, incident_id)
-    rows = session.scalars(
-        sa.select(ExecutionTrace)
-        .where(ExecutionTrace.incident_id == incident_id)
-        .order_by(ExecutionTrace.started_at, ExecutionTrace.id)
-    )
-    return {
-        "items": [
+    statement = sa.select(ExecutionTrace).where(ExecutionTrace.incident_id == incident_id)
+    after = _decode_cursor(cursor)
+    if after is not None:
+        statement = statement.where(ExecutionTrace.id > after)
+    rows = list(session.scalars(statement.order_by(ExecutionTrace.id).limit(limit + 1)))
+    return _page(
+        [
             _row(
                 id=x.id,
                 trace_id=x.trace_id,
@@ -363,8 +402,9 @@ def get_trace(
                 total_tool_calls=x.total_tool_calls,
             )
             for x in rows
-        ]
-    }
+        ],
+        limit,
+    )
 
 
 def _control(
@@ -377,11 +417,11 @@ def _control(
     idempotency_key: str,
 ) -> dict[str, Any]:
     operation = f"incident.{target.value}:{incident_id}"
+    incident = _visible_incident(session, principal, incident_id)
+    require_environment(principal, INCIDENT_CONTROL, incident.environment_id)
     replay = _replay(session, principal, idempotency_key, operation, body)
     if replay is not None:
         return replay
-    incident = _visible_incident(session, principal, incident_id)
-    require(principal, INCIDENT_CONTROL, incident.environment_id)
     try:
         apply_transition(
             session,
@@ -439,42 +479,95 @@ def cancel(
     )
 
 
-@incidents.post("/{incident_id}/annotate", status_code=501)
+@incidents.post("/{incident_id}/annotate")
 def annotate(
     incident_id: uuid.UUID,
     body: ControlBody,
     principal: CurrentPrincipal,
     session: DbSession,
     idempotency_key: Annotated[str, Header(alias="Idempotency-Key", min_length=16, max_length=128)],
-) -> None:
-    del body, idempotency_key
+) -> dict[str, Any]:
     incident = _visible_incident(session, principal, incident_id)
-    require(principal, INCIDENT_CONTROL, incident.environment_id)
-    raise HTTPException(
-        501,
-        detail={
-            "code": "deferred",
-            "message": "operator annotations require a canonical event type deferred beyond Phase 9",
-        },
+    require_environment(principal, INCIDENT_CONTROL, incident.environment_id)
+    operation = f"incident.annotate:{incident_id}"
+    replay = _replay(session, principal, idempotency_key, operation, body)
+    if replay is not None:
+        return replay
+    result = append_incident_event(
+        session,
+        incident=incident,
+        event_type=IncidentEventType.INCIDENT_ANNOTATED,
+        source="phase9_api",
+        actor_type=ActorType.HUMAN,
+        actor_id=str(principal.user_id),
+        correlation_id=uuid.uuid4(),
+        payload={"annotation": body.justification},
+        idempotency_key=incident_event_key(
+            tenant_id=principal.tenant_id,
+            incident_id=incident.id,
+            event_type=IncidentEventType.INCIDENT_ANNOTATED.value,
+            subject_id=principal.user_id,
+            occurrence_discriminator=idempotency_key,
+        ),
     )
+    response = _row(
+        id=result.event.id,
+        incident_id=incident.id,
+        sequence=result.event.sequence,
+        annotation=body.justification,
+        actor_id=principal.user_id,
+        occurred_at=result.event.occurred_at,
+    )
+    return _remember(session, principal, idempotency_key, operation, body, response)
 
 
 def _action_json(session: Session, action: RemediationAction) -> dict[str, Any]:
-    approval = session.scalar(
+    return _actions_json(session, [action])[0]
+
+
+def _actions_json(session: Session, actions: list[RemediationAction]) -> list[dict[str, Any]]:
+    """Serialize a bounded action page with three batched relation reads."""
+    if not actions:
+        return []
+    action_ids = [action.id for action in actions]
+    approvals: dict[uuid.UUID, Approval] = {}
+    for approval in session.scalars(
         sa.select(Approval)
-        .where(Approval.remediation_action_id == action.id)
-        .order_by(Approval.created_at.desc())
-        .limit(1)
-    )
-    verification = session.scalar(
+        .where(Approval.remediation_action_id.in_(action_ids))
+        .order_by(Approval.remediation_action_id, Approval.created_at.desc())
+    ):
+        approvals.setdefault(approval.remediation_action_id, approval)
+    verifications: dict[uuid.UUID, Verification] = {}
+    for verification in session.scalars(
         sa.select(Verification)
-        .where(Verification.remediation_action_id == action.id)
-        .order_by(Verification.attempt.desc())
-        .limit(1)
-    )
-    policy = session.scalar(
-        sa.select(PolicyDecision).where(PolicyDecision.remediation_action_id == action.id)
-    )
+        .where(Verification.remediation_action_id.in_(action_ids))
+        .order_by(Verification.remediation_action_id, Verification.attempt.desc())
+    ):
+        verifications.setdefault(verification.remediation_action_id, verification)
+    policies = {
+        policy.remediation_action_id: policy
+        for policy in session.scalars(
+            sa.select(PolicyDecision).where(PolicyDecision.remediation_action_id.in_(action_ids))
+        )
+    }
+    return [
+        _action_row(
+            action,
+            approval=approvals.get(action.id),
+            verification=verifications.get(action.id),
+            policy=policies.get(action.id),
+        )
+        for action in actions
+    ]
+
+
+def _action_row(
+    action: RemediationAction,
+    *,
+    approval: Approval | None,
+    verification: Verification | None,
+    policy: PolicyDecision | None,
+) -> dict[str, Any]:
     return _row(
         id=action.id,
         incident_id=action.incident_id,
@@ -500,23 +593,44 @@ def _action_json(session: Session, action: RemediationAction) -> dict[str, Any]:
 
 
 @approvals.get("/pending")
-def pending_approvals(principal: CurrentPrincipal, session: DbSession) -> dict[str, Any]:
-    require(principal, APPROVAL_DECIDE)
-    rows = session.scalars(
+def pending_approvals(
+    principal: CurrentPrincipal,
+    session: DbSession,
+    limit: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = 50,
+    cursor: str | None = None,
+) -> dict[str, Any]:
+    require_any_environment(principal, APPROVAL_DECIDE)
+    statement = (
         sa.select(RemediationAction)
         .where(
             RemediationAction.approval_required.is_(True),
             RemediationAction.status == "awaiting_approval",
         )
-        .order_by(RemediationAction.proposed_at, RemediationAction.id)
+        .order_by(RemediationAction.id)
     )
-    return {
-        "items": [
-            _action_json(session, x)
-            for x in rows
-            if principal.allows(APPROVAL_DECIDE, _action_environment(session, principal, x))
-        ]
+    after = _decode_cursor(cursor)
+    if after is not None:
+        statement = statement.where(RemediationAction.id > after)
+    # Scope filtering can discard rows, so bound the candidate query and never expose an
+    # unbounded scan. A sparse authorized page may contain fewer than ``limit`` items.
+    rows = list(session.scalars(statement.limit(MAX_PAGE_SIZE + 1)))
+    environment_names = {str(action.permission_scope.get("environment")) for action in rows}
+    environment_ids = {
+        environment.name: environment.id
+        for environment in session.scalars(
+            sa.select(Environment).where(Environment.name.in_(environment_names))
+        )
     }
+    visible = [
+        x
+        for x in rows
+        if (
+            (environment_id := environment_ids.get(str(x.permission_scope.get("environment"))))
+            is not None
+            and principal.allows_environment(APPROVAL_DECIDE, environment_id)
+        )
+    ]
+    return _page(_actions_json(session, visible), limit)
 
 
 def _action_environment(
@@ -543,9 +657,9 @@ def _action_environment(
 def get_approval(
     action_id: uuid.UUID, principal: CurrentPrincipal, session: DbSession
 ) -> dict[str, Any]:
-    require(principal, APPROVAL_DECIDE)
+    require_any_environment(principal, APPROVAL_DECIDE)
     action = session.scalar(sa.select(RemediationAction).where(RemediationAction.id == action_id))
-    if action is None or not principal.allows(
+    if action is None or not principal.allows_environment(
         APPROVAL_DECIDE, _action_environment(session, principal, action)
     ):
         raise HTTPException(404, detail={"code": "not_found", "message": "approval not found"})
@@ -560,8 +674,11 @@ def decide_approval(
     session: DbSession,
     idempotency_key: Annotated[str, Header(alias="Idempotency-Key", min_length=16, max_length=128)],
 ) -> dict[str, Any]:
-    require(principal, APPROVAL_DECIDE)
     operation = f"approval.decide:{action_id}"
+    action = session.scalar(sa.select(RemediationAction).where(RemediationAction.id == action_id))
+    if action is None:
+        raise HTTPException(404, detail={"code": "not_found", "message": "approval not found"})
+    require_environment(principal, APPROVAL_DECIDE, _action_environment(session, principal, action))
     replay = _replay(session, principal, idempotency_key, operation, body)
     if replay is not None:
         return replay
@@ -595,9 +712,10 @@ def decide_approval(
 async def ingest_alert(
     request: Request,
     principal: CurrentPrincipal,
+    session: DbSession,
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
 ) -> dict[str, Any]:
-    require(principal, INGEST_WRITE)
+    require_any_environment(principal, INGEST_WRITE)
     if idempotency_key is None or not 16 <= len(idempotency_key) <= 128:
         raise HTTPException(
             400,
@@ -619,8 +737,19 @@ async def ingest_alert(
                 "message": "the signed connector identity must bind source, service and environment",
             },
         )
+    environment_id = cast(uuid.UUID, principal.environment_id)
+    service_id = cast(uuid.UUID, principal.service_id)
+    require_environment(principal, INGEST_WRITE, environment_id)
+    environment = session.scalar(sa.select(Environment).where(Environment.id == environment_id))
+    service = session.scalar(sa.select(Service).where(Service.id == service_id))
+    if environment is None or service is None or not service.is_active:
+        raise HTTPException(
+            404, detail={"code": "not_found", "message": "connector target not found"}
+        )
+    raw = await request.body()
     try:
-        result = IngestionService(request.app.state.session_factory).ingest(
+        result = await run_in_threadpool(
+            IngestionService(request.app.state.session_factory).ingest,
             ConnectorContext(
                 tenant_id=principal.tenant_id,
                 connector_id=cast(str, principal.connector_id),
@@ -628,7 +757,7 @@ async def ingest_alert(
                 service_id=cast(uuid.UUID, principal.service_id),
                 environment_id=cast(uuid.UUID, principal.environment_id),
             ),
-            await request.body(),
+            raw,
         )
     except IngestionRejected as exc:
         raise HTTPException(
@@ -650,33 +779,40 @@ async def ingest_webhook(
     source: str,
     request: Request,
     principal: CurrentPrincipal,
+    session: DbSession,
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
 ) -> dict[str, Any]:
-    require(principal, INGEST_WRITE)
     if principal.source != source:
         raise HTTPException(
             404, detail={"code": "not_found", "message": "webhook source not found"}
         )
-    return await ingest_alert(request, principal, idempotency_key)
+    return await ingest_alert(request, principal, session, idempotency_key)
 
 
 @evaluation.api_route("/{path:path}", methods=["GET", "POST"], status_code=501)
 def evaluation_deferred(path: str, principal: CurrentPrincipal) -> None:
     del path
-    require(principal, EVALUATION_READ)
+    require_any_environment(principal, EVALUATION_READ)
     raise HTTPException(
         501, detail={"code": "deferred", "message": "evaluation and replay execution are Phase 11"}
     )
 
 
 @admin.get("/tools")
-def admin_tools(principal: CurrentPrincipal, session: DbSession) -> dict[str, Any]:
-    require(principal, ADMIN_READ)
-    rows = session.scalars(
-        sa.select(ToolDefinition).order_by(ToolDefinition.name, ToolDefinition.version)
-    )
-    return {
-        "items": [
+def admin_tools(
+    principal: CurrentPrincipal,
+    session: DbSession,
+    limit: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = 50,
+    cursor: str | None = None,
+) -> dict[str, Any]:
+    require_tenant_wide(principal, ADMIN_READ)
+    statement = sa.select(ToolDefinition)
+    after = _decode_cursor(cursor)
+    if after is not None:
+        statement = statement.where(ToolDefinition.id > after)
+    rows = list(session.scalars(statement.order_by(ToolDefinition.id).limit(limit + 1)))
+    return _page(
+        [
             _row(
                 id=x.id,
                 name=x.name,
@@ -686,16 +822,72 @@ def admin_tools(principal: CurrentPrincipal, session: DbSession) -> dict[str, An
                 enabled=x.is_enabled,
             )
             for x in rows
-        ]
-    }
+        ],
+        limit,
+    )
+
+
+@admin.get("/policies")
+def admin_policies(
+    principal: CurrentPrincipal,
+    session: DbSession,
+    limit: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = 50,
+    cursor: str | None = None,
+) -> dict[str, Any]:
+    require_tenant_wide(principal, ADMIN_READ)
+    statement = sa.select(Environment).where(Environment.tenant_id == principal.tenant_id)
+    after = _decode_cursor(cursor)
+    if after is not None:
+        statement = statement.where(Environment.id > after)
+    rows = list(session.scalars(statement.order_by(Environment.id).limit(limit + 1)))
+    return _page(
+        [
+            _row(
+                id=x.id,
+                environment_id=x.id,
+                environment=x.name,
+                is_production=x.is_production,
+                approval_policy=x.approval_policy,
+            )
+            for x in rows
+        ],
+        limit,
+    )
+
+
+@admin.get("/tenants")
+def admin_tenants(
+    principal: CurrentPrincipal,
+    session: DbSession,
+    limit: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = 50,
+    cursor: str | None = None,
+) -> dict[str, Any]:
+    require_tenant_wide(principal, ADMIN_READ)
+    tenant = session.scalar(sa.select(Tenant).where(Tenant.id == principal.tenant_id))
+    if tenant is None:
+        raise HTTPException(404, detail={"code": "not_found", "message": "tenant not found"})
+    items = [_row(id=tenant.id, slug=tenant.slug, display_name=tenant.display_name)]
+    after = _decode_cursor(cursor)
+    if after is not None and tenant.id <= after:
+        items = []
+    return _page(items, limit)
 
 
 @admin.get("/services")
-def admin_services(principal: CurrentPrincipal, session: DbSession) -> dict[str, Any]:
-    require(principal, ADMIN_READ)
-    rows = session.scalars(sa.select(Service).order_by(Service.name))
-    return {
-        "items": [
+def admin_services(
+    principal: CurrentPrincipal,
+    session: DbSession,
+    limit: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = 50,
+    cursor: str | None = None,
+) -> dict[str, Any]:
+    require_tenant_wide(principal, ADMIN_READ)
+    statement = sa.select(Service)
+    after = _decode_cursor(cursor)
+    if after is not None:
+        statement = statement.where(Service.id > after)
+    rows = list(session.scalars(statement.order_by(Service.id).limit(limit + 1)))
+    return _page(
+        [
             _row(
                 id=x.id,
                 name=x.name,
@@ -705,18 +897,26 @@ def admin_services(principal: CurrentPrincipal, session: DbSession) -> dict[str,
                 is_active=x.is_active,
             )
             for x in rows
-        ]
-    }
+        ],
+        limit,
+    )
 
 
 @admin.get("/knowledge-sources")
-def admin_knowledge(principal: CurrentPrincipal, session: DbSession) -> dict[str, Any]:
-    require(principal, ADMIN_READ)
-    rows = session.scalars(
-        sa.select(KnowledgeSource).order_by(KnowledgeSource.provider, KnowledgeSource.source_ref)
-    )
-    return {
-        "items": [
+def admin_knowledge(
+    principal: CurrentPrincipal,
+    session: DbSession,
+    limit: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = 50,
+    cursor: str | None = None,
+) -> dict[str, Any]:
+    require_tenant_wide(principal, ADMIN_READ)
+    statement = sa.select(KnowledgeSource)
+    after = _decode_cursor(cursor)
+    if after is not None:
+        statement = statement.where(KnowledgeSource.id > after)
+    rows = list(session.scalars(statement.order_by(KnowledgeSource.id).limit(limit + 1)))
+    return _page(
+        [
             _row(
                 id=x.id,
                 provider=x.provider,
@@ -725,18 +925,26 @@ def admin_knowledge(principal: CurrentPrincipal, session: DbSession) -> dict[str
                 status=x.status,
             )
             for x in rows
-        ]
-    }
+        ],
+        limit,
+    )
 
 
 @admin.get("/audit")
-def admin_audit(principal: CurrentPrincipal, session: DbSession) -> dict[str, Any]:
-    require(principal, AUDIT_READ)
-    rows = session.scalars(
-        sa.select(AuditRecord).order_by(AuditRecord.occurred_at.desc()).limit(MAX_PAGE_SIZE)
-    )
-    return {
-        "items": [
+def admin_audit(
+    principal: CurrentPrincipal,
+    session: DbSession,
+    limit: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = 50,
+    cursor: str | None = None,
+) -> dict[str, Any]:
+    require_tenant_wide(principal, AUDIT_READ)
+    statement = sa.select(AuditRecord)
+    after = _decode_cursor(cursor)
+    if after is not None:
+        statement = statement.where(AuditRecord.id > after)
+    rows = list(session.scalars(statement.order_by(AuditRecord.id).limit(limit + 1)))
+    return _page(
+        [
             _row(
                 id=x.id,
                 event_type=x.event_type,
@@ -749,8 +957,9 @@ def admin_audit(principal: CurrentPrincipal, session: DbSession) -> dict[str, An
                 correlation_id=x.correlation_id,
             )
             for x in rows
-        ]
-    }
+        ],
+        limit,
+    )
 
 
 def create_app(

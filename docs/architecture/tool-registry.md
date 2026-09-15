@@ -5,6 +5,10 @@
   investigation registry; four typed R1/R2 simulator-backed Kubernetes actions are available
   only to the remediation executor through the policy and approval boundary
   ([`bounded-remediation.md`](./bounded-remediation.md)). R3 remains unregistrable.
+  A write menu is selection input, not execution authority: the broker re-reads the current
+  tenant/environment grant and global tool enabled state immediately before dispatch, and
+  requires the action, immutable target and resolved scope to agree. Read menus may remain
+  cached within one run because they cannot authorize writes.
 - **Master specification references:** Sections 6, 7, 15, 23(G)
 - **Related:** [`remediation-safety-policy.md`](./remediation-safety-policy.md) · [`../security/THREAT_MODEL.md`](../security/THREAT_MODEL.md)
 

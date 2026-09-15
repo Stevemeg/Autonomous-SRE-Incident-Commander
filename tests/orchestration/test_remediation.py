@@ -28,6 +28,7 @@ from asic.remediation import approval_service
 from asic.simulators.provider import SimulatorProvider
 from asic.simulators.scenarios import (
     k8s_deployment_rollback_success,
+    metrics_latency_regression,
     metrics_recovered,
     scenario,
 )
@@ -48,7 +49,7 @@ def _remediation_scenario(**overrides: Any) -> Any:
     base = scenario("SC-0001-checkout-latency-after-deploy")
     responses = dict(base.responses)
     responses["mutate.k8s_deployment|checkout-api"] = _sim_response(k8s_deployment_rollback_success)
-    responses["read.metrics|checkout-api"] = _sim_response(metrics_recovered)
+    responses["read.metrics|checkout-api"] = _sim_response(metrics_latency_regression)
     plan = _remediation_plan(
         tool_name="k8s.deployment.rollback",
         arguments={"deployment": "checkout-api", "to_revision": 846},
@@ -65,6 +66,19 @@ def _sim_response(builder: Any) -> Any:
     from asic.simulators.scenarios import SimulatedResponse
 
     return SimulatedResponse(builder=builder)
+
+
+def _post_remediation_scenario() -> Any:
+    from dataclasses import replace
+
+    selected = _remediation_scenario()
+    return replace(
+        selected,
+        responses={
+            **selected.responses,
+            "read.metrics|checkout-api": _sim_response(metrics_recovered),
+        },
+    )
 
 
 def _r2_remediation_scenario(**overrides: Any) -> Any:
@@ -103,7 +117,7 @@ def _run_remediation(
         incident_id=fixture.incident.id,
         hypothesis_id=hypothesis_id,
         behaviour_version_id=fixture.behaviour_version.id,
-        service_ids=fixture.service_ids,
+        selected_service_id=fixture.service_ids[0],
     )
 
 
@@ -117,8 +131,8 @@ def _resume_remediation(
     kernel = RemediationKernel(
         session_factory=session_factory,
         resolver=remediation_resolver,
-        providers=[SimulatorProvider(_remediation_scenario(), clock=clock)],
-        model=DeterministicModelProvider(_remediation_scenario()),
+        providers=[SimulatorProvider(_post_remediation_scenario(), clock=clock)],
+        model=DeterministicModelProvider(_post_remediation_scenario()),
         clock=clock,
     )
     return kernel.resume(tenant_id=fixture.tenant_id, workflow_run_id=outcome.workflow_run_id)
@@ -185,6 +199,9 @@ class TestAutonomousAllow:
             sa.select(Verification).where(Verification.tenant_id == fixture.tenant_id)
         ).scalar_one()
         assert verification.verdict is VerificationVerdict.VERIFIED
+        assert verification.baseline["observed_value"] > verification.observed["observed_value"]
+        assert verification.baseline["remediation_action_id"] == str(action.id)
+        assert verification.observed["tool_execution_id"]
 
         # No approval row at all: this path never asked a human.
         approvals = list(

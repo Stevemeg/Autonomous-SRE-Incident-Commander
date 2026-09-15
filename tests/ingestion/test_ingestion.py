@@ -79,6 +79,9 @@ class CapturingModel:
         self.requests.append(request)
         return self.delegate.complete(request)
 
+    def estimate(self, request: ModelRequest):
+        return self.delegate.estimate(request)
+
 
 def seed_correlation_candidates(setup: Setup, *, count: int, service_id: UUID) -> list[UUID]:
     anchor = datetime(2026, 9, 11, 8, tzinfo=UTC)

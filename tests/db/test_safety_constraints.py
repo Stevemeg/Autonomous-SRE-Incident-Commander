@@ -87,6 +87,41 @@ def _action(
     tool: ToolDefinition,
     **overrides,
 ) -> RemediationAction:
+    from asic.db.models import Hypothesis, RemediationTarget, Service
+
+    target = session.scalar(
+        sa.select(RemediationTarget).where(RemediationTarget.workflow_run_id == run.id)
+    )
+    if target is None:
+        hypothesis = session.get(Hypothesis, hypothesis_id)
+        service = session.scalar(sa.select(Service).where(Service.tenant_id == tenant.id).limit(1))
+        assert hypothesis is not None
+        if service is None:
+            service = Service(
+                id=uuid.uuid4(),
+                tenant_id=tenant.id,
+                name="checkout-api",
+                display_name="Checkout API",
+                owner_team="checkout",
+                namespaces=["checkout"],
+            )
+            session.add(service)
+            session.flush()
+        target = RemediationTarget(
+            id=uuid.uuid4(),
+            tenant_id=tenant.id,
+            workflow_run_id=run.id,
+            incident_id=incident.id,
+            investigation_run_id=hypothesis.workflow_run_id,
+            hypothesis_id=hypothesis_id,
+            service_id=service.id,
+            environment_id=incident.environment_id,
+            resolved_permission_scope=dict(
+                overrides.get("permission_scope", {"namespaces": ["checkout"]})
+            ),
+        )
+        session.add(target)
+        session.flush()
     defaults = {
         "id": uuid.uuid4(),
         "tenant_id": tenant.id,
@@ -94,6 +129,7 @@ def _action(
         "workflow_run_id": run.id,
         "hypothesis_id": hypothesis_id,
         "tool_definition_id": tool.id,
+        "remediation_target_id": target.id,
         "reason": "Roll back the implicated deployment.",
         "expected_effect": {"http_5xx_rate": "< 0.005"},
         "risk_tier": tool.risk_tier,

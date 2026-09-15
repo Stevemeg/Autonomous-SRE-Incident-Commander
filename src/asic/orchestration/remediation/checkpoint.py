@@ -220,6 +220,7 @@ def rehydrate(
         "policy_decision": policy_decision_ref,
         "approval": approval_ref,
         "verification": verification_ref,
+        "baseline_captured": bool(action and action.baseline_snapshot),
         "failures": [],
         "terminated": bool(stored.get("terminated", False)),
         "termination_reason": stored.get("termination_reason"),

@@ -58,7 +58,7 @@ this count previously drifted apart), not production benchmarks.
 
 | Requirement | Implemented evidence and limits |
 |---|---|
-| FR-KNW-01 | `KnowledgeIngestionService`: canonicalize → structure-aware chunk → deterministic embed → transactional commit; idempotent re-ingestion (identical content re-import writes nothing); typed rejection for oversized/invalid/empty documents. One source type (imported document text) is exercised; connector-specific fetch is out of scope for Phase 6 |
+| FR-KNW-01 | `KnowledgeIngestionService`: canonicalize → structure-aware chunk → deterministic embed → transactional commit; idempotent re-ingestion (identical content re-import writes nothing); typed rejection for oversized/invalid/empty documents. Lifecycle attribution is separate from current `knowledge.source.lifecycle.manage` authority and denial/success are audited. One source type (imported document text) is exercised; connector-specific fetch is out of scope for Phase 6 |
 | FR-KNW-02 | `KnowledgeRetriever`'s single disposition CTE filters by service/environment/document-type *before* ranking; `tests/knowledge/test_retrieval_db.py::TestScopeAndAuthorization` proves wrong-service and wrong-environment scope yield zero results, not a wrong one |
 | FR-KNW-03 | ACL evaluated in the same pre-ranking CTE; `test_acl_label_hides_the_document_without_the_clearance` and the golden-corpus unauthorized-rate test (`TestUnauthorizedAndStaleRatesAreZero`, measured 0 unauthorized hits across the probe set) confirm zero out-of-scope exposure; mutation-tested (see completion report) — forcing the ACL predicate to `TRUE` makes both tests fail |
 | FR-KNW-04 | [ADR-0008](../adr/0008-rag-retrieval-strategy.md) status raised to Accepted on this evidence: hybrid (lexical + vector, versioned RRF fusion) is the only mode shipped; no reranker exists in the codebase — there is nothing to have "enabled only on a measured improvement" because no measurement has shown a need |
@@ -105,13 +105,13 @@ production adapter, remediation-quality score or automated compensation is claim
 
 | Requirement | Implemented evidence and limits |
 |---|---|
-| FR-REM-01..07 | Separate G6/G7/G8/G9/G10 contracts and graph; the proposal has no capability; policy and broker independently refuse unauthorized writes |
+| FR-REM-01..07 | Separate G6/G7/G8/G9/G10 contracts and graph; append-only target binds incident/investigation/hypothesis/service/environment/scope before G6; the proposal has no capability; policy and broker independently refuse unauthorized writes |
 | FR-REM-08..09 | Effect-key claim precedes dispatch; duplicate and crash-window tests; every declared precondition is checked against fresh explicit state |
 | FR-APR-01..05 | Autonomy matrix, durable wait, expiry, tenant/environment/risk-scoped role authority, immutable decision evidence and action-version binding |
-| FR-VRF-01..03 | Settling wait, fresh broker read and frozen criteria hash; empty evidence is inconclusive and executor output is absent from the verdict input |
+| FR-VRF-01..03 | Tool-specific deterministic profile, independent baseline before execution, settling wait and fresh broker read; empty/unrelated/stale evidence is inconclusive and executor output is absent from the verdict input |
 | FR-VRF-04 | Partially implemented: failure returns to investigation or escalates; automated compensation remains deferred |
-| NFR-SEC-01..02 | Tool Broker remains the sole provider boundary; write authorization is recomputed immediately before dispatch |
-| NFR-REL-06 | Checkpoints retain the original run identity, wall clock and consumed budget; durable remediation rows are re-read on resume |
+| NFR-SEC-01..02 | Tool Broker remains the sole provider boundary; write grant/tool enablement and target/action/policy/approval authority are recomputed immediately before dispatch |
+| NFR-REL-06 | Checkpoints retain the original run identity, wall clock and consumed budget; the immutable target and durable remediation rows are re-read on resume. Every current synchronous model adapter must publish a conservative token/cost bound and calls that cannot fit are refused before invocation; live/asynchronous providers remain deferred |
 
 - **Status:** Authored — Architecture Package. **Most requirements below are not implemented**; the note beneath says exactly which are, and on what evidence.
 - **Requirement definitions:** [`../prd/SRS.md`](../prd/SRS.md)

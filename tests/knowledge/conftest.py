@@ -38,6 +38,7 @@ from asic.knowledge.contracts import (
     ImportActor,
     ImportContext,
     IngestionResult,
+    LifecyclePrincipal,
     RetrievalPrincipal,
     RetrievalQuery,
     RetrievalResultSet,
@@ -50,7 +51,11 @@ from asic.knowledge.embedding import (
     EmbeddingModel,
     EmbeddingService,
 )
-from asic.knowledge.ingestion import ACCESS_MANAGE_PERMISSION, KnowledgeIngestionService
+from asic.knowledge.ingestion import (
+    ACCESS_MANAGE_PERMISSION,
+    LIFECYCLE_MANAGE_PERMISSION,
+    KnowledgeIngestionService,
+)
 from asic.knowledge.retrieval import KnowledgeRetriever, RetrievalPolicy
 from tests.kernel_fixtures import build_fixture
 
@@ -89,6 +94,7 @@ class KnowledgeWorld:
     embeddings: EmbeddingService
     ingestion: KnowledgeIngestionService
     retriever: KnowledgeRetriever
+    lifecycle_authority: tuple[ImportActor, LifecyclePrincipal] | None = None
 
     def context(
         self,
@@ -255,6 +261,71 @@ class KnowledgeWorld:
             session.add(user)
             session.flush()
             return ImportActor(actor_type=ActorType.HUMAN, actor_id=subject, user_id=user.id)
+
+    def authorized_lifecycle_manager(
+        self, subject: str = "lifecycle-admin"
+    ) -> tuple[ImportActor, LifecyclePrincipal]:
+        if self.lifecycle_authority is not None:
+            return self.lifecycle_authority
+        with self.factory() as session, session.begin():
+            bind_tenant(session, self.tenant_id)
+            permission_id = session.scalar(
+                sa.select(Permission.id).where(Permission.key == LIFECYCLE_MANAGE_PERMISSION)
+            )
+            assert permission_id is not None, "migration 0013 must seed lifecycle authority"
+            user = User(
+                id=uuid.uuid4(),
+                tenant_id=self.tenant_id,
+                external_idp_subject=subject,
+                email=f"{subject}@example.invalid",
+                display_name=subject,
+            )
+            session.add(user)
+            session.flush()
+            role = Role(
+                id=uuid.uuid4(),
+                key=f"knowledge-lifecycle-{uuid.uuid4().hex[:8]}",
+                display_name="Knowledge Lifecycle Admin",
+                description="Grants explicit lifecycle authority in this test world.",
+                is_system=False,
+            )
+            session.add(role)
+            session.flush()
+            session.add(RolePermission(role_id=role.id, permission_id=permission_id))
+            session.add(
+                UserRoleAssignment(
+                    id=uuid.uuid4(),
+                    tenant_id=self.tenant_id,
+                    user_id=user.id,
+                    role_id=role.id,
+                    environment_id=None,
+                )
+            )
+            session.flush()
+            authority = (
+                ImportActor(actor_type=ActorType.HUMAN, actor_id=subject, user_id=user.id),
+                LifecyclePrincipal(user_id=user.id),
+            )
+            self.lifecycle_authority = authority
+            return authority
+
+    def revoke_version(self, version_id: uuid.UUID, *, reason: str) -> None:
+        actor, principal = self.authorized_lifecycle_manager()
+        self.ingestion.revoke_version(
+            self.tenant_id, version_id, reason=reason, actor=actor, principal=principal
+        )
+
+    def revoke_source(self, source_id: uuid.UUID, *, reason: str) -> None:
+        actor, principal = self.authorized_lifecycle_manager()
+        self.ingestion.revoke_source(
+            self.tenant_id, source_id, reason=reason, actor=actor, principal=principal
+        )
+
+    def delete_source(self, source_id: uuid.UUID, *, reason: str) -> None:
+        actor, principal = self.authorized_lifecycle_manager()
+        self.ingestion.delete_source(
+            self.tenant_id, source_id, reason=reason, actor=actor, principal=principal
+        )
 
     def count(self, model: object, *where: object) -> int:
         with self.factory() as session:

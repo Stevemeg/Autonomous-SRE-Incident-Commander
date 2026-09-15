@@ -244,7 +244,14 @@ class BudgetState:
         """
         return replace(self, ledger=self.ledger.with_elapsed(seconds))
 
-    def require_headroom(self, *, iterations: int = 0, tool_calls: int = 0) -> None:
+    def require_headroom(
+        self,
+        *,
+        iterations: int = 0,
+        tool_calls: int = 0,
+        tokens: int = 0,
+        cost_usd: float = 0.0,
+    ) -> None:
         """Fail before a step that would exceed a limit.
 
         Raises:
@@ -258,9 +265,14 @@ class BudgetState:
                 f"({self.ledger.consumed_for(already):g}/{self.policy.limit_for(already):g})",
                 kind=already,
             )
-        if not (iterations or tool_calls):
+        if not (iterations or tool_calls or tokens or cost_usd):
             return
-        projected = self.charge(iterations=iterations, tool_calls=tool_calls)
+        projected = self.charge(
+            iterations=iterations,
+            tool_calls=tool_calls,
+            tokens=tokens,
+            cost_usd=cost_usd,
+        )
         would_exceed = projected.exhausted_kind()
         if would_exceed is not None:
             raise BudgetExhausted(

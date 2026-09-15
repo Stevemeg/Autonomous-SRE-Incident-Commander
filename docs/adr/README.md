@@ -1,12 +1,12 @@
 # Architecture Decision Records
 
-> **Twenty-two records. Seventeen are Accepted.**
+> **Twenty-three records. Eighteen are Accepted.**
 >
 > ADRs 0001-0011 were written during the Architecture Package. Later implementation phases
 > accepted the decisions whose evidence now exists; the table below is authoritative for
 > current status. ADRs 0012-0014 were raised during Phase 3, 0015-0018 during Phase 4 and
 > its migration-history correction, 0019 during Phase 5, 0022 during Phase 7, and 0023
-> during Phase 8, and 0024 during Phase 9. ADR numbers 0020 and 0021 are reserved by forward references left in the
+> during Phase 8, 0024 during Phase 9, and 0025 during the Phase 6–9 audit correction. ADR numbers 0020 and 0021 are reserved by forward references left in the
 > Phase 6 correction (the `provider_kind` label defect and a retrieval-quality bound) and are
 > not yet written; Phase 7 and Phase 8 number their own records 0022 and 0023 rather than
 > collide with them.
@@ -90,6 +90,7 @@ not replace an accepted ADR.
 | [0022](./0022-bounded-reflection-without-a-new-node.md) | Bounded reflection extends the hypothesis engine's output, not a new graph node | **`Accepted`** | 3, 4, 15 | 2026-09-13 |
 | [0023](./0023-bounded-remediation-as-a-separate-graph.md) | Bounded remediation runs as a separate graph/kernel, entered only from a human-reopened investigation | **`Accepted`** | 3, 6, 17 | 2026-09-14 |
 | [0024](./0024-phase9-api-and-dashboard.md) | Authenticated API edge and server-rendered incident-command dashboard | **`Accepted`** | 15, 16 | 2026-09-14 |
+| [0025](./0025-freeze-remediation-authority-before-effects.md) | Freeze remediation authority before operational effects | **`Accepted`** | 5, 6, 12, 15 | 2026-09-15 |
 
 ## Priority order for acceptance
 
@@ -147,6 +148,12 @@ during implementation become ADRs rather than being made silently:
 | ADR | Discovered because | Evidence |
 |---|---|---|
 | [0024](./0024-phase9-api-and-dashboard.md) | The first HTTP/dashboard surface required an explicit decision to keep tenant authority in verified identity and current database grants, and to make mutation replay durable | `tests/api/test_auth.py`, `tests/api/test_rate_limit.py`, migration `0012_phase9_api_rbac` |
+
+## Decisions raised by the Phase 6–9 audit correction
+
+| ADR | Discovered because | Evidence |
+|---|---|---|
+| [0025](./0025-freeze-remediation-authority-before-effects.md) | Target reconstruction, cached write grants, model-selected thresholds and replay-before-authorization each allowed stale or untrusted data to cross an authority boundary | migration `0013_audit_corrections`; remediation, API, budget and lifecycle mutation tests |
 
 ## Candidate decisions still to be written
 

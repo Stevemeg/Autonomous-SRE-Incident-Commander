@@ -26,10 +26,11 @@ from asic.contracts.remediation_state import (
     remediation_state_summary,
 )
 from asic.contracts.state import BudgetSnapshot, RunIdentity, TraceContext
-from asic.db.models.catalog import Environment
+from asic.db.models.catalog import Environment, Service
 from asic.db.models.evaluation import BehaviourVersion, ExecutionTrace, TraceSpan
-from asic.db.models.incident import Incident, WorkflowRun
+from asic.db.models.incident import Alert, Incident, WorkflowRun
 from asic.db.models.investigation import Hypothesis
+from asic.db.models.remediation import RemediationTarget
 from asic.domain.budget import BudgetPolicy, BudgetState
 from asic.domain.clock import Clock, SystemClock
 from asic.domain.enums import HypothesisStatus, IncidentStatus, WorkflowRunStatus
@@ -114,7 +115,7 @@ class RemediationKernel:
         incident_id: uuid.UUID,
         hypothesis_id: uuid.UUID,
         behaviour_version_id: uuid.UUID,
-        service_ids: list[uuid.UUID],
+        selected_service_id: uuid.UUID,
     ) -> RemediationOutcome:
         """Open a remediation run against an incident that is currently investigating.
 
@@ -151,12 +152,25 @@ class RemediationKernel:
                 )
             _assert_behaviour_version(session, behaviour_version_id)
 
+            associated = session.execute(
+                sa.select(Alert.id)
+                .where(
+                    Alert.tenant_id == tenant_id,
+                    Alert.incident_id == incident_id,
+                    Alert.service_id == selected_service_id,
+                )
+                .limit(1)
+            ).scalar_one_or_none()
+            if associated is None:
+                raise DomainError(
+                    f"service {selected_service_id} is not associated with incident {incident_id}"
+                )
             scope = load_incident_scope(
                 session,
                 tenant_id=tenant_id,
                 incident_id=incident_id,
                 environment_id=incident.environment_id,
-                service_ids=service_ids,
+                service_ids=[selected_service_id],
             )
             environment = session.execute(
                 sa.select(Environment).where(
@@ -180,6 +194,32 @@ class RemediationKernel:
             session.add(run)
             session.flush()
 
+            service = session.execute(
+                sa.select(Service).where(
+                    Service.tenant_id == tenant_id, Service.id == selected_service_id
+                )
+            ).scalar_one()
+            frozen_scope: dict[str, object] = {
+                "tenant_id": str(tenant_id),
+                "environment": environment.name,
+                "service": service.name,
+            }
+            if service.namespaces:
+                frozen_scope["namespace"] = service.namespaces[0]
+            target = RemediationTarget(
+                id=uuid.uuid4(),
+                tenant_id=tenant_id,
+                workflow_run_id=run.id,
+                incident_id=incident_id,
+                investigation_run_id=hypothesis.workflow_run_id,
+                hypothesis_id=hypothesis.id,
+                service_id=service.id,
+                environment_id=incident.environment_id,
+                resolved_permission_scope=frozen_scope,
+            )
+            session.add(target)
+            session.flush()
+
             trace_id = derive_trace_id(correlation_id)
             trace_row = ExecutionTrace(
                 id=uuid.uuid4(),
@@ -201,7 +241,7 @@ class RemediationKernel:
                 incident_id=str(incident_id),
                 workflow_run_id=str(run.id),
                 behaviour_version_id=str(behaviour_version_id),
-                environment_id=str(incident.environment_id),
+                environment_id=str(target.environment_id),
                 execution_trace_id=str(trace_row.id),
             )
             trace = TraceContext(
@@ -210,12 +250,19 @@ class RemediationKernel:
                 correlation_id=str(correlation_id),
             )
             objective = RemediationObjective(
+                tenant_id=str(tenant_id),
+                incident_id=str(incident_id),
+                workflow_run_id=str(run.id),
                 incident_reference=incident.reference,
+                investigation_run_id=str(hypothesis.workflow_run_id),
                 hypothesis_id=str(hypothesis.id),
                 hypothesis_statement=hypothesis.statement,
                 root_cause_class=hypothesis.root_cause_class,
-                service_names=scope.service_names,
+                service_id=str(service.id),
+                service_name=service.name,
+                environment_id=str(environment.id),
                 environment_name=environment.name,
+                permission_scope=frozen_scope,
                 is_production=environment.is_production,
             )
             state: RemediationGraphState = {
@@ -227,6 +274,7 @@ class RemediationKernel:
                 "policy_decision": None,
                 "approval": None,
                 "verification": None,
+                "baseline_captured": False,
                 "failures": [],
                 "terminated": False,
                 "termination_reason": None,
@@ -277,17 +325,25 @@ class RemediationKernel:
                     f"workflow run {workflow_run_id} has no checkpoint; not resumable"
                 )
 
-            service_ids = [s.id for s in scope_services(session, incident)]
+            target = session.execute(
+                sa.select(RemediationTarget).where(
+                    RemediationTarget.tenant_id == tenant_id,
+                    RemediationTarget.workflow_run_id == run.id,
+                    RemediationTarget.incident_id == incident.id,
+                )
+            ).scalar_one_or_none()
+            if target is None:
+                raise DomainError("remediation run has no immutable target; refusing resume")
             scope = load_incident_scope(
                 session,
                 tenant_id=tenant_id,
                 incident_id=incident.id,
-                environment_id=incident.environment_id,
-                service_ids=service_ids,
+                environment_id=target.environment_id,
+                service_ids=[target.service_id],
             )
             environment = session.execute(
                 sa.select(Environment).where(
-                    Environment.tenant_id == tenant_id, Environment.id == incident.environment_id
+                    Environment.tenant_id == tenant_id, Environment.id == target.environment_id
                 )
             ).scalar_one()
 
@@ -296,7 +352,7 @@ class RemediationKernel:
                 incident_id=str(incident.id),
                 workflow_run_id=str(run.id),
                 behaviour_version_id=str(run.behaviour_version_id),
-                environment_id=str(incident.environment_id),
+                environment_id=str(target.environment_id),
                 execution_trace_id=str(trace_row.id),
             )
             trace = TraceContext(
@@ -305,27 +361,39 @@ class RemediationKernel:
                 correlation_id=str(trace_row.correlation_id),
             )
             hypothesis = session.execute(
-                sa.select(Hypothesis)
-                .where(
+                sa.select(Hypothesis).where(
                     Hypothesis.tenant_id == tenant_id,
-                    Hypothesis.incident_id == incident.id,
-                    Hypothesis.workflow_run_id.in_(
-                        sa.select(WorkflowRun.id).where(
-                            WorkflowRun.tenant_id == tenant_id,
-                            WorkflowRun.incident_id == incident.id,
-                        )
-                    ),
+                    Hypothesis.id == target.hypothesis_id,
+                    Hypothesis.incident_id == target.incident_id,
+                    Hypothesis.workflow_run_id == target.investigation_run_id,
                 )
-                .order_by(Hypothesis.rank)
-                .limit(1)
-            ).scalar_one()
+            ).scalar_one_or_none()
+            if hypothesis is None:
+                raise DomainError("frozen remediation hypothesis binding is invalid")
+            service = scope.services[0]
+            frozen_scope: dict[str, object] = {
+                "tenant_id": str(tenant_id),
+                "environment": environment.name,
+                "service": service.name,
+            }
+            if service.namespaces:
+                frozen_scope["namespace"] = service.namespaces[0]
+            if frozen_scope != dict(target.resolved_permission_scope):
+                raise DomainError("frozen remediation permission scope no longer matches catalogue")
             objective = RemediationObjective(
+                tenant_id=str(tenant_id),
+                incident_id=str(incident.id),
+                workflow_run_id=str(run.id),
                 incident_reference=incident.reference,
+                investigation_run_id=str(target.investigation_run_id),
                 hypothesis_id=str(hypothesis.id),
                 hypothesis_statement=hypothesis.statement,
                 root_cause_class=hypothesis.root_cause_class,
-                service_names=scope.service_names,
+                service_id=str(target.service_id),
+                service_name=service.name,
+                environment_id=str(target.environment_id),
                 environment_name=environment.name,
+                permission_scope=frozen_scope,
                 is_production=environment.is_production,
             )
             run_started_at = trace_row.started_at
@@ -563,32 +631,6 @@ def _assert_behaviour_version(session: Session, behaviour_version_id: uuid.UUID)
     ).scalar_one_or_none()
     if exists is None:
         raise DomainError(f"behaviour version {behaviour_version_id} does not exist")
-
-
-def scope_services(session: Session, incident: Incident) -> list[Any]:
-    from asic.db.models.catalog import Service
-    from asic.db.models.incident import Alert
-
-    service_ids = list(
-        session.execute(
-            sa.select(Alert.service_id)
-            .where(
-                Alert.tenant_id == incident.tenant_id,
-                Alert.incident_id == incident.id,
-                Alert.service_id.is_not(None),
-            )
-            .distinct()
-        ).scalars()
-    )
-    if not service_ids:
-        return []
-    return list(
-        session.execute(
-            sa.select(Service).where(
-                Service.tenant_id == incident.tenant_id, Service.id.in_(service_ids)
-            )
-        ).scalars()
-    )
 
 
 __all__ = ["LEASE_DURATION", "RemediationKernel", "RemediationOutcome"]

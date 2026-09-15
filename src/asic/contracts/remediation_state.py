@@ -43,12 +43,19 @@ class RemediationObjective(_Frozen):
     against.
     """
 
+    tenant_id: str
+    incident_id: str
+    workflow_run_id: str
     incident_reference: str
+    investigation_run_id: str
     hypothesis_id: str
     hypothesis_statement: str
     root_cause_class: str
-    service_names: tuple[str, ...]
+    service_id: str
+    service_name: str
+    environment_id: str
     environment_name: str
+    permission_scope: dict[str, object]
     is_production: bool
 
 
@@ -107,6 +114,7 @@ class RemediationGraphState(TypedDict, total=False):
     policy_decision: PolicyDecisionRef | None
     approval: ApprovalRef | None
     verification: VerificationRef | None
+    baseline_captured: bool
 
     budget: BudgetSnapshot
     failures: list[NodeFailureRef]

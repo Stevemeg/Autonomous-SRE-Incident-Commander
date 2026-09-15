@@ -29,6 +29,9 @@ deterministic code path — never by an instruction in a prompt. Each has an adv
 | **SI-7** | Preconditions are re-validated immediately before execution | Broker re-checks after approval, fails closed | An action executes against drifted state |
 | **SI-8** | Every effect is idempotent under retry | Business-identifier idempotency keys; unknown outcomes reconcile by query | A retry double-applies an effect |
 | **SI-9** | Verification is independent of execution | G10 never receives the executor's success claim | The verifier's verdict can be influenced by the executor |
+| **SI-10** | The approved target is immutable | Append-only target binds incident, investigation, hypothesis, service, environment and resolved scope before G6 | Resume reconstructs a target from mutable alerts |
+| **SI-11** | Planning authority expires at dispatch | Every write re-resolves current grant and tool enablement | A cached menu authorizes a revoked write |
+| **SI-12** | Verification policy is deterministic | Tool-specific server profile plus independent baseline and fresh observation | Model-authored operator/threshold decides success |
 | **SI-10** | Every authorization decision and execution is audited | Broker is sole egress and emits audit unconditionally | An action occurs with no audit record |
 | **SI-11** | The system fails closed | Policy store, registry or identity unavailable ⇒ deny | Any failure path defaults to allow |
 | **SI-12** | Durable memory is never written from a single incident automatically | G12 proposals require human approval | Knowledge changes without an approval record |
@@ -52,13 +55,14 @@ any is rejected by schema validation before it reaches the gate.
 | 8 | Rollback / compensation | Registry descriptor | No rollback ⇒ cannot be R1 |
 | 9 | Approval requirement | Gate, from tier + environment + tenant policy | Not a model judgement |
 | 10 | Timeout | Registry descriptor | Bounds unknown-outcome windows |
-| 11 | Verification criteria | Planner proposes, schema-constrained; **frozen at proposal time** | Prevents post-hoc redefinition of success (FR-VRF-03) |
+| 11 | Verification profile | Planner selects an exact server-defined tool profile; **frozen at proposal time** | Prevents model-authored or post-hoc redefinition of success (FR-VRF-03) |
 | 12 | Audit record | Emitted by broker automatically | Not optional, not the model's responsibility |
 
-**Fields 5, 6, 7, 8, 9 and 10 are not authored by the model.** They are resolved from the
-registry and the incident context. The model authors only fields 2, 3, 4 and 11 — reason,
-evidence, expected effect and verification criteria — plus the choice of which registered
-action to propose and its typed parameters. This split is what makes "the model cannot
+**Fields 5, 6, 7, 8, 9, 10 and the authoritative semantics of 11 are not authored by the
+model.** They are resolved from the registry, deterministic verification catalogue and
+incident context. The model authors only fields 2, 3 and 4 — reason, evidence and expected
+effect — plus the choice of which registered action and verification-profile identifier to
+propose with typed parameters. This split is what makes "the model cannot
 escalate its own privileges" a structural property.
 
 ### 2.1 Action version hash
@@ -261,7 +265,9 @@ any agent path**.
 | **Outcomes** | `verified` · `not_verified` · `inconclusive` — all three are legitimate |
 | **Headline metric** | **False-success rate.** Declaring success while symptoms persist is the most damaging error the system can make |
 
-In Phase 8, `not_verified` returns the incident to investigation and `inconclusive`
+G10 first persists an independent baseline before G7 may authorize execution. The model can
+select only an exact registered profile; operator, metric, direction, threshold, freshness
+window and minimum evidence are server policy. In Phase 8, `not_verified` returns the incident to investigation and `inconclusive`
 escalates. Automated compensation is deferred because compensating on an unknown state can
 itself cause harm; partial effects emit an audit/timeline signal for human handling.
 

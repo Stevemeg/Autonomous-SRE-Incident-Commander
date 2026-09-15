@@ -77,6 +77,12 @@ class ImportActor(_Frozen):
     user_id: uuid.UUID | None = None
 
 
+class LifecyclePrincipal(_Frozen):
+    """Trusted authorization identity, deliberately separate from audit attribution."""
+
+    user_id: uuid.UUID
+
+
 class SourceAccessPolicy(_Frozen):
     """Scope and access for a source. Set by the importer; never read from the document."""
 
@@ -366,6 +372,7 @@ __all__ = [
     "ImportContext",
     "IngestionResult",
     "KnowledgeCitation",
+    "LifecyclePrincipal",
     "ManifestResult",
     "RetrievalManifest",
     "RetrievalPrincipal",

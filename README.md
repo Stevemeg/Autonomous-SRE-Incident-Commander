@@ -18,13 +18,14 @@ approval, verifies outcomes, and preserves operational memory.
 > terminal outcome — every proposal validated by a deterministic guard, never trusted as
 > stated)**, deterministic termination, durable checkpointing and a full execution trace.
 > Phase 8 adds a separate remediation graph with typed simulator-backed R1/R2 actions,
-> deterministic policy, exact-effect human approval, broker-only execution, durable effect
-> claims and independent verification. Investigation remains restricted to its read-only
+> deterministic policy, an immutable incident/hypothesis/service target, exact-effect human
+> approval, current-grant broker-only execution, durable effect claims and independent
+> baseline/post-action verification. Investigation remains restricted to its read-only
 > registry. R3 actions remain structurally unavailable.
 >
 > | | |
 > |---|---|
-> | **Completed** | Phase 0 bootstrap · Phase 1 requirements · Phase 2 architecture · Phase 3 persistence · Phase 4 orchestration · Phase 5 telemetry ingestion and correlation · Phase 6 operational knowledge, RAG and governed memory · Phase 7 bounded investigation · **Phase 8 remediation planning, policy, approval, execution and verification** |
+> | **Completed** | Phase 0 bootstrap · Phase 1 requirements · Phase 2 architecture · Phase 3 persistence · Phase 4 orchestration · Phase 5 telemetry ingestion and correlation · Phase 6 operational knowledge, RAG and governed memory · Phase 7 bounded investigation · Phase 8 bounded remediation · **Phase 9 authenticated API, RBAC and dashboard** |
 > | **In progress** | Nothing — Phase 9 is complete |
 > | **Next** | Phase 10 external integrations (not started) |
 > | **External integrations** | Deferred to Phase 10; Phase 8 execution uses deterministic simulators |

@@ -218,6 +218,27 @@ def make_world(engine: sa.Engine, *, slug: str | None = None) -> MemoryWorld:
         session.add(tool)
         session.flush()
 
+        from asic.db.models import RemediationTarget
+
+        target = RemediationTarget(
+            id=uuid.uuid4(),
+            tenant_id=tenant_id,
+            workflow_run_id=run.id,
+            incident_id=incident.id,
+            investigation_run_id=run.id,
+            hypothesis_id=hypothesis.id,
+            service_id=fixture.service.id,
+            environment_id=fixture.environment.id,
+            resolved_permission_scope={
+                "tenant_id": str(tenant_id),
+                "environment": fixture.environment.name,
+                "service": fixture.service.name,
+                "namespace": "checkout",
+            },
+        )
+        session.add(target)
+        session.flush()
+
         action = RemediationAction(
             id=uuid.uuid4(),
             tenant_id=tenant_id,
@@ -225,6 +246,7 @@ def make_world(engine: sa.Engine, *, slug: str | None = None) -> MemoryWorld:
             workflow_run_id=run.id,
             hypothesis_id=hypothesis.id,
             tool_definition_id=tool.id,
+            remediation_target_id=target.id,
             reason="Restart the checkout deployment to clear the exhausted pool.",
             expected_effect={"http_5xx_rate": "< 0.005"},
             risk_tier=tool.risk_tier,

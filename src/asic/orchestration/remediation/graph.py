@@ -4,7 +4,7 @@
 
     START -> G6 --nothing/rejected--> END
               |
-              +--proposed--> G7 --deny-------------> END
+              +--proposed--> G10 (baseline) --> G7 --deny-------------> END
                               |
                               +--allow-----> G9 --> G10 --> END
                               |
@@ -56,7 +56,9 @@ GRAPH_VERSION: Final[str] = "1.0.0"
 
 
 def _route_after_planner(state: RemediationGraphState) -> str:
-    return END if state.get("terminated") else POLICY_GATE
+    if state.get("terminated"):
+        return END
+    return POLICY_GATE if state.get("baseline_captured") else VERIFIER
 
 
 def _route_after_policy_gate(state: RemediationGraphState) -> str:
@@ -82,6 +84,10 @@ def _route_after_executor(state: RemediationGraphState) -> str:
     return END if state.get("terminated") else VERIFIER
 
 
+def _route_after_verifier(state: RemediationGraphState) -> str:
+    return POLICY_GATE if state.get("phase") == "baseline_captured" else END
+
+
 def build_graph(
     deps: RemediationDependencies,
 ) -> CompiledStateGraph[RemediationGraphState, None, RemediationGraphState, RemediationGraphState]:
@@ -101,7 +107,11 @@ def build_graph(
     graph.add_node(VERIFIER, verifier_node(deps))
 
     graph.add_edge(START, PLANNER)
-    graph.add_conditional_edges(PLANNER, _route_after_planner, {POLICY_GATE: POLICY_GATE, END: END})
+    graph.add_conditional_edges(
+        PLANNER,
+        _route_after_planner,
+        {VERIFIER: VERIFIER, POLICY_GATE: POLICY_GATE, END: END},
+    )
     graph.add_conditional_edges(
         POLICY_GATE,
         _route_after_policy_gate,
@@ -111,7 +121,9 @@ def build_graph(
         APPROVAL_SERVICE, _route_after_approval, {EXECUTOR: EXECUTOR, END: END}
     )
     graph.add_conditional_edges(EXECUTOR, _route_after_executor, {VERIFIER: VERIFIER, END: END})
-    graph.add_edge(VERIFIER, END)
+    graph.add_conditional_edges(
+        VERIFIER, _route_after_verifier, {POLICY_GATE: POLICY_GATE, END: END}
+    )
 
     return graph.compile(name=f"asic-remediation-{GRAPH_VERSION}")
 

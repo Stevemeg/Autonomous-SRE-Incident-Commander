@@ -177,11 +177,16 @@ means exhaustion produces a clean partial result with everything gathered so far
 | Planning iterations | 12 | Planner, before the model call |
 | Tool calls | 40 | Collector, before the broker call |
 | Wall clock | 6 h | Observed at every node boundary and at every node entry; refuses the next step |
-| Tokens | 200 000 | Charged after each model call, checked before the next |
-| Cost (USD) | 5.00 | As above |
+| Tokens | 200 000 | Provider supplies a conservative request bound; refused before invocation when the bound cannot fit; actual use reconciled after completion |
+| Cost (USD) | 5.00 | Same bounded pre-call reservation and post-call reconciliation |
 
 These are *configured* limits, not measured ones. No load test has been run and nothing
 claims they are right for production traffic.
+
+The deterministic provider is synchronous and supplies an exact scripted bound. Every
+planner, hypothesis and remediation model call uses the same enforcement helper. A future
+live, streaming or asynchronous provider must add durable cross-process reservation
+accounting before adoption; the current code does not claim that provider class exists.
 
 Wall clock is the one dimension that is **observed rather than accumulated**. Summing node
 durations would undercount: it would miss the gaps between nodes and the time a suspended

@@ -211,10 +211,9 @@ class ToolBroker:
     ) -> CapabilityMenu:
         """Resolve (and cache for this run) the menu offered to one node.
 
-        Cached per node because it is stable for the run: the grants and the catalogue do
-        not change mid-incident, and re-resolving on every call would make an already
-        chatty path chattier. ``refresh`` exists for the tests that revoke a grant and
-        assert the revocation takes effect.
+        Read menus may be cached for the run. Write selection menus are never execution
+        authority: :meth:`_authorize` forces a fresh database resolution immediately
+        before every write dispatch so revocation and tool disablement take effect.
         """
         if refresh or contract.node_id not in self._menus:
             self._menus[contract.node_id] = self._resolver.resolve(
@@ -407,10 +406,11 @@ class ToolBroker:
             )
 
         # 3. Capability resolution against tenant, environment and grant.
-        menu = self.menu_for(session, contract)
+        is_write = not request.capability.startswith("read.")
+        menu = self.menu_for(session, contract, refresh=is_write)
         granted = menu.get(request.capability)
         action = None
-        if not request.capability.startswith("read."):
+        if is_write:
             action = session.execute(
                 sa.select(RemediationAction).where(
                     RemediationAction.tenant_id == bound_tenant,
@@ -432,12 +432,17 @@ class ToolBroker:
         #    from menu-resolution time.
         self._resolver.assert_tier_permitted(descriptor)
         if action is not None:
+            resolved_scope = self._scope.resolve_arguments(
+                descriptor, service_name=request.service_name
+            )
             require_write_authority(
                 session,
                 action=action,
                 descriptor=descriptor,
                 arguments=request.arguments,
                 environment_id=self._scope.environment_id,
+                service_name=request.service_name,
+                resolved_scope=resolved_scope,
                 now=self._clock.now(),
             )
         return granted

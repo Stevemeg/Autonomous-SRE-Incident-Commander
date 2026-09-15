@@ -9,10 +9,20 @@ import pytest
 import sqlalchemy as sa
 from sqlalchemy.orm import Session, sessionmaker
 
-from asic.db.models import Approval, RemediationAction, UserRoleAssignment
+from asic.db.models import (
+    Alert,
+    Approval,
+    RemediationAction,
+    RemediationTarget,
+    Service,
+    UserRoleAssignment,
+)
 from asic.db.models.orchestration import WorkflowCheckpoint
-from asic.db.models.tools import ToolExecution
+from asic.db.models.tools import TenantToolGrant, ToolDefinition, ToolExecution
+from asic.db.session import bind_tenant
 from asic.domain.enums import ApprovalDecision, IncidentStatus, RiskTier
+from asic.domain.errors import DomainError
+from asic.domain.idempotency import action_version_hash
 from asic.llm.deterministic import DeterministicModelProvider
 from asic.orchestration.remediation.kernel import RemediationKernel
 from asic.remediation.approval_service import decide
@@ -22,6 +32,7 @@ from asic.tools.broker import ToolBroker
 from tests.conftest import requires_postgres
 from tests.kernel_fixtures import build_fixture
 from tests.orchestration.test_remediation import (
+    _post_remediation_scenario,
     _remediation_scenario,
     _run_remediation,
     _sim_response,
@@ -49,7 +60,7 @@ def _prepared(
 def _kernel(
     factory: Any, resolver: Any, clock: Any, model: Any = None, scenario_obj: Any = None
 ) -> RemediationKernel:
-    selected = scenario_obj or _remediation_scenario()
+    selected = scenario_obj or _post_remediation_scenario()
     return RemediationKernel(
         session_factory=factory,
         resolver=resolver,
@@ -204,6 +215,7 @@ def test_crash_after_effect_claim_prevents_repeat(
             _remediation_scenario(),
         )
     check = Session(owner_engine, expire_on_commit=False)
+    bind_tenant(check, tenant_id)
     action = check.execute(
         sa.select(RemediationAction).where(RemediationAction.tenant_id == tenant_id)
     ).scalar_one()
@@ -244,3 +256,434 @@ def test_successful_executor_does_not_verify_empty_evidence(
     )
     assert resumed.terminated
     assert resumed.incident_status is IncidentStatus.ESCALATED
+
+
+def test_missing_pre_action_baseline_prevents_dispatch(
+    kernel_session: Any,
+    session_factory: Any,
+    resolver: Any,
+    remediation_resolver: Any,
+    clock: Any,
+) -> None:
+    fixture, hypothesis_id = _prepared(
+        kernel_session, session_factory, resolver, clock, "missing-baseline"
+    )
+    selected = _remediation_scenario()
+
+    def empty(ctx: Any) -> Any:
+        return {"samples": [], "unit": "seconds", "source": "prometheus", "schema_version": 1}
+
+    selected = replace(
+        selected,
+        responses={**selected.responses, "read.metrics|checkout-api": _sim_response(empty)},
+    )
+    provider = SimulatorProvider(selected, clock=clock)
+    outcome = RemediationKernel(
+        session_factory=session_factory,
+        resolver=remediation_resolver,
+        providers=[provider],
+        model=DeterministicModelProvider(selected),
+        clock=clock,
+    ).start(
+        tenant_id=fixture.tenant_id,
+        incident_id=fixture.incident.id,
+        hypothesis_id=hypothesis_id,
+        behaviour_version_id=fixture.behaviour_version.id,
+        selected_service_id=fixture.service.id,
+    )
+    assert outcome.terminated
+    assert not [call for call in provider.calls if call[0] == "k8s.deployment.rollback"]
+
+
+def test_unrelated_same_tenant_service_is_not_a_remediation_target(
+    kernel_session: Any,
+    session_factory: Any,
+    resolver: Any,
+    remediation_resolver: Any,
+    clock: Any,
+) -> None:
+    fixture, hypothesis_id = _prepared(
+        kernel_session, session_factory, resolver, clock, "unrelated-target"
+    )
+    unrelated = Service(
+        id=__import__("uuid").uuid4(),
+        tenant_id=fixture.tenant_id,
+        name="unrelated-api",
+        display_name="Unrelated API",
+        owner_team="other",
+        namespaces=["unrelated"],
+    )
+    kernel_session.add(unrelated)
+    kernel_session.commit()
+    with pytest.raises(DomainError, match="not associated"):
+        _kernel(session_factory, remediation_resolver, clock).start(
+            tenant_id=fixture.tenant_id,
+            incident_id=fixture.incident.id,
+            hypothesis_id=hypothesis_id,
+            behaviour_version_id=fixture.behaviour_version.id,
+            selected_service_id=unrelated.id,
+        )
+
+
+def test_resume_dispatches_only_the_frozen_target_after_alert_scope_changes(
+    kernel_session: Any,
+    session_factory: Any,
+    resolver: Any,
+    remediation_resolver: Any,
+    clock: Any,
+) -> None:
+    fixture, hypothesis_id = _prepared(
+        kernel_session, session_factory, resolver, clock, "frozen-multiservice", True
+    )
+    approver = create_approver(kernel_session, fixture)
+    second = Service(
+        id=__import__("uuid").uuid4(),
+        tenant_id=fixture.tenant_id,
+        name="payments-api",
+        display_name="Payments API",
+        owner_team="payments",
+        namespaces=["payments"],
+    )
+    kernel_session.add(second)
+    kernel_session.commit()
+    outcome = _run_remediation(
+        session_factory,
+        remediation_resolver,
+        clock,
+        fixture,
+        hypothesis_id,
+        _remediation_scenario(),
+    )
+    action = kernel_session.scalar(
+        sa.select(RemediationAction).where(
+            RemediationAction.workflow_run_id == outcome.workflow_run_id
+        )
+    )
+    target = kernel_session.scalar(
+        sa.select(RemediationTarget).where(
+            RemediationTarget.workflow_run_id == outcome.workflow_run_id
+        )
+    )
+    assert action is not None and target is not None
+    assert target.service_id == fixture.service.id
+    decide(
+        kernel_session,
+        tenant_id=fixture.tenant_id,
+        action_id=action.id,
+        actor_user_id=approver.id,
+        decision=ApprovalDecision.APPROVED,
+        expected_action_version_hash=action.action_version_hash,
+        justification="approved for frozen checkout target",
+        clock=clock,
+    )
+    kernel_session.execute(
+        sa.update(Alert)
+        .where(Alert.incident_id == fixture.incident.id)
+        .values(service_id=second.id)
+    )
+    kernel_session.commit()
+
+    selected = _post_remediation_scenario()
+    provider = SimulatorProvider(selected, clock=clock)
+    resumed = RemediationKernel(
+        session_factory=session_factory,
+        resolver=remediation_resolver,
+        providers=[provider],
+        model=DeterministicModelProvider(selected),
+        clock=clock,
+    ).resume(tenant_id=fixture.tenant_id, workflow_run_id=outcome.workflow_run_id)
+    assert resumed.terminated is False
+    assert ("k8s.deployment.rollback", fixture.service.name) in provider.calls
+    assert all(service != second.name for _, service in provider.calls)
+
+
+@pytest.mark.parametrize("revocation", ["grant", "tool"])
+@pytest.mark.parametrize("disable_dispatch_refresh", [False, True])
+def test_write_grant_is_revalidated_at_dispatch(
+    revocation: str,
+    disable_dispatch_refresh: bool,
+    monkeypatch: Any,
+    kernel_session: Any,
+    owner_engine: Any,
+    session_factory: Any,
+    resolver: Any,
+    remediation_resolver: Any,
+    clock: Any,
+) -> None:
+    fixture, hypothesis_id = _prepared(
+        kernel_session,
+        session_factory,
+        resolver,
+        clock,
+        f"dispatch-{revocation}-{str(disable_dispatch_refresh).lower()}",
+    )
+    fixture.environment.is_production = False
+    kernel_session.commit()
+    selected = _remediation_scenario()
+    provider = SimulatorProvider(selected, clock=clock)
+    original_menu = ToolBroker.menu_for
+    revoked = False
+
+    def revoke_before_dispatch(
+        self: ToolBroker, session: Session, contract: Any, *, refresh: bool = False
+    ) -> Any:
+        nonlocal revoked
+        if refresh and contract.node_id.value == "g9_remediation_executor" and not revoked:
+            revoked = True
+            if revocation == "grant":
+                statement = (
+                    sa.update(TenantToolGrant)
+                    .where(
+                        TenantToolGrant.tool_definition_id.in_(
+                            sa.select(ToolDefinition.id).where(
+                                ToolDefinition.name == "k8s.deployment.rollback"
+                            )
+                        )
+                    )
+                    .values(is_enabled=False)
+                )
+            else:
+                with Session(owner_engine) as owner:
+                    owner.execute(
+                        sa.update(ToolDefinition)
+                        .where(ToolDefinition.name == "k8s.deployment.rollback")
+                        .values(is_enabled=False)
+                    )
+                    owner.commit()
+                statement = None
+            if statement is not None:
+                session.execute(statement)
+                session.flush()
+        return original_menu(
+            self,
+            session,
+            contract,
+            refresh=False if disable_dispatch_refresh and refresh else refresh,
+        )
+
+    monkeypatch.setattr(ToolBroker, "menu_for", revoke_before_dispatch)
+    RemediationKernel(
+        session_factory=session_factory,
+        resolver=remediation_resolver,
+        providers=[provider],
+        model=DeterministicModelProvider(selected),
+        clock=clock,
+    ).start(
+        tenant_id=fixture.tenant_id,
+        incident_id=fixture.incident.id,
+        hypothesis_id=hypothesis_id,
+        behaviour_version_id=fixture.behaviour_version.id,
+        selected_service_id=fixture.service.id,
+    )
+    if revocation == "tool":
+        with Session(owner_engine) as owner:
+            owner.execute(
+                sa.update(ToolDefinition)
+                .where(ToolDefinition.name == "k8s.deployment.rollback")
+                .values(is_enabled=True)
+            )
+            owner.commit()
+    writes = [call for call in provider.calls if call[0] == "k8s.deployment.rollback"]
+    assert len(writes) == (1 if disable_dispatch_refresh else 0)
+
+
+def test_permission_scope_mismatch_is_refused_before_dispatch(
+    kernel_session: Any,
+    session_factory: Any,
+    resolver: Any,
+    remediation_resolver: Any,
+    clock: Any,
+) -> None:
+    fixture, hypothesis_id = _prepared(
+        kernel_session, session_factory, resolver, clock, "scope-target-mismatch", True
+    )
+    approver = create_approver(kernel_session, fixture)
+    outcome = _run_remediation(
+        session_factory,
+        remediation_resolver,
+        clock,
+        fixture,
+        hypothesis_id,
+        _remediation_scenario(),
+    )
+    action = kernel_session.scalar(
+        sa.select(RemediationAction).where(
+            RemediationAction.workflow_run_id == outcome.workflow_run_id
+        )
+    )
+    assert action is not None
+    action.permission_scope = {**action.permission_scope, "service": "payments-api"}
+    action.action_version_hash = action_version_hash(
+        action_id=action.id,
+        tool_name=action.tool_name,
+        tool_version=action.tool_version,
+        arguments=action.arguments,
+        permission_scope=action.permission_scope,
+        preconditions=action.preconditions,
+        risk_tier=action.risk_tier.value,
+    )
+    kernel_session.commit()
+    decide(
+        kernel_session,
+        tenant_id=fixture.tenant_id,
+        action_id=action.id,
+        actor_user_id=approver.id,
+        decision=ApprovalDecision.APPROVED,
+        expected_action_version_hash=action.action_version_hash,
+        justification="approve the corrupted row to exercise the final target guard",
+        clock=clock,
+    )
+    provider = SimulatorProvider(_post_remediation_scenario(), clock=clock)
+    resumed = RemediationKernel(
+        session_factory=session_factory,
+        resolver=remediation_resolver,
+        providers=[provider],
+        model=DeterministicModelProvider(_post_remediation_scenario()),
+        clock=clock,
+    ).resume(tenant_id=fixture.tenant_id, workflow_run_id=outcome.workflow_run_id)
+    assert resumed.terminated
+    assert not [call for call in provider.calls if call[0] == "k8s.deployment.rollback"]
+
+
+def test_target_and_hypothesis_are_durable_before_the_planner_call(
+    owner_engine: Any,
+    resolver: Any,
+    remediation_resolver: Any,
+    clock: Any,
+) -> None:
+    session_factory = sessionmaker(
+        bind=owner_engine, expire_on_commit=False, autoflush=False, future=True
+    )
+    setup = Session(owner_engine, expire_on_commit=False, autoflush=False)
+    fixture, hypothesis_id = _prepared(
+        setup,
+        session_factory,
+        resolver,
+        clock,
+        f"target-before-planner-{__import__('uuid').uuid4().hex[:8]}",
+    )
+    setup.close()
+    delegate = DeterministicModelProvider(_remediation_scenario())
+
+    class ProcessDeath(BaseException):
+        pass
+
+    class CrashingModel:
+        provider_name = delegate.provider_name
+        model_id = delegate.model_id
+
+        def estimate(self, request: Any) -> Any:
+            return delegate.estimate(request)
+
+        def complete(self, request: Any) -> Any:
+            raise ProcessDeath()
+
+    with pytest.raises(ProcessDeath):
+        RemediationKernel(
+            session_factory=session_factory,
+            resolver=remediation_resolver,
+            providers=[SimulatorProvider(_remediation_scenario(), clock=clock)],
+            model=CrashingModel(),
+            clock=clock,
+        ).start(
+            tenant_id=fixture.tenant_id,
+            incident_id=fixture.incident.id,
+            hypothesis_id=hypothesis_id,
+            behaviour_version_id=fixture.behaviour_version.id,
+            selected_service_id=fixture.service.id,
+        )
+    with Session(owner_engine) as owner:
+        bind_tenant(owner, fixture.tenant_id)
+        target = owner.scalar(
+            sa.select(RemediationTarget).where(RemediationTarget.incident_id == fixture.incident.id)
+        )
+    assert target is not None
+    assert target.hypothesis_id == hypothesis_id
+    assert target.service_id == fixture.service.id
+    assert target.environment_id == fixture.environment.id
+
+
+def test_trivial_model_verification_criterion_is_rejected_before_action(
+    kernel_session: Any,
+    session_factory: Any,
+    resolver: Any,
+    remediation_resolver: Any,
+    clock: Any,
+) -> None:
+    from asic.simulators.scenarios import _remediation_plan
+    from tests.orchestration.test_remediation import _remediation_scenario
+
+    fixture, hypothesis_id = _prepared(
+        kernel_session, session_factory, resolver, clock, "trivial-criterion"
+    )
+    selected = replace(
+        _remediation_scenario(),
+        remediation_planner_script=(
+            _remediation_plan(
+                tool_name="k8s.deployment.rollback",
+                arguments={"deployment": "checkout-api", "to_revision": 846},
+                threshold=-1,
+            ),
+        ),
+    )
+    outcome = _run_remediation(
+        session_factory,
+        remediation_resolver,
+        clock,
+        fixture,
+        hypothesis_id,
+        selected,
+    )
+    assert outcome.terminated
+    assert "deterministic profile" in str(outcome.termination_reason)
+    assert (
+        kernel_session.scalar(
+            sa.select(sa.func.count())
+            .select_from(RemediationAction)
+            .where(RemediationAction.workflow_run_id == outcome.workflow_run_id)
+        )
+        == 0
+    )
+
+
+@pytest.mark.parametrize("observation", ["regression", "stale"])
+def test_regressed_or_stale_post_action_evidence_never_verifies(
+    observation: str,
+    kernel_session: Any,
+    session_factory: Any,
+    resolver: Any,
+    remediation_resolver: Any,
+    clock: Any,
+) -> None:
+    from asic.simulators.scenarios import metrics_latency_regression
+
+    fixture, hypothesis_id = _prepared(
+        kernel_session, session_factory, resolver, clock, f"verification-{observation}"
+    )
+    outcome = _run_remediation(
+        session_factory,
+        remediation_resolver,
+        clock,
+        fixture,
+        hypothesis_id,
+        _remediation_scenario(),
+    )
+    clock.advance(400)
+    selected = _post_remediation_scenario()
+
+    def stale(ctx: Any) -> Any:
+        return {**metrics_recovered(ctx), "samples": ["2020-01-01T00:00:00+00:00=0.1"]}
+
+    builder = metrics_latency_regression if observation == "regression" else stale
+    selected = replace(
+        selected,
+        responses={
+            **selected.responses,
+            "read.metrics|checkout-api": _sim_response(builder),
+        },
+    )
+    resumed = _kernel(session_factory, remediation_resolver, clock, scenario_obj=selected).resume(
+        tenant_id=fixture.tenant_id, workflow_run_id=outcome.workflow_run_id
+    )
+    assert resumed.terminated
+    assert resumed.incident_status is not IncidentStatus.RESOLVED

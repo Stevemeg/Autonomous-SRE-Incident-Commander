@@ -14,8 +14,10 @@ from asic.domain.budget import (
     BudgetState,
     termination_reason_for,
 )
-from asic.domain.enums import BudgetKind, TerminationReason
-from asic.domain.errors import BudgetExhausted
+from asic.domain.enums import BudgetKind, NodeId, TerminationReason
+from asic.domain.errors import BudgetExhausted, ModelProviderError
+from asic.llm.budgeted import complete_with_budget
+from asic.llm.port import ModelCallEstimate, ModelRequest, ModelResponse
 
 
 class TestPolicy:
@@ -114,6 +116,60 @@ class TestPreStepEnforcement:
     def test_remaining_covers_every_dimension(self) -> None:
         remaining = BudgetState.initial().remaining()
         assert set(remaining) == {kind.value for kind in BudgetKind}
+
+    def test_model_is_not_called_when_its_bounded_request_cannot_fit(self) -> None:
+        class OversizedProvider:
+            calls = 0
+
+            def estimate(self, request: ModelRequest) -> ModelCallEstimate:
+                del request
+                return ModelCallEstimate(50, 50, 10.0)
+
+            def complete(self, request: ModelRequest) -> ModelResponse:
+                del request
+                self.calls += 1
+                raise AssertionError("hard pre-call guard was bypassed")
+
+        provider = OversizedProvider()
+        budget = BudgetState(
+            policy=BudgetPolicy(max_tokens=101, max_cost_usd=0.01),
+            ledger=BudgetLedger(tokens=100),
+        )
+        request = ModelRequest(
+            node_id=NodeId.G3_INVESTIGATION_PLANNER,
+            prompt_id="test",
+            prompt_version="1",
+            prompt_hash="0" * 64,
+            prompt_text="bounded",
+        )
+        with pytest.raises(BudgetExhausted):
+            complete_with_budget(provider, request, budget)
+        assert provider.calls == 0
+
+    def test_unreserved_external_provider_is_refused_before_invocation(self) -> None:
+        class UnreservedProvider:
+            calls = 0
+
+            def estimate(self, request: ModelRequest) -> ModelCallEstimate:
+                del request
+                return ModelCallEstimate(10, 10, 0.01)
+
+            def complete(self, request: ModelRequest) -> ModelResponse:
+                del request
+                self.calls += 1
+                raise AssertionError("provider without durable accounting was invoked")
+
+        provider = UnreservedProvider()
+        request = ModelRequest(
+            node_id=NodeId.G3_INVESTIGATION_PLANNER,
+            prompt_id="test",
+            prompt_version="1",
+            prompt_hash="0" * 64,
+            prompt_text="bounded",
+        )
+        with pytest.raises(ModelProviderError, match="durable cross-process"):
+            complete_with_budget(provider, request, BudgetState.initial())
+        assert provider.calls == 0
 
 
 class TestSerialisation:

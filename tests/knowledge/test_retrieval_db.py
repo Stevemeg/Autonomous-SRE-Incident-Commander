@@ -24,7 +24,7 @@ from asic.knowledge.contracts import (
 )
 from asic.knowledge.errors import CitationInvalid, RetrievalRefused
 from asic.knowledge.retrieval import KnowledgeRetriever, current_content, replay_retrieval
-from tests.knowledge.conftest import IMPORTER, KnowledgeWorld, make_world
+from tests.knowledge.conftest import KnowledgeWorld, make_world
 
 pytestmark = pytest.mark.postgres
 
@@ -172,9 +172,7 @@ class TestVersioningAwareRetrieval:
     def test_revoked_version_is_excluded(self, world: KnowledgeWorld) -> None:
         outcome = world.ingest("runbooks/pool.md", POOL_RUNBOOK, services=(world.checkout,))
         assert outcome.version_id is not None
-        world.ingestion.revoke_version(
-            world.tenant_id, outcome.version_id, actor=IMPORTER, reason="bad_advice"
-        )
+        world.revoke_version(outcome.version_id, reason="bad_advice")
         result = world.retrieve("connection pool exhausted")
         assert result.results == ()
         assert result.excluded.get("revoked_version", 0) >= 1
@@ -203,9 +201,7 @@ class TestVersioningAwareRetrieval:
     def test_inactive_source_is_excluded(self, world: KnowledgeWorld) -> None:
         outcome = world.ingest("runbooks/pool.md", POOL_RUNBOOK, services=(world.checkout,))
         assert outcome.source_id is not None
-        world.ingestion.revoke_source(
-            world.tenant_id, outcome.source_id, actor=IMPORTER, reason="retired"
-        )
+        world.revoke_source(outcome.source_id, reason="retired")
         result = world.retrieve("connection pool exhausted")
         assert result.results == ()
         assert result.excluded.get("inactive_source", 0) >= 1
@@ -279,9 +275,7 @@ class TestCitationsAndReplay:
         outcome = world.ingest("runbooks/pool.md", POOL_RUNBOOK, services=(world.checkout,))
         assert outcome.version_id is not None
         result = world.retrieve("connection pool exhausted", record=True)
-        world.ingestion.revoke_version(
-            world.tenant_id, outcome.version_id, actor=IMPORTER, reason="bad_advice"
-        )
+        world.revoke_version(outcome.version_id, reason="bad_advice")
         with world.factory() as session, session.begin():
             bind_tenant(session, world.tenant_id)
             replayed = replay_retrieval(
@@ -437,9 +431,7 @@ class TestReplayAndCitationReauthorization:
         result = world.retrieve("connection pool exhausted", record=True)
         assert result.results
         citation = result.results[0].citation
-        world.ingestion.revoke_version(
-            world.tenant_id, outcome.version_id, actor=IMPORTER, reason="bad_advice"
-        )
+        world.revoke_version(outcome.version_id, reason="bad_advice")
         with world.factory() as session, session.begin():
             bind_tenant(session, world.tenant_id)
             resolved = resolve_citation(
@@ -453,9 +445,7 @@ class TestReplayAndCitationReauthorization:
         result = world.retrieve("connection pool exhausted", record=True)
         assert result.results
         citation = result.results[0].citation
-        world.ingestion.delete_source(
-            world.tenant_id, outcome.source_id, actor=IMPORTER, reason="source_retired"
-        )
+        world.delete_source(outcome.source_id, reason="source_retired")
         with world.factory() as session, session.begin():
             bind_tenant(session, world.tenant_id)
             resolved = resolve_citation(
@@ -524,9 +514,7 @@ class TestReplayAndCitationReauthorization:
         assert result.results
         citation = result.results[0].citation
 
-        world.ingestion.revoke_source(
-            world.tenant_id, outcome.source_id, actor=IMPORTER, reason="retired"
-        )
+        world.revoke_source(outcome.source_id, reason="retired")
 
         with world.factory() as session, session.begin():
             bind_tenant(session, world.tenant_id)

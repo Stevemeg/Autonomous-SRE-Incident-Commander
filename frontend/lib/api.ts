@@ -14,6 +14,17 @@ export type Collection<T> = { items: T[]; next_cursor?: string | null };
 
 export class AuthenticationRequired extends Error {}
 
+export async function apiHealth(): Promise<"ONLINE" | "UNKNOWN"> {
+  const configured = process.env.ASIC_API_BASE_URL ?? "http://127.0.0.1:8000/api/v1";
+  const root = configured.replace(/\/api\/v1\/?$/, "");
+  try {
+    const response = await fetch(`${root}/healthz`, { cache: "no-store" });
+    return response.ok ? "ONLINE" : "UNKNOWN";
+  } catch {
+    return "UNKNOWN";
+  }
+}
+
 export async function api<T>(path: string): Promise<T> {
   const token = (await cookies()).get("asic_session")?.value;
   if (!token) throw new AuthenticationRequired("No authenticated dashboard session");

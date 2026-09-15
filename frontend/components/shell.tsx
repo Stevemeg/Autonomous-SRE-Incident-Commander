@@ -1,7 +1,9 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
+import { apiHealth } from "../lib/api";
 
-export function Shell({ children }: { children: ReactNode }) {
+export async function Shell({ children }: { children: ReactNode }) {
+  const health = await apiHealth();
   return (
     <div className="app-shell">
       <aside>
@@ -13,7 +15,7 @@ export function Shell({ children }: { children: ReactNode }) {
           <Link href="/">Incidents</Link>
           <Link href="/approvals">Approvals</Link>
         </nav>
-        <div className="system-state"><i /> Policy engine online</div>
+        <div className="system-state"><i /> API health {health.toLowerCase()}</div>
       </aside>
       <main>{children}</main>
     </div>

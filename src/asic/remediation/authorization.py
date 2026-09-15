@@ -10,7 +10,12 @@ from typing import Any
 import sqlalchemy as sa
 from sqlalchemy.orm import Session
 
-from asic.db.models.remediation import Approval, PolicyDecision, RemediationAction
+from asic.db.models.remediation import (
+    Approval,
+    PolicyDecision,
+    RemediationAction,
+    RemediationTarget,
+)
 from asic.domain.enums import ApprovalDecision, PolicyVerdict, RemediationActionStatus
 from asic.domain.errors import CapabilityNotGranted
 from asic.domain.idempotency import action_version_hash
@@ -25,6 +30,8 @@ def require_write_authority(
     descriptor: ToolDescriptor,
     arguments: Mapping[str, Any],
     environment_id: uuid.UUID,
+    service_name: str,
+    resolved_scope: Mapping[str, Any],
     now: datetime,
 ) -> None:
     """Refuse before dispatch if the approved effect or its authority has changed."""
@@ -48,6 +55,33 @@ def require_write_authority(
     )
     if current_hash != action.action_version_hash:
         raise CapabilityNotGranted("action version changed before dispatch (SI-6)")
+    target = session.execute(
+        sa.select(RemediationTarget).where(
+            RemediationTarget.tenant_id == action.tenant_id,
+            RemediationTarget.id == action.remediation_target_id,
+            RemediationTarget.workflow_run_id == action.workflow_run_id,
+            RemediationTarget.incident_id == action.incident_id,
+            RemediationTarget.hypothesis_id == action.hypothesis_id,
+            RemediationTarget.environment_id == environment_id,
+        )
+    ).scalar_one_or_none()
+    if target is None:
+        raise CapabilityNotGranted("write action is not bound to its immutable remediation target")
+    frozen = dict(target.resolved_permission_scope)
+    if frozen.get("service") != service_name:
+        raise CapabilityNotGranted("write service does not match immutable remediation target")
+    normalized_scope = {
+        key: str(value) if isinstance(value, uuid.UUID) else value
+        for key, value in resolved_scope.items()
+    }
+    if any(frozen.get(key) != value for key, value in normalized_scope.items()):
+        raise CapabilityNotGranted(
+            "resolved broker scope differs from immutable remediation target"
+        )
+    if dict(action.permission_scope) != frozen:
+        raise CapabilityNotGranted(
+            "action permission scope differs from immutable remediation target"
+        )
     policy = session.execute(
         sa.select(PolicyDecision).where(
             PolicyDecision.tenant_id == action.tenant_id,
