@@ -17,6 +17,8 @@ re-checking the clock.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import uuid
 from datetime import datetime, timedelta
 from typing import Any
@@ -30,7 +32,13 @@ from asic.contracts.remediation_state import (
     VerificationRef,
 )
 from asic.db.models.incident import Incident
-from asic.db.models.remediation import RemediationAction, Verification
+from asic.db.models.remediation import (
+    RemediationAction,
+    RemediationBaseline,
+    RemediationTarget,
+    Verification,
+)
+from asic.db.models.tools import ToolExecution
 from asic.db.projections import append_incident_event, apply_transition
 from asic.domain.enums import (
     ActorType,
@@ -75,11 +83,21 @@ def verifier_node(deps: RemediationDependencies) -> Any:
             ).scalar_one()
             descriptor = ToolRegistry.remediation_full().by_name(action.tool_name)
             profile = profile_for(action.tool_name)
+            target = deps.session.execute(
+                sa.select(RemediationTarget).where(
+                    RemediationTarget.id == action.remediation_target_id
+                )
+            ).scalar_one()
+            baseline_row = deps.session.scalar(
+                sa.select(RemediationBaseline).where(
+                    RemediationBaseline.remediation_action_id == action.id
+                )
+            )
 
-            # G10 runs once before policy/approval to freeze a real independent baseline,
-            # then again after execution to judge a fresh observation. The node boundary
-            # between these invocations durably commits the baseline before any write.
-            if not action.baseline_snapshot:
+            # G10 first runs after policy and any required approval to freeze a fresh,
+            # independent baseline, then runs again after execution to judge a fresh
+            # observation. The node boundary durably commits the baseline before any write.
+            if baseline_row is None:
                 if action.executed_at is not None:
                     span.fail("executed action has no pre-action baseline")
                     incident = deps.session.execute(
@@ -105,7 +123,7 @@ def verifier_node(deps: RemediationDependencies) -> Any:
                     }
                     contract.validate_update(baseline_failure_update)
                     return baseline_failure_update
-                baseline = _observe(deps, profile, purpose="pre-action baseline")
+                baseline = _observe(deps, profile, action=action, purpose="pre-action baseline")
                 if "observed_value" not in baseline:
                     span.fail(str(baseline.get("reason", "baseline unavailable")))
                     failure_update: dict[str, Any] = {
@@ -116,7 +134,41 @@ def verifier_node(deps: RemediationDependencies) -> Any:
                     }
                     contract.validate_update(failure_update)
                     return failure_update
-                baseline["remediation_action_id"] = str(action.id)
+                captured_at = deps.clock.now()
+                baseline.update(
+                    tenant_id=str(deps.context.tenant_id),
+                    incident_id=str(action.incident_id),
+                    remediation_target_id=str(target.id),
+                    remediation_action_id=str(action.id),
+                    profile_id=profile.profile_id,
+                    profile_version=profile.profile_version,
+                    criteria_hash=action.verification_criteria_hash,
+                    captured_at=captured_at.isoformat(),
+                )
+                provenance_hash = hashlib.sha256(
+                    json.dumps(baseline, sort_keys=True, separators=(",", ":")).encode()
+                ).hexdigest()
+                baseline_row = RemediationBaseline(
+                    id=uuid.uuid4(),
+                    tenant_id=deps.context.tenant_id,
+                    incident_id=action.incident_id,
+                    remediation_target_id=target.id,
+                    remediation_action_id=action.id,
+                    service_id=target.service_id,
+                    environment_id=target.environment_id,
+                    profile_id=profile.profile_id,
+                    profile_version=profile.profile_version,
+                    criteria_hash=action.verification_criteria_hash,
+                    metric=profile.metric,
+                    source_capability=profile.source_capability,
+                    source_provider=str(baseline["source"]),
+                    read_execution_id=uuid.UUID(str(baseline["tool_execution_id"])),
+                    observed_at=datetime.fromisoformat(str(baseline["observed_at"])),
+                    captured_at=captured_at,
+                    observed_value=float(baseline["observed_value"]),
+                    provenance_hash=provenance_hash,
+                )
+                deps.session.add(baseline_row)
                 action.baseline_snapshot = baseline
                 deps.session.flush()
                 baseline_update: dict[str, Any] = {
@@ -129,7 +181,14 @@ def verifier_node(deps: RemediationDependencies) -> Any:
                 return baseline_update
 
             if action.executed_at is None:
-                raise RuntimeError("verifier reached post-action path before execution")
+                baseline_update = {
+                    "phase": "baseline_captured",
+                    "baseline_captured": True,
+                    "remediation_action": _action_ref(action, descriptor.capability),
+                    "terminated": False,
+                }
+                contract.validate_update(baseline_update)
+                return baseline_update
             settled_at = action.executed_at + timedelta(seconds=descriptor.settling_seconds)
             if deps.clock.now() < settled_at:
                 span.set_decision(settled=False, settled_at=settled_at.isoformat())
@@ -168,8 +227,9 @@ def verifier_node(deps: RemediationDependencies) -> Any:
             if criteria_hash != action.verification_criteria_hash:  # pragma: no cover - defensive
                 verdict, observed, margin = VerificationVerdict.INCONCLUSIVE, {}, None
             else:
+                assert baseline_row is not None
                 verdict, observed, margin = _evaluate(
-                    deps, profile, criteria, action.baseline_snapshot, action.id
+                    deps, profile, criteria, baseline_row, action, target
                 )
 
             window_end = deps.clock.now()
@@ -185,7 +245,7 @@ def verifier_node(deps: RemediationDependencies) -> Any:
                 criteria_hash=criteria_hash,
                 verdict=verdict,
                 observed=observed,
-                baseline=dict(action.baseline_snapshot or {}),
+                baseline=_baseline_json(baseline_row) if baseline_row else {},
                 margin=margin,
                 observation_window_start=window_end - timedelta(seconds=window_seconds),
                 observation_window_end=window_end,
@@ -286,22 +346,24 @@ def _evaluate(
     deps: RemediationDependencies,
     profile: VerificationProfile,
     criteria: dict[str, Any],
-    baseline: dict[str, Any],
-    action_id: uuid.UUID,
+    baseline: RemediationBaseline,
+    action: RemediationAction,
+    target: RemediationTarget,
 ) -> tuple[VerificationVerdict, dict[str, Any], float | None]:
     """Judge server-defined policy against independent baseline and observation."""
     if criteria != profile.to_dict():
         return VerificationVerdict.INCONCLUSIVE, {"reason": "malformed verification criteria"}, None
-    if (
-        baseline.get("metric") != profile.metric
-        or baseline.get("remediation_action_id") != str(action_id)
-        or "observed_value" not in baseline
+    assert action.executed_at is not None
+    if not trusted_baseline(
+        deps, profile, baseline, action, target, dispatch_at=action.executed_at
     ):
-        return VerificationVerdict.INCONCLUSIVE, {"reason": "missing trusted baseline"}, None
-    observed = _observe(deps, profile, purpose="independent post-remediation verification")
+        return VerificationVerdict.INCONCLUSIVE, {"reason": "invalid trusted baseline"}, None
+    observed = _observe(
+        deps, profile, action=action, purpose="independent post-remediation verification"
+    )
     if "observed_value" not in observed:
         return VerificationVerdict.INCONCLUSIVE, observed, None
-    baseline_value = float(baseline["observed_value"])
+    baseline_value = float(baseline.observed_value)
     observed_value = float(observed["observed_value"])
     threshold_passed = observed_value < profile.threshold
     direction_passed = (
@@ -328,7 +390,11 @@ def _evaluate(
 
 
 def _observe(
-    deps: RemediationDependencies, profile: VerificationProfile, *, purpose: str
+    deps: RemediationDependencies,
+    profile: VerificationProfile,
+    *,
+    action: RemediationAction,
+    purpose: str,
 ) -> dict[str, Any]:
     now = deps.clock.now()
     window_start = now - timedelta(seconds=profile.window_seconds)
@@ -345,6 +411,7 @@ def _observe(
             },
             incident_id=deps.context.incident_id,
             correlation_id=deps.context.correlation_id,
+            remediation_action_id=action.id,
             purpose=purpose,
         ),
         contract=G10_VERIFIER,
@@ -383,7 +450,81 @@ def _observe(
         "tool_execution_id": str(result.tool_execution_id),
         "target_service_id": deps.objective.service_id,
         "target_environment_id": deps.objective.environment_id,
+        "source_capability": profile.source_capability,
+        "profile_id": profile.profile_id,
+        "profile_version": profile.profile_version,
     }
+
+
+def trusted_baseline(
+    deps: RemediationDependencies,
+    profile: VerificationProfile,
+    baseline: RemediationBaseline,
+    action: RemediationAction,
+    target: RemediationTarget,
+    *,
+    dispatch_at: datetime,
+) -> bool:
+    execution = deps.session.scalar(
+        sa.select(ToolExecution).where(
+            ToolExecution.id == baseline.read_execution_id,
+            ToolExecution.remediation_action_id == action.id,
+            ToolExecution.capability == profile.source_capability,
+        )
+    )
+    if execution is None or execution.outcome is None or execution.outcome.value != "succeeded":
+        return False
+    now = deps.clock.now()
+    return bool(
+        baseline.tenant_id == deps.context.tenant_id
+        and baseline.incident_id == action.incident_id == target.incident_id
+        and baseline.remediation_action_id == action.id
+        and baseline.remediation_target_id == target.id == action.remediation_target_id
+        and baseline.service_id == target.service_id
+        and baseline.environment_id == target.environment_id
+        and baseline.profile_id == profile.profile_id
+        and baseline.profile_version == profile.profile_version
+        and baseline.criteria_hash == action.verification_criteria_hash
+        and baseline.metric == profile.metric
+        and baseline.source_capability == profile.source_capability
+        and baseline.source_provider in profile.approved_sources
+        and baseline.provenance_hash == _baseline_provenance(baseline)
+        and execution.resolved_scope.get("service") == deps.objective.service_name
+        and execution.resolved_scope.get("environment") == deps.objective.environment_name
+        and baseline.observed_at <= baseline.captured_at <= dispatch_at <= now
+        and dispatch_at - baseline.observed_at
+        <= timedelta(seconds=profile.max_baseline_age_seconds)
+    )
+
+
+def _baseline_json(row: RemediationBaseline) -> dict[str, Any]:
+    return {
+        "tenant_id": str(row.tenant_id),
+        "incident_id": str(row.incident_id),
+        "remediation_target_id": str(row.remediation_target_id),
+        "remediation_action_id": str(row.remediation_action_id),
+        "target_service_id": str(row.service_id),
+        "target_environment_id": str(row.environment_id),
+        "profile_id": row.profile_id,
+        "profile_version": row.profile_version,
+        "criteria_hash": row.criteria_hash,
+        "metric": row.metric,
+        "source_capability": row.source_capability,
+        "source": row.source_provider,
+        "tool_execution_id": str(row.read_execution_id),
+        "observed_at": row.observed_at.isoformat(),
+        "captured_at": row.captured_at.isoformat(),
+        "observed_value": float(row.observed_value),
+        "provenance_hash": row.provenance_hash,
+    }
+
+
+def _baseline_provenance(row: RemediationBaseline) -> str:
+    value = _baseline_json(row)
+    value.pop("provenance_hash")
+    return hashlib.sha256(
+        json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
 
 
 def _action_ref(action: RemediationAction, capability: str) -> RemediationActionRef:
@@ -399,4 +540,4 @@ def _action_ref(action: RemediationAction, capability: str) -> RemediationAction
     )
 
 
-__all__ = ["verifier_node"]
+__all__ = ["trusted_baseline", "verifier_node"]

@@ -289,7 +289,7 @@ class TestAgainstALiveInvestigation:
         clock: FrozenClock,
         kernel_session: Session,
     ) -> None:
-        # SI-10 by reconciliation: an unaudited action must be unreachable, not merely
+        # SI-13 by reconciliation: an unaudited action must be unreachable, not merely
         # discouraged.
         self._run(hostile, session_factory, resolver, clock)
         execution_ids = set(

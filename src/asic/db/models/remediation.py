@@ -422,3 +422,59 @@ class Verification(Base, TenantScoped, CreatedAtMixin):
         sa.Index("ix_verification_action", "tenant_id", "remediation_action_id"),
         sa.Index("ix_verification_verdict", "tenant_id", "verdict", "verified_at"),
     )
+
+
+class RemediationBaseline(Base, TenantScoped, CreatedAtMixin):
+    """Immutable pre-write observation bound to one action, target and policy profile."""
+
+    __tablename__ = "remediation_baseline"
+    __append_only__ = True
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    incident_id: Mapped[uuid.UUID] = mapped_column(pg.UUID(as_uuid=True), nullable=False)
+    remediation_target_id: Mapped[uuid.UUID] = mapped_column(pg.UUID(as_uuid=True), nullable=False)
+    remediation_action_id: Mapped[uuid.UUID] = mapped_column(pg.UUID(as_uuid=True), nullable=False)
+    service_id: Mapped[uuid.UUID] = mapped_column(pg.UUID(as_uuid=True), nullable=False)
+    environment_id: Mapped[uuid.UUID] = mapped_column(pg.UUID(as_uuid=True), nullable=False)
+    profile_id: Mapped[str] = mapped_column(sa.String(128), nullable=False)
+    profile_version: Mapped[int] = mapped_column(sa.Integer, nullable=False)
+    criteria_hash: Mapped[str] = mapped_column(sa.String(KEY_LENGTH), nullable=False)
+    metric: Mapped[str] = mapped_column(sa.String(128), nullable=False)
+    source_capability: Mapped[str] = mapped_column(sa.String(128), nullable=False)
+    source_provider: Mapped[str] = mapped_column(sa.String(128), nullable=False)
+    read_execution_id: Mapped[uuid.UUID] = mapped_column(pg.UUID(as_uuid=True), nullable=False)
+    observed_at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True), nullable=False)
+    captured_at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True), nullable=False)
+    observed_value: Mapped[float] = mapped_column(sa.Numeric(18, 6), nullable=False)
+    provenance_hash: Mapped[str] = mapped_column(sa.String(KEY_LENGTH), nullable=False)
+
+    __table_args__ = (
+        *tenant_identity_constraints("remediation_baseline"),
+        tenant_fk("incident_id", "incident", name="fk_remediation_baseline_incident"),
+        tenant_fk(
+            "remediation_target_id",
+            "remediation_target",
+            ondelete="RESTRICT",
+            name="fk_remediation_baseline_target",
+        ),
+        tenant_fk(
+            "remediation_action_id",
+            "remediation_action",
+            ondelete="CASCADE",
+            name="fk_remediation_baseline_action",
+        ),
+        tenant_fk("service_id", "service", name="fk_remediation_baseline_service"),
+        tenant_fk("environment_id", "environment", name="fk_remediation_baseline_environment"),
+        tenant_fk(
+            "read_execution_id",
+            "tool_execution",
+            ondelete="RESTRICT",
+            name="fk_remediation_baseline_read_execution",
+        ),
+        sa.UniqueConstraint(
+            "tenant_id", "remediation_action_id", name="uq_remediation_baseline_action"
+        ),
+        sa.CheckConstraint("profile_version > 0", name="profile_version_positive"),
+        sa.CheckConstraint("observed_at <= captured_at", name="observed_before_capture"),
+        sa.Index("ix_remediation_baseline_target", "tenant_id", "remediation_target_id"),
+    )

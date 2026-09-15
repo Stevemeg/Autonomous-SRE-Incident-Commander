@@ -122,6 +122,7 @@ def planner_node(deps: NodeDependencies) -> Any:
             try:
                 decision, tokens, cost = _ask_model(deps, state, available, span, charged)
             except SchemaViolation as exc:
+                charged = deps.durable_budget(charged)
                 metrics.schema_violations_total.add(
                     1, {"node": NodeId.G3_INVESTIGATION_PLANNER.value}
                 )
@@ -141,6 +142,7 @@ def planner_node(deps: NodeDependencies) -> Any:
                     ),
                 )
             except ModelProviderError as exc:
+                charged = deps.durable_budget(charged)
                 span.fail(str(exc))
                 return _terminate(
                     contract,
@@ -273,6 +275,11 @@ def _ask_model(
             deps.model,
             request,
             budget.charge(tokens=tokens, cost_usd=cost),
+            durable=deps.model_budget,
+            invocation_key=(
+                f"{NodeId.G3_INVESTIGATION_PLANNER.value}:"
+                f"{int(state.get('iteration', 0))}:{attempt + 1}"
+            ),
         )
         tokens += response.total_tokens
         cost += response.cost_usd

@@ -3,7 +3,7 @@
 import ast
 from pathlib import Path
 
-from scripts.validate_docs import Findings, check_phase_boundary
+from scripts.validate_docs import Findings, check_phase_boundary, check_safety_invariant_ids
 
 
 def test_phase_validator_rejects_planted_future_phase(tmp_path: Path, monkeypatch: object) -> None:
@@ -51,3 +51,15 @@ def test_normalization_and_correlation_have_no_model_or_external_execution_impor
                 )
         checked += 1
     assert checked == 4
+
+
+def test_duplicate_safety_invariant_ids_are_rejected(tmp_path: Path) -> None:
+    document = tmp_path / "safety.md"
+    document.write_text(
+        "| **SI-1** | first | enforcement | failure |\n"
+        "| **SI-1** | duplicate | enforcement | failure |\n",
+        encoding="utf-8",
+    )
+    findings = Findings()
+    assert check_safety_invariant_ids([document], findings) == 2
+    assert len(findings.report("invariants")) == 1

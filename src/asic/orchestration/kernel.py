@@ -62,6 +62,7 @@ from asic.domain.enums import (
 from asic.domain.errors import DomainError, LeaseNotHeld
 from asic.domain.idempotency import incident_event_key
 from asic.domain.incident_state import allowed_targets, is_terminal
+from asic.llm.accounting import DurableModelBudget
 from asic.llm.port import ModelProvider
 from asic.observability.audit import AuditWriter
 from asic.observability.tracing import TraceRecorder, derive_span_id, derive_trace_id
@@ -453,6 +454,9 @@ class InvestigationKernel:
             clock=self._clock,
             run_started_at=run_started_at,
             budget_policy=self._budget_policy,
+            model_budget=DurableModelBudget(
+                self._session_factory, context.tenant_id, context.workflow_run_id
+            ),
         )
         graph = build_graph(deps)
 

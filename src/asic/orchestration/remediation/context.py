@@ -13,12 +13,15 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 
+import sqlalchemy as sa
 from sqlalchemy.orm import Session
 
 from asic.contracts.remediation_state import RemediationObjective
 from asic.contracts.state import BudgetSnapshot
+from asic.db.models.incident import WorkflowRun
 from asic.domain.budget import BudgetLedger, BudgetPolicy, BudgetState
 from asic.domain.clock import Clock
+from asic.llm.accounting import DurableModelBudget
 from asic.llm.port import ModelProvider
 from asic.observability.audit import AuditWriter
 from asic.observability.tracing import TraceRecorder
@@ -46,6 +49,7 @@ class RemediationDependencies:
     clock: Clock
     run_started_at: datetime
     budget_policy: BudgetPolicy = field(default_factory=BudgetPolicy)
+    model_budget: DurableModelBudget | None = None
 
     @property
     def session(self) -> Session:
@@ -65,6 +69,14 @@ class RemediationDependencies:
             )
         )
         return base.observe_elapsed(self.elapsed_seconds)
+
+    def durable_budget(self, fallback: BudgetState) -> BudgetState:
+        raw = self.session.scalar(
+            sa.select(WorkflowRun.budget_consumed).where(
+                WorkflowRun.id == self.context.workflow_run_id
+            )
+        )
+        return BudgetState.from_dict(dict(raw)) if raw else fallback
 
 
 __all__ = ["RemediationDependencies"]

@@ -1,6 +1,6 @@
 """Audit writing.
 
-Every authorization decision and every effect produces a row here (SI-10, SEC-I7). The
+Every authorization decision and every effect produces a row here (SI-13, SEC-I7). The
 property that makes it an audit trail rather than an application log is that it is written
 at the chokepoint: the tool broker emits unconditionally, on both the allow and the refuse
 path, so "an action occurred with no audit record" is not a reachable state.

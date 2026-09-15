@@ -104,6 +104,7 @@ def remediation_planner_node(deps: RemediationDependencies) -> Any:
                     deps, menu.tool_names(), evidence_index, span, budget
                 )
             except (BudgetExhausted, SchemaViolation, ModelProviderError) as exc:
+                budget = deps.durable_budget(budget)
                 span.fail(str(exc))
                 metrics.schema_violations_total.add(
                     1, {"node": NodeId.G6_REMEDIATION_PLANNER.value}
@@ -290,6 +291,8 @@ def _ask_model(
             deps.model,
             request,
             budget.charge(tokens=tokens, cost_usd=cost),
+            durable=deps.model_budget,
+            invocation_key=f"{NodeId.G6_REMEDIATION_PLANNER.value}:0:{attempt + 1}",
         )
         tokens += response.total_tokens
         cost += response.cost_usd

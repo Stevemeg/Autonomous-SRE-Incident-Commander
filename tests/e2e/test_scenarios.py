@@ -24,8 +24,10 @@ from asic.db.models import (
     Hypothesis,
     Incident,
     InvestigationStep,
+    ModelCallReservation,
     TimelineEvent,
     ToolExecution,
+    WorkflowRun,
 )
 from asic.domain.clock import FrozenClock
 from asic.domain.enums import (
@@ -365,6 +367,64 @@ class TestFailureScenarios:
         )
         assert outcome.terminated is True
         assert outcome.termination_reason is TerminationReason.INSUFFICIENT_EVIDENCE
+        reservations = list(
+            kernel_session.scalars(
+                sa.select(ModelCallReservation).where(
+                    ModelCallReservation.workflow_run_id == outcome.workflow_run_id
+                )
+            )
+        )
+        assert len(reservations) >= 2
+        assert all(row.status == "completed" for row in reservations)
+        run = kernel_session.get(WorkflowRun, outcome.workflow_run_id)
+        assert run is not None
+        assert run.budget_consumed["ledger"]["tokens"] == sum(
+            row.reserved_tokens for row in reservations
+        )
+
+    def test_completed_malformed_call_remains_charged_when_repair_provider_fails(
+        self,
+        kernel_session: Session,
+        session_factory: Callable[[], Session],
+        resolver: CapabilityResolver,
+        clock: FrozenClock,
+    ) -> None:
+        scenario_obj = scenario("SC-0009-malformed-model-output")
+        fixture = build_fixture(kernel_session, slug="e2e-repair-accounting")
+        kernel_session.commit()
+        provider = DeterministicModelProvider(scenario_obj, fail_after=1)
+        kernel = InvestigationKernel(
+            session_factory=session_factory,
+            resolver=resolver,
+            providers=[SimulatorProvider(scenario_obj, clock=clock)],
+            model=provider,
+            clock=clock,
+            budget_policy=scenario_obj.budget,
+        )
+        outcome = kernel.start(
+            tenant_id=fixture.tenant_id,
+            incident_id=fixture.incident.id,
+            behaviour_version_id=fixture.behaviour_version.id,
+            service_ids=fixture.service_ids,
+            fixture_refs=scenario_obj.fixture_ref(),
+            random_seed=42,
+        )
+        kernel_session.expire_all()
+        reservations = list(
+            kernel_session.scalars(
+                sa.select(ModelCallReservation)
+                .where(ModelCallReservation.workflow_run_id == outcome.workflow_run_id)
+                .order_by(ModelCallReservation.created_at)
+            )
+        )
+        assert provider.call_count == 2
+        assert len(reservations) == 2
+        assert reservations[0].status == "completed"
+        assert reservations[0].actual_input_tokens is not None
+        assert reservations[1].status == "reserved"  # unknown usage stays charged
+        run = kernel_session.get(WorkflowRun, outcome.workflow_run_id)
+        assert run is not None
+        assert run.budget_consumed["ledger"]["tokens"] >= reservations[0].reserved_tokens
 
     def test_a_transient_error_clears_on_retry(
         self,

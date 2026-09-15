@@ -70,6 +70,7 @@ UNMEASURED_CLAIM = re.compile(
     r"\b\d+(?:\.\d+)?\s*%\s*(?:faster|slower|improvement|better|worse|reduction|increase\s+in\s+accuracy)",
     re.IGNORECASE,
 )
+SAFETY_INVARIANT_DEFINITION = re.compile(r"^\|\s*\*\*(SI-\d+)\*\*\s*\|", re.MULTILINE)
 
 # Phase 6 adds governed operational knowledge, retrieval and memory to the read-only
 # investigation. Anything belonging to a later, unapproved phase is a scope violation, and
@@ -548,6 +549,25 @@ def check_unmeasured_claims(files: list[Path], f: Findings) -> None:
             )
 
 
+def check_safety_invariant_ids(files: list[Path], f: Findings) -> int:
+    """Require every safety-invariant table identifier to be globally unique."""
+    seen: dict[str, Path] = {}
+    count = 0
+    for path in files:
+        text = path.read_text(encoding="utf-8")
+        for match in SAFETY_INVARIANT_DEFINITION.finditer(text):
+            count += 1
+            invariant = match.group(1)
+            if invariant in seen:
+                f.add(
+                    "invariants",
+                    f"{rel(path)} duplicates {invariant} first defined in {rel(seen[invariant])}",
+                )
+            else:
+                seen[invariant] = path
+    return count
+
+
 # ------------------------------------------------------------------------------- main
 
 
@@ -565,6 +585,7 @@ def main() -> int:
     responsibilities = check_responsibility_coverage(f)
     scanned = check_phase_boundary(f)
     check_unmeasured_claims(files, f)
+    invariants = check_safety_invariant_ids(files, f)
 
     print(f"markdown files    : {len(files)}")
     print(f"internal links    : {links} checked")
@@ -572,6 +593,7 @@ def main() -> int:
     print(f"requirement IDs   : {defined} defined in SRS, {traced} referenced in matrix")
     print(f"spec section 4    : {responsibilities} responsibilities checked for disposition")
     print(f"repository files  : {scanned} scanned against the Phase 9 boundary")
+    print(f"safety invariants : {invariants} unique definitions checked")
     print()
 
     order = [
@@ -581,6 +603,7 @@ def main() -> int:
         ("coverage", "Specification coverage"),
         ("phase", "Phase 9 scope boundary"),
         ("claims", "No unmeasured claims"),
+        ("invariants", "Unique safety invariant IDs"),
     ]
 
     total = 0

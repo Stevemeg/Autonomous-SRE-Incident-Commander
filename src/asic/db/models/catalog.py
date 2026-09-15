@@ -16,6 +16,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from asic.db.base import (
     Base,
+    CreatedAtMixin,
     TenantScoped,
     TimestampMixin,
     enum_column,
@@ -132,4 +133,52 @@ class ServiceDependency(Base, TenantScoped, TimestampMixin):
         sa.CheckConstraint("confidence >= 0 AND confidence <= 1", name="confidence_range"),
         sa.Index("ix_service_dependency_from", "tenant_id", "from_service_id"),
         sa.Index("ix_service_dependency_to", "tenant_id", "to_service_id"),
+    )
+
+
+class ConnectorScopeBinding(Base, TenantScoped, CreatedAtMixin):
+    """Server-owned authority for one connector/service/environment tuple."""
+
+    __tablename__ = "connector_scope_binding"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    connector_id: Mapped[str] = mapped_column(sa.String(255), nullable=False)
+    source: Mapped[str] = mapped_column(sa.String(64), nullable=False)
+    service_id: Mapped[uuid.UUID] = mapped_column(pg.UUID(as_uuid=True), nullable=False)
+    environment_id: Mapped[uuid.UUID] = mapped_column(pg.UUID(as_uuid=True), nullable=False)
+    is_enabled: Mapped[bool] = mapped_column(
+        sa.Boolean, nullable=False, server_default=sa.text("true")
+    )
+    revoked_at: Mapped[Any | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (
+        *tenant_identity_constraints("connector_scope_binding"),
+        tenant_fk("service_id", "service", ondelete="CASCADE", name="fk_connector_binding_service"),
+        tenant_fk(
+            "environment_id",
+            "environment",
+            ondelete="CASCADE",
+            name="fk_connector_binding_environment",
+        ),
+        sa.UniqueConstraint(
+            "tenant_id",
+            "connector_id",
+            "source",
+            "service_id",
+            "environment_id",
+            name="uq_connector_scope_binding_tuple",
+        ),
+        sa.CheckConstraint(
+            "(is_enabled AND revoked_at IS NULL) OR (NOT is_enabled)",
+            name="enabled_binding_not_revoked",
+        ),
+        sa.Index(
+            "ix_connector_scope_binding_lookup",
+            "tenant_id",
+            "connector_id",
+            "source",
+            "service_id",
+            "environment_id",
+            "is_enabled",
+        ),
     )

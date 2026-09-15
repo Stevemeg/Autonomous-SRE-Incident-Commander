@@ -32,9 +32,9 @@ deterministic code path — never by an instruction in a prompt. Each has an adv
 | **SI-10** | The approved target is immutable | Append-only target binds incident, investigation, hypothesis, service, environment and resolved scope before G6 | Resume reconstructs a target from mutable alerts |
 | **SI-11** | Planning authority expires at dispatch | Every write re-resolves current grant and tool enablement | A cached menu authorizes a revoked write |
 | **SI-12** | Verification policy is deterministic | Tool-specific server profile plus independent baseline and fresh observation | Model-authored operator/threshold decides success |
-| **SI-10** | Every authorization decision and execution is audited | Broker is sole egress and emits audit unconditionally | An action occurs with no audit record |
-| **SI-11** | The system fails closed | Policy store, registry or identity unavailable ⇒ deny | Any failure path defaults to allow |
-| **SI-12** | Durable memory is never written from a single incident automatically | G12 proposals require human approval | Knowledge changes without an approval record |
+| **SI-13** | Every authorization decision and execution is audited | Broker is sole egress and emits audit unconditionally | An action occurs with no audit record |
+| **SI-14** | The system fails closed | Policy store, registry or identity unavailable ⇒ deny | Any failure path defaults to allow |
+| **SI-15** | Durable memory is never written from a single incident automatically | G12 proposals require human approval | Knowledge changes without an approval record |
 
 ---
 
@@ -261,13 +261,16 @@ any agent path**.
 | **Independence** | G10 receives criteria + telemetry; never the executor's claim (SI-9) |
 | **Settling delay** | From the tool descriptor; verification cannot start early |
 | **Observation window** | Must cover the settling period plus the criteria's own window |
-| **Baseline** | Pre-action measurement captured at proposal time, for comparison |
+| **Baseline** | Append-only independent measurement captured after policy/approval and before dispatch; maximum age is 300 seconds at dispatch |
 | **Outcomes** | `verified` · `not_verified` · `inconclusive` — all three are legitimate |
 | **Headline metric** | **False-success rate.** Declaring success while symptoms persist is the most damaging error the system can make |
 
-G10 first persists an independent baseline before G7 may authorize execution. The model can
-select only an exact registered profile; operator, metric, direction, threshold, freshness
-window and minimum evidence are server policy. In Phase 8, `not_verified` returns the incident to investigation and `inconclusive`
+G10 persists an independent baseline after policy and any approval, immediately before the
+executor. The row binds the immutable target, action, versioned profile, approved source and
+broker read execution. G9 revalidates the 300-second dispatch freshness bound after checking
+preconditions. The model can select only an exact registered profile; operator, metric,
+direction, threshold, freshness window and minimum evidence are server policy. In Phase 8,
+`not_verified` returns the incident to investigation and `inconclusive`
 escalates. Automated compensation is deferred because compensating on an unknown state can
 itself cause harm; partial effects emit an audit/timeline signal for human handling.
 
@@ -277,7 +280,7 @@ itself cause harm; partial effects emit an audit/timeline signal for human handl
 
 | Failure | Safe response | Never |
 |---|---|---|
-| Policy store unavailable | Deny (SI-11) | Default allow |
+| Policy store unavailable | Deny (SI-14) | Default allow |
 | Registry version skew | Reject proposal; require re-proposal | Execute against a guessed descriptor |
 | Approval expired | Escalate | Execute on assumed consent |
 | Precondition drift | Fail closed | Execute anyway |
@@ -302,9 +305,9 @@ itself cause harm; partial effects emit an audit/timeline signal for human handl
 | SI-7 | Change target state between approval and execution; assert fail-closed |
 | SI-8 | Duplicate and concurrent delivery; assert single application |
 | SI-9 | Feed the verifier a false success claim; assert the verdict is unchanged |
-| SI-10 | Reconcile executions against audit records; target 100% |
-| SI-11 | Chaos: kill the policy store mid-incident; assert deny |
-| SI-12 | Attempt automated memory write; assert rejection without approval record |
+| SI-13 | Reconcile executions against audit records; target 100% |
+| SI-14 | Chaos: kill the policy store mid-incident; assert deny |
+| SI-15 | Attempt automated memory write; assert rejection without approval record |
 
 Every one of these is a **release gate**, not a best-effort test. Per §18, AI behaviour
 changes must pass the evaluation suite before release, and the safety suite is the part of

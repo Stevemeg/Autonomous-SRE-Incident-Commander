@@ -76,7 +76,7 @@ enforces a minimum-repetition threshold before promotion - it does not, and no c
 in `asic.memory.policy`/`asic.memory.service` refuses a `verified_outcome` promotion for
 `support_count = 1`. What is actually structurally guaranteed, and what does the real work
 against §10's "never silently modify production behaviour from a single incident", is the
-**mandatory human approval** (SI-12): `MemoryPromotion.status`/`approver_user_id` cannot
+**mandatory human approval** (SI-15): `MemoryPromotion.status`/`approver_user_id` cannot
 reach `approved` without a named human decision, for a support count of one exactly as for
 any other. `support_count` is recorded as an observability signal - how many independent,
 verified incidents corroborate this entry - so a reviewer can see it and a future policy
@@ -115,7 +115,7 @@ would question the value of T5 rather than the gating.
 
 | Test | Passing criterion |
 |---|---|
-| No automatic promotion | Attempted memory write without an approval record is rejected (SI-12) |
+| No automatic promotion | Attempted memory write without an approval record is rejected (SI-15) |
 | Single-incident guard | No promotion - `support_count = 1` or otherwise - ever reaches `approved` without a named human decision; `support_count` itself gates nothing today (P6-07) |
 | History does not override | Scenario 10 (stale, wrong runbook): current evidence wins |
 | Provenance integrity | No tier transition upgrades a provenance label |

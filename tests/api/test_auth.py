@@ -5,6 +5,7 @@ from __future__ import annotations
 import time
 import uuid
 from collections.abc import Callable
+from datetime import datetime
 from typing import Any, cast
 
 import jwt
@@ -17,10 +18,19 @@ from tests.orchestration.test_remediation import _remediation_scenario, _run_rem
 from tests.orchestration.test_remediation_security import _prepared
 
 from asic.api import ApiSettings, create_app
-from asic.db.models import Environment, IncidentEvent, Role, User, UserRoleAssignment
-from asic.db.models.remediation import RemediationAction
+from asic.db.models import (
+    ConnectorScopeBinding,
+    Environment,
+    IncidentEvent,
+    Role,
+    Service,
+    User,
+    UserRoleAssignment,
+    WorkflowRun,
+)
+from asic.db.models.remediation import RemediationAction, RemediationTarget
 from asic.db.session import bind_tenant
-from asic.domain.enums import IncidentStatus, UserStatus
+from asic.domain.enums import IncidentStatus, RemediationActionStatus, UserStatus, WorkflowRunStatus
 
 pytestmark = pytest.mark.postgres
 
@@ -90,6 +100,30 @@ def _principal(
     )
     session.commit()
     return user
+
+
+def _bind_connector(
+    session: Session,
+    fixture: Fixture,
+    *,
+    connector_id: str,
+    source: str = "simulator",
+    service_id: uuid.UUID | None = None,
+    environment_id: uuid.UUID | None = None,
+) -> ConnectorScopeBinding:
+    bind_tenant(session, fixture.tenant_id)
+    row = ConnectorScopeBinding(
+        id=uuid.uuid4(),
+        tenant_id=fixture.tenant_id,
+        connector_id=connector_id,
+        source=source,
+        service_id=service_id or fixture.service.id,
+        environment_id=environment_id or fixture.environment.id,
+        is_enabled=True,
+    )
+    session.add(row)
+    session.commit()
+    return row
 
 
 @pytest.fixture
@@ -213,6 +247,7 @@ def test_authenticated_ingestion_uses_only_signed_connector_scope(
 ) -> None:
     own, _ = worlds
     _principal(api_arranger, own, "system_operator", "connector-a")
+    _bind_connector(api_arranger, own, connector_id="synthetic-connector")
     token = _token(
         own.tenant_id,
         "connector-a",
@@ -240,6 +275,71 @@ def test_authenticated_ingestion_uses_only_signed_connector_scope(
     )
     assert response.status_code == 200
     assert response.json()["outcome"] in {"accepted", "duplicate"}
+
+
+def test_ingestion_requires_current_exact_connector_catalogue_tuple(
+    api_factory: Callable[[], Session], api_arranger: Session, worlds: tuple[Fixture, Fixture]
+) -> None:
+    own, other = worlds
+    _principal(api_arranger, own, "system_operator", "bound-connector", environment_id=None)
+    binding = _bind_connector(api_arranger, own, connector_id="catalogued")
+    bind_tenant(api_arranger, own.tenant_id)
+    unrelated = Service(
+        id=uuid.uuid4(),
+        tenant_id=own.tenant_id,
+        name="unrelated-api",
+        display_name="Unrelated API",
+        owner_team="other",
+        namespaces=["unrelated"],
+    )
+    staging = Environment(
+        id=uuid.uuid4(),
+        tenant_id=own.tenant_id,
+        name="binding-staging",
+        display_name="Binding staging",
+        is_production=False,
+    )
+    api_arranger.add_all([unrelated, staging])
+    api_arranger.commit()
+    client = TestClient(create_app(settings=SETTINGS, factory=api_factory))
+    payload = {
+        "schema_version": 1,
+        "source_event_id": "binding-probe",
+        "fingerprint": "binding",
+        "severity": "high",
+        "state": "firing",
+        "title": "Binding probe",
+        "started_at": "2026-09-14T12:00:00Z",
+        "observed_at": "2026-09-14T12:00:01Z",
+    }
+
+    def post(service_id: uuid.UUID, environment_id: uuid.UUID, key: str) -> Any:
+        token = _token(
+            own.tenant_id,
+            "bound-connector",
+            connector_id="catalogued",
+            source="simulator",
+            service_id=str(service_id),
+            environment_id=str(environment_id),
+        )
+        return client.post(
+            "/api/v1/ingest/alerts",
+            headers={"Authorization": f"Bearer {token}", "Idempotency-Key": key},
+            json={**payload, "source_event_id": key},
+        )
+
+    assert post(own.service.id, own.environment.id, "registered-tuple-0001").status_code == 200
+    assert post(unrelated.id, own.environment.id, "unregistered-service-0001").status_code == 403
+    assert post(own.service.id, staging.id, "unregistered-environment-0001").status_code == 403
+    assert post(other.service.id, own.environment.id, "spoofed-service-0001").status_code in {
+        403,
+        404,
+    }
+    bind_tenant(api_arranger, own.tenant_id)
+    binding.is_enabled = False
+    binding.revoked_at = datetime.now().astimezone()
+    api_arranger.commit()
+    assert post(own.service.id, own.environment.id, "revoked-binding-0001").status_code == 403
 
 
 def test_correlation_id_is_validated_and_returned() -> None:
@@ -355,6 +455,7 @@ def test_environment_scoped_ingestion_cannot_widen_to_production(
         "staging-connector",
         environment_id=staging.id,
     )
+    _bind_connector(api_arranger, own, connector_id="scoped-connector", environment_id=staging.id)
     client = TestClient(create_app(settings=SETTINGS, factory=api_factory))
     payload = {
         "schema_version": 1,
@@ -435,6 +536,148 @@ def test_administration_requires_a_tenant_wide_grant(
     )
     assert second_page.status_code == 200
     assert second_page.json()["items"][0]["id"] != first_body["items"][0]["id"]
+
+
+def test_pending_approval_authorization_precedes_pagination_limit(
+    api_factory: Callable[[], Session],
+    api_arranger: Session,
+    resolver: Any,
+    remediation_resolver: Any,
+    clock: Any,
+) -> None:
+    fixture, hypothesis_id = _prepared(
+        api_arranger,
+        api_factory,
+        resolver,
+        clock,
+        f"approval-page-{uuid.uuid4().hex[:8]}",
+        True,
+    )
+    outcome = _run_remediation(
+        api_factory,
+        remediation_resolver,
+        clock,
+        fixture,
+        hypothesis_id,
+        _remediation_scenario(),
+    )
+    bind_tenant(api_arranger, fixture.tenant_id)
+    base = api_arranger.scalar(
+        sa.select(RemediationAction).where(
+            RemediationAction.workflow_run_id == outcome.workflow_run_id
+        )
+    )
+    assert base is not None
+    staging = Environment(
+        id=uuid.uuid4(),
+        tenant_id=fixture.tenant_id,
+        name="approval-staging",
+        display_name="Approval staging",
+        is_production=False,
+    )
+    api_arranger.add(staging)
+    run = WorkflowRun(
+        id=uuid.uuid4(),
+        tenant_id=fixture.tenant_id,
+        incident_id=fixture.incident.id,
+        behaviour_version_id=fixture.behaviour_version.id,
+        status=WorkflowRunStatus.COMPLETED,
+        budget_consumed={},
+    )
+    api_arranger.add(run)
+    api_arranger.flush()
+    target = RemediationTarget(
+        id=uuid.uuid4(),
+        tenant_id=fixture.tenant_id,
+        workflow_run_id=run.id,
+        incident_id=fixture.incident.id,
+        investigation_run_id=base.workflow_run_id,
+        hypothesis_id=base.hypothesis_id,
+        service_id=fixture.service.id,
+        environment_id=staging.id,
+        resolved_permission_scope={**base.permission_scope, "environment": staging.name},
+    )
+    api_arranger.add(target)
+    api_arranger.flush()
+
+    def copy_action(
+        action_id: uuid.UUID, target_row: RemediationTarget, key: str
+    ) -> RemediationAction:
+        return RemediationAction(
+            id=action_id,
+            tenant_id=fixture.tenant_id,
+            incident_id=base.incident_id,
+            workflow_run_id=target_row.workflow_run_id,
+            hypothesis_id=base.hypothesis_id,
+            tool_definition_id=base.tool_definition_id,
+            remediation_target_id=target_row.id,
+            reason=base.reason,
+            expected_effect=base.expected_effect,
+            risk_tier=base.risk_tier,
+            permission_scope=target_row.resolved_permission_scope,
+            preconditions=base.preconditions,
+            rollback_tool_name=base.rollback_tool_name,
+            rollback_arguments=base.rollback_arguments,
+            approval_required=True,
+            timeout_seconds=base.timeout_seconds,
+            verification_criteria=base.verification_criteria,
+            verification_criteria_hash=base.verification_criteria_hash,
+            baseline_snapshot={},
+            tool_name=base.tool_name,
+            tool_version=base.tool_version,
+            arguments=base.arguments,
+            action_version_hash=base.action_version_hash,
+            request_idempotency_key=key,
+            status=RemediationActionStatus.AWAITING_APPROVAL,
+            proposed_by_node=base.proposed_by_node,
+        )
+
+    id_base = uuid.uuid4().int & ~((1 << 16) - 1)
+    for ordinal in range(1, 102):
+        api_arranger.add(
+            copy_action(
+                uuid.UUID(int=id_base + ordinal),
+                api_arranger.get(RemediationTarget, base.remediation_target_id),
+                f"unauthorized-{ordinal}",
+            )
+        )
+    authorized = [
+        copy_action(uuid.UUID(int=id_base + ordinal), target, f"authorized-later-{ordinal}")
+        for ordinal in range(102, 114)
+    ]
+    api_arranger.add_all(authorized)
+    api_arranger.commit()
+    _principal(
+        api_arranger,
+        fixture,
+        "sre_approver",
+        "staging-page-approver",
+        environment_id=staging.id,
+    )
+    client = TestClient(create_app(settings=SETTINGS, factory=api_factory))
+    headers = {"Authorization": f"Bearer {_token(fixture.tenant_id, 'staging-page-approver')}"}
+    cursor: str | None = None
+    visible: list[str] = []
+    page_count = 0
+    while True:
+        params = {"limit": 5}
+        if cursor is not None:
+            params["cursor"] = cursor
+        response = client.get("/api/v1/approvals/pending", headers=headers, params=params)
+        assert response.status_code == 200
+        body = response.json()
+        page_ids = [row["id"] for row in body["items"]]
+        assert page_ids == sorted(page_ids)
+        visible.extend(page_ids)
+        page_count += 1
+        cursor = body["next_cursor"]
+        if cursor is None:
+            break
+        assert page_count < 10, "cursor traversal must terminate"
+    expected = [str(action.id) for action in authorized]
+    assert visible == expected
+    assert len(visible) == len(set(visible))
+    assert page_count == 3
 
 
 def test_annotation_is_authorized_idempotent_and_durable(

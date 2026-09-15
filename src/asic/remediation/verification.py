@@ -11,6 +11,7 @@ from asic.domain.errors import SchemaViolation
 @dataclass(frozen=True, slots=True)
 class VerificationProfile:
     profile_id: str
+    profile_version: int
     source_capability: str
     metric: str
     direction: str
@@ -19,13 +20,18 @@ class VerificationProfile:
     window_seconds: int
     minimum_samples: int
     require_improvement: bool
+    max_baseline_age_seconds: int
+    approved_sources: tuple[str, ...]
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        value = asdict(self)
+        value["approved_sources"] = list(self.approved_sources)
+        return value
 
 
 _LATENCY_RECOVERY: Final = VerificationProfile(
     profile_id="latency-p95-recovery-v1",
+    profile_version=1,
     source_capability="read.metrics",
     metric="http_request_duration_p95_seconds",
     direction="decrease",
@@ -34,6 +40,8 @@ _LATENCY_RECOVERY: Final = VerificationProfile(
     window_seconds=300,
     minimum_samples=1,
     require_improvement=True,
+    max_baseline_age_seconds=300,
+    approved_sources=("prometheus-simulator",),
 )
 
 _PROFILES: Final[dict[str, VerificationProfile]] = {

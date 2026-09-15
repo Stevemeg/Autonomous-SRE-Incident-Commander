@@ -29,6 +29,7 @@ from datetime import datetime
 from types import TracebackType
 from typing import Final
 
+import sqlalchemy as sa
 from sqlalchemy.orm import Session
 
 from asic.contracts.state import (
@@ -37,6 +38,7 @@ from asic.contracts.state import (
     RunIdentity,
     TraceContext,
 )
+from asic.db.models.incident import WorkflowRun
 from asic.db.session import (
     DEFAULT_IDLE_IN_TRANSACTION_TIMEOUT_MS,
     DEFAULT_STATEMENT_TIMEOUT_MS,
@@ -45,6 +47,7 @@ from asic.db.session import (
 )
 from asic.domain.budget import BudgetLedger, BudgetPolicy, BudgetState
 from asic.domain.clock import Clock
+from asic.llm.accounting import DurableModelBudget
 from asic.llm.port import ModelProvider
 from asic.observability.audit import AuditWriter
 from asic.observability.tracing import TraceRecorder
@@ -199,6 +202,7 @@ class NodeDependencies:
     #: against this, so a resumed run keeps counting rather than starting again.
     run_started_at: datetime
     budget_policy: BudgetPolicy = field(default_factory=BudgetPolicy)
+    model_budget: DurableModelBudget | None = None
 
     @property
     def session(self) -> Session:
@@ -226,6 +230,15 @@ class NodeDependencies:
             )
         )
         return base.observe_elapsed(self.elapsed_seconds)
+
+    def durable_budget(self, fallback: BudgetState) -> BudgetState:
+        """Reload model charges committed independently of the current node transaction."""
+        raw = self.session.scalar(
+            sa.select(WorkflowRun.budget_consumed).where(
+                WorkflowRun.id == self.context.workflow_run_id
+            )
+        )
+        return BudgetState.from_dict(dict(raw)) if raw else fallback
 
 
 __all__ = [

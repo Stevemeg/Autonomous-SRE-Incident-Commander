@@ -227,8 +227,8 @@ section O.
 | 5 | Telemetry ingestion, alert correlation and incident lifecycle | **Complete** |
 | 6 | RAG, operational knowledge and governed memory | **Complete** |
 | 7 | Investigation agents, hypothesis management and bounded reflection | **Complete** |
-| 8 | Remediation planning, policy gates, human approval and verification | Not started |
-| 9 | Backend APIs and frontend incident-command dashboard | Not started |
+| 8 | Remediation planning, policy gates, human approval and verification | **Complete** |
+| 9 | Backend APIs and frontend incident-command dashboard | **Complete** |
 | 10 | External integrations | Not started |
 | 11 | Evaluation harness, replay and regression framework | Not started |
 | 12 | OpenTelemetry, metrics, logs, dashboards and SLOs | Not started |
@@ -242,12 +242,14 @@ precedes it.
 
 ## Development
 
-There is no application to run yet. The repository tooling requires only Python 3.11+ with
-no third-party dependencies:
+The API and dashboard are implemented through Phase 9. The Python project targets Python
+3.11+ and declares its runtime and development dependencies in `pyproject.toml`. The
+transcription and hygiene checks are standalone; the complete documentation validator also
+loads the installed capability catalogue:
 
 ```bash
-# Repository tooling. Standard library only, except the phase-boundary check, which imports
-# the capability catalogue so that it validates what the code will actually load.
+# Repository tooling. The phase-boundary check imports the capability catalogue so that it
+# validates what the application will actually load.
 python scripts/verify_spec_transcription.py   # .md still matches the authoritative .docx
 python scripts/check_repo_hygiene.py          # secrets, credentials, generated files
 python scripts/validate_docs.py               # links, Mermaid, traceability, phase scope
@@ -292,7 +294,9 @@ suite runs anywhere. Connection strings come from the environment and never from
 committed file. The full pre-commit and pre-push procedure is
 [`docs/security/REPOSITORY_SECURITY_CHECKLIST.md`](docs/security/REPOSITORY_SECURITY_CHECKLIST.md).
 
-Build, test and deployment instructions will be added when there is something to build.
+The dashboard's TypeScript and production-build checks are `npm run lint` and
+`npm run build` from `frontend/`. Production deployment automation remains a later-phase
+deliverable.
 
 ## Contributing
 

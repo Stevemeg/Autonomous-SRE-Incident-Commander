@@ -32,6 +32,7 @@ from asic.db.models import (
     ApiIdempotencyRecord,
     Approval,
     AuditRecord,
+    ConnectorScopeBinding,
     Environment,
     Evidence,
     ExecutionTrace,
@@ -40,6 +41,7 @@ from asic.db.models import (
     KnowledgeSource,
     PolicyDecision,
     RemediationAction,
+    RemediationTarget,
     Service,
     Tenant,
     TimelineEvent,
@@ -602,6 +604,13 @@ def pending_approvals(
     require_any_environment(principal, APPROVAL_DECIDE)
     statement = (
         sa.select(RemediationAction)
+        .join(
+            RemediationTarget,
+            sa.and_(
+                RemediationTarget.tenant_id == RemediationAction.tenant_id,
+                RemediationTarget.id == RemediationAction.remediation_target_id,
+            ),
+        )
         .where(
             RemediationAction.approval_required.is_(True),
             RemediationAction.status == "awaiting_approval",
@@ -611,26 +620,11 @@ def pending_approvals(
     after = _decode_cursor(cursor)
     if after is not None:
         statement = statement.where(RemediationAction.id > after)
-    # Scope filtering can discard rows, so bound the candidate query and never expose an
-    # unbounded scan. A sparse authorized page may contain fewer than ``limit`` items.
-    rows = list(session.scalars(statement.limit(MAX_PAGE_SIZE + 1)))
-    environment_names = {str(action.permission_scope.get("environment")) for action in rows}
-    environment_ids = {
-        environment.name: environment.id
-        for environment in session.scalars(
-            sa.select(Environment).where(Environment.name.in_(environment_names))
-        )
-    }
-    visible = [
-        x
-        for x in rows
-        if (
-            (environment_id := environment_ids.get(str(x.permission_scope.get("environment"))))
-            is not None
-            and principal.allows_environment(APPROVAL_DECIDE, environment_id)
-        )
-    ]
-    return _page(_actions_json(session, visible), limit)
+    visible_environments = principal.visible_environments(APPROVAL_DECIDE)
+    if visible_environments is not None:
+        statement = statement.where(RemediationTarget.environment_id.in_(visible_environments))
+    rows = list(session.scalars(statement.limit(limit + 1)))
+    return _page(_actions_json(session, rows), limit)
 
 
 def _action_environment(
@@ -740,11 +734,40 @@ async def ingest_alert(
     environment_id = cast(uuid.UUID, principal.environment_id)
     service_id = cast(uuid.UUID, principal.service_id)
     require_environment(principal, INGEST_WRITE, environment_id)
-    environment = session.scalar(sa.select(Environment).where(Environment.id == environment_id))
-    service = session.scalar(sa.select(Service).where(Service.id == service_id))
+    environment = session.scalar(
+        sa.select(Environment).where(
+            Environment.tenant_id == principal.tenant_id,
+            Environment.id == environment_id,
+        )
+    )
+    service = session.scalar(
+        sa.select(Service).where(
+            Service.tenant_id == principal.tenant_id,
+            Service.id == service_id,
+        )
+    )
     if environment is None or service is None or not service.is_active:
         raise HTTPException(
             404, detail={"code": "not_found", "message": "connector target not found"}
+        )
+    binding_id = session.scalar(
+        sa.select(ConnectorScopeBinding.id).where(
+            ConnectorScopeBinding.tenant_id == principal.tenant_id,
+            ConnectorScopeBinding.connector_id == principal.connector_id,
+            ConnectorScopeBinding.source == principal.source,
+            ConnectorScopeBinding.service_id == service_id,
+            ConnectorScopeBinding.environment_id == environment_id,
+            ConnectorScopeBinding.is_enabled.is_(True),
+            ConnectorScopeBinding.revoked_at.is_(None),
+        )
+    )
+    if binding_id is None:
+        raise HTTPException(
+            403,
+            detail={
+                "code": "connector_scope_denied",
+                "message": "connector is not authorized for the requested service/environment",
+            },
         )
     raw = await request.body()
     try:

@@ -162,6 +162,9 @@ Every entity required by the brief, plus those the design makes necessary. `AO` 
 | **`policy_decision`** `AO` | The gate's verdict | id, action_id, verdict, rule_id, policy_version, evaluated_at, actor | **Exactly one per action, always** — including allow |
 | **`approval`** `AO` | A human decision | id, action_id, action_version_hash, required_role, approver_user_id, decision, justification, requested_at, decided_at, expires_at | `approver ≠ proposer`; hash must match at execution (SI-6) |
 | **`verification`** `AO` | Independent verdict | id, action_id, criteria_hash, verdict, observed, baseline, window, margin, verified_at | `criteria_hash` must equal the action's frozen criteria (FR-VRF-03) |
+| **`remediation_baseline`** `AO` | Trusted pre-write observation | action/target/service/environment, profile/version, metric/source, read execution, observed/captured time, value, provenance hash | Exactly one per action; composite tenant FKs and broker execution provenance |
+| **`model_call_reservation`** | Durable model-attempt accounting | run, node, invocation key, reserved/actual usage, status, replay response | Reserved before invocation; unresolved outcomes retain the reservation |
+| **`connector_scope_binding`** | Ingestion catalogue authority | connector/source/service/environment, enabled, revoked_at | Signed claims request a tuple; only a current server-owned row authorizes it |
 | **`audit_record`** `AO` | Immutable audit | id, tenant_id, occurred_at, actor, incident_id, action_id, tool_execution_id, event_type, policy_rule_id, approval_id, outcome, payload_redacted | Never contains secrets; retained 7 years; append-only |
 
 ### 3.5 Knowledge and memory
@@ -171,7 +174,7 @@ Every entity required by the brief, plus those the design makes necessary. `AO` 
 | **`knowledge_document`** | Source document | id, tenant_id, source_uri, doc_type, version, superseded_by, acl_labels, trust_class, source_updated_at, ingested_at, content_hash | Versioned, never overwritten (DM-5) |
 | **`knowledge_chunk`** | Retrievable unit | id, document_id, tenant_id, seq, text, embedding, embedding_model_id, chunk_strategy, service_ids, environments, acl_labels | Embedding model recorded per chunk; scope columns are query predicates |
 | **`memory_entry`** | Durable memory (T4/T5, discriminated by `kind`) | id, tenant_id, root_cause_class, context_signature, action_ref, observed_effect, verification_verdict, support_count, first_seen, last_seen | `support_count = 1` is **never** auto-promoted (§10) |
-| **`memory_promotion`** | Governed write | id, proposed_by, target(`T4`\|`T5`), payload, approval_id, status, created_version | Requires an `approval` row (SI-12) |
+| **`memory_promotion`** | Governed write | id, proposed_by, target(`T4`\|`T5`), payload, approval_id, status, created_version | Requires an `approval` row (SI-15) |
 | **`postmortem`** | Draft artifact | id, incident_id, content, citations[], status(`draft`\|`reviewed`\|`published`), authored_by, reviewed_by | Cannot reach `published` without a human reviewer |
 
 ### 3.6 Evaluation and versioning
@@ -306,6 +309,9 @@ Incident annotation and administration GET routes for tools, policies, tenants, 
 knowledge and audit are implemented. Evaluation execution remains Phase 11. Administrative
 POST mutation of tool/policy/tenant/service/knowledge catalogues is intentionally outside
 the read-focused Phase 9 boundary; external connector configuration begins in Phase 10.
+Phase 9 nevertheless enforces a server-owned `connector_scope_binding` for every signed
+connector/service/environment ingestion tuple. Phase 10 will provision and authenticate
+real connectors; it does not get to infer scope merely because catalogue objects exist.
 
 ### 7.2 Cross-cutting API rules
 

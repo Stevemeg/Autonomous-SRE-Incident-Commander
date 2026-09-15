@@ -10,7 +10,7 @@ from __future__ import annotations
 from asic.db.base import Base, metadata_obj
 from asic.db.models.api import ApiIdempotencyRecord
 from asic.db.models.audit import AuditRecord
-from asic.db.models.catalog import Environment, Service, ServiceDependency
+from asic.db.models.catalog import ConnectorScopeBinding, Environment, Service, ServiceDependency
 from asic.db.models.evaluation import (
     BehaviourVersion,
     EvaluationRun,
@@ -22,6 +22,7 @@ from asic.db.models.incident import (
     Alert,
     Incident,
     IncidentEvent,
+    ModelCallReservation,
     TimelineEvent,
     WorkflowRun,
 )
@@ -53,6 +54,7 @@ from asic.db.models.remediation import (
     Approval,
     PolicyDecision,
     RemediationAction,
+    RemediationBaseline,
     RemediationTarget,
     Verification,
 )
@@ -113,6 +115,7 @@ __all__ = [
     "AuditRecord",
     "Base",
     "BehaviourVersion",
+    "ConnectorScopeBinding",
     "Environment",
     "EvaluationRun",
     "EvaluationScenario",
@@ -134,10 +137,12 @@ __all__ = [
     "MemoryEntry",
     "MemoryPromotion",
     "MemoryWriteDecision",
+    "ModelCallReservation",
     "Permission",
     "PolicyDecision",
     "Postmortem",
     "RemediationAction",
+    "RemediationBaseline",
     "RemediationTarget",
     "Role",
     "RolePermission",

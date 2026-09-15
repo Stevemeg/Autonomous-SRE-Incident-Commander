@@ -7,7 +7,7 @@ around :func:`decide`, nothing more). :mod:`asic.orchestration.remediation.nodes
 
 Every check here enforces one of the safety invariants directly:
 
-* **SI-10** (separation of duties): the deciding actor may not be the action's proposer.
+* **INV-10** (separation of duties): the deciding actor may not be the action's proposer.
 * **SI-6** (version binding): the caller states the action version it believes it is
   deciding on; a mismatch against the action's *current* recorded version is refused, not
   silently accepted against whatever the row now says.
@@ -107,7 +107,7 @@ def decide(
         ApprovalInvalid: the action is not awaiting approval, the window has elapsed, the
             caller's view of the action's version does not match its current version
             (SI-6), or the actor is not authorised for this tier/tenant/environment.
-        SelfApprovalAttempt: the actor proposed this action (SI-10).
+        SelfApprovalAttempt: the actor proposed this action (INV-10).
     """
     if decision not in (ApprovalDecision.APPROVED, ApprovalDecision.REJECTED):
         raise ApprovalInvalid(
@@ -132,7 +132,7 @@ def decide(
             "the action's version has changed since this approval request was displayed "
             "(SI-6); re-read the action before deciding"
         )
-    # SI-10 (separation of duties) is enforced by the database
+    # INV-10 (separation of duties) is enforced by the database
     # (``no_self_approval``: ``approver_user_id <> proposer_user_id`` whenever both are
     # set) rather than checked again here. It is not exercisable by this phase's own flow:
     # every action is proposed by G6, an agent node, and ``Approval.proposer_user_id`` is

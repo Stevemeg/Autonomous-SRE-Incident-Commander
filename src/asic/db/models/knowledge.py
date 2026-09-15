@@ -591,7 +591,7 @@ class MemoryEntry(Base, TenantScoped, TimestampMixin):
 
     ``support_count`` is the guard against over-generalising from one incident. A count of
     one is never sufficient for automatic promotion, and the promotion itself still
-    requires a human (SI-12).
+    requires a human (SI-15).
     """
 
     __tablename__ = "memory_entry"
@@ -784,7 +784,7 @@ class MemoryPromotion(Base, TenantScoped, TimestampMixin):
             ondelete="RESTRICT",
             name="fk_memory_promotion_approver",
         ),
-        # A decided promotion names its human and when. SI-12 in constraint form.
+        # A decided promotion names its human and when. SI-15 in constraint form.
         sa.CheckConstraint(
             "(status = 'proposed') = (approver_user_id IS NULL)",
             name="decided_promotion_names_approver",

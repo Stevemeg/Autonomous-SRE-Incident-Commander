@@ -577,7 +577,7 @@ G8_APPROVAL_SERVICE: Final = NodeContract(
     ),
     failure_modes=(
         "approval expired before a human decided",
-        "approval decided by the same actor who proposed the action (SI-10)",
+        "approval decided by the same actor who proposed the action (INV-10)",
         "action parameters changed after the approval was requested (SI-6)",
     ),
     termination_behaviour=(

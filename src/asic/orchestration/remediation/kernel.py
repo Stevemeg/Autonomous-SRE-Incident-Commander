@@ -35,6 +35,7 @@ from asic.domain.budget import BudgetPolicy, BudgetState
 from asic.domain.clock import Clock, SystemClock
 from asic.domain.enums import HypothesisStatus, IncidentStatus, WorkflowRunStatus
 from asic.domain.errors import DomainError, LeaseNotHeld
+from asic.llm.accounting import DurableModelBudget
 from asic.llm.port import ModelProvider
 from asic.observability.audit import AuditWriter
 from asic.observability.tracing import TraceRecorder, derive_span_id, derive_trace_id
@@ -461,6 +462,9 @@ class RemediationKernel:
             clock=self._clock,
             run_started_at=run_started_at,
             budget_policy=self._budget_policy,
+            model_budget=DurableModelBudget(
+                self._session_factory, context.tenant_id, context.workflow_run_id
+            ),
         )
         graph = build_graph(deps)
 

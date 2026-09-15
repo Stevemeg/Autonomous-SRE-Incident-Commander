@@ -27,7 +27,7 @@ import sqlalchemy as sa
 from asic.contracts.nodes import G9_REMEDIATION_EXECUTOR
 from asic.contracts.remediation_state import RemediationActionRef, RemediationGraphState
 from asic.db.models.incident import Incident
-from asic.db.models.remediation import RemediationAction
+from asic.db.models.remediation import RemediationAction, RemediationBaseline, RemediationTarget
 from asic.db.projections import append_incident_event, apply_transition
 from asic.domain.enums import (
     ActorType,
@@ -41,7 +41,9 @@ from asic.domain.enums import (
 )
 from asic.domain.idempotency import action_version_hash, incident_event_key
 from asic.orchestration.remediation.context import RemediationDependencies
+from asic.orchestration.remediation.nodes.verifier import trusted_baseline
 from asic.remediation.observations import effect_observed, precondition_holds
+from asic.remediation.verification import profile_for
 from asic.tools.broker import CapabilityRequest
 from asic.tools.descriptor import ToolDescriptor
 from asic.tools.registry import ToolRegistry
@@ -162,6 +164,37 @@ def remediation_executor_node(deps: RemediationDependencies) -> Any:
                     action,
                     reason=f"precondition {drifted!r} no longer holds (SI-7)",
                     target_status=IncidentStatus.INVESTIGATING,
+                )
+
+            baseline = deps.session.scalar(
+                sa.select(RemediationBaseline).where(
+                    RemediationBaseline.remediation_action_id == action.id
+                )
+            )
+            target = deps.session.scalar(
+                sa.select(RemediationTarget).where(
+                    RemediationTarget.id == action.remediation_target_id
+                )
+            )
+            if (
+                baseline is None
+                or target is None
+                or not trusted_baseline(
+                    deps,
+                    profile_for(action.tool_name),
+                    baseline,
+                    action,
+                    target,
+                    dispatch_at=deps.clock.now(),
+                )
+            ):
+                span.fail("pre-action baseline is missing, stale, or mismatched")
+                return _fail_closed(
+                    deps,
+                    contract,
+                    action,
+                    reason="trusted pre-action baseline is missing, stale, or mismatched",
+                    target_status=IncidentStatus.ESCALATED,
                 )
 
             deps.session.execute(

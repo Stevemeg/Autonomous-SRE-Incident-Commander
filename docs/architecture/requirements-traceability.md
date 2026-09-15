@@ -216,7 +216,7 @@ missing here or if an identifier appears here that the SRS does not define.
 | FR-KNW-06 | HARN | 6, 11 | Retrieval evaluation set | Recall@k, Precision@k, nDCG measured and reported |
 | FR-KNW-07 | GATE, KNOW | 4 | Injection corpus A1–A4 | Zero authorization effect from retrieved content (SI-3) |
 | FR-MEM-01 | MEM, DB | 6 | Schema and lifetime tests | Five tiers physically separated with distinct write authority |
-| FR-MEM-02 | G12, MEM | 6 | Ungated-write test (SI-12) | Memory write without an approval record is rejected |
+| FR-MEM-02 | G12, MEM | 6 | Ungated-write test (SI-15) | Memory write without an approval record is rejected |
 | FR-MEM-03 | G12, HARN | 6, 11 | Single-incident guard | `support_count = 1` never auto-promotes |
 | FR-MEM-04 | G12, DB | 6 | Promotion workflow test | Every promotion has an approval and creates a version (INV-15) |
 
@@ -306,7 +306,7 @@ missing here or if an identifier appears here that the SRS does not define.
 | NFR-SEC-05 | REG, GATE, BROKER | 4 | Four-layer restriction tests | Model cannot invoke, widen, or authorize outside its menu |
 | NFR-SEC-06 | BROKER, OTEL, CI | 2, 13 | Secret scanning in repo, traces, prompts, DB | Zero secret material anywhere outside the secret manager |
 | NFR-SEC-07 | Infra, DB | 13, 14 | Config audit | TLS 1.3 external, mTLS internal, encryption at rest |
-| NFR-SEC-08 | BROKER, DB | 4, 13 | Audit reconciliation | 100% of executions and authorization decisions audited (SI-10) |
+| NFR-SEC-08 | BROKER, DB | 4, 13 | Audit reconciliation | 100% of executions and authorization decisions audited (SI-13) |
 | NFR-SEC-09 | EDGE, NORM, KNOW | 5, 13 | Fuzz and schema tests | All external input validated and size-capped |
 | NFR-SEC-10 | GATE, KNOW | 4, 13 | Injection corpus A1–A4 | Zero authorization effect; detection recorded as signal |
 | NFR-SEC-11 | KNOW, G4 | 4, 6 | Provenance tests | Logs, runbooks and tickets always labelled `RETRIEVED` |
@@ -342,7 +342,7 @@ missing here or if an identifier appears here that the SRS does not define.
 | NFR-PRT-02 | Simulators, Compose | 4, 14 | Offline run | Full stack runs locally with no live infrastructure and no egress |
 | NFR-TST-01 | CI | 17 areas, phases 4–15 | Coverage review | All fifteen §17 test categories present and running |
 | NFR-TST-02 | PROC, CI | All | Gate review | Release requires failure-path and adversarial suites, not only happy path |
-| NFR-TST-03 | CI | 4 onward | Suite review | Every safety invariant SI-1…SI-12 has an adversarial test |
+| NFR-TST-03 | CI | 4 onward | Suite review | Every safety invariant SI-1…SI-15 has an adversarial test |
 
 ## 12. Constraints
 

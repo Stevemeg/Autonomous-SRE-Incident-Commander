@@ -184,7 +184,11 @@ These are *configured* limits, not measured ones. No load test has been run and 
 claims they are right for production traffic.
 
 The deterministic provider is synchronous and supplies an exact scripted bound. Every
-planner, hypothesis and remediation model call uses the same enforcement helper. A future
+planner, hypothesis and remediation model call uses the same enforcement helper. Each
+attempt is also reserved in PostgreSQL before invocation. Completed responses settle
+immediately and may be replayed without another provider call; a timeout, cancellation or
+provider failure with unknown usage retains the conservative reservation. This accounting
+survives schema-repair failure, node rollback and resume. A future
 live, streaming or asynchronous provider must add durable cross-process reservation
 accounting before adoption; the current code does not claim that provider class exists.
 

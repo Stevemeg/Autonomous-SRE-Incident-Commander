@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -13,6 +14,7 @@ from asic.db.models import (
     Alert,
     Approval,
     RemediationAction,
+    RemediationBaseline,
     RemediationTarget,
     Service,
     UserRoleAssignment,
@@ -20,12 +22,18 @@ from asic.db.models import (
 from asic.db.models.orchestration import WorkflowCheckpoint
 from asic.db.models.tools import TenantToolGrant, ToolDefinition, ToolExecution
 from asic.db.session import bind_tenant
-from asic.domain.enums import ApprovalDecision, IncidentStatus, RiskTier
+from asic.domain.enums import ApprovalDecision, IncidentStatus, RiskTier, VerificationVerdict
 from asic.domain.errors import DomainError
 from asic.domain.idempotency import action_version_hash
 from asic.llm.deterministic import DeterministicModelProvider
 from asic.orchestration.remediation.kernel import RemediationKernel
+from asic.orchestration.remediation.nodes.verifier import (
+    _baseline_provenance,
+    _evaluate,
+    trusted_baseline,
+)
 from asic.remediation.approval_service import decide
+from asic.remediation.verification import profile_for
 from asic.simulators.provider import SimulatorProvider
 from asic.simulators.scenarios import metrics_recovered, scenario
 from asic.tools.broker import ToolBroker
@@ -105,6 +113,86 @@ def test_resume_uses_persisted_proposal_and_budget(
         .limit(1)
     ).scalar_one()
     assert after.budget_consumed["ledger"]["tokens"] == tokens
+
+
+@pytest.mark.parametrize(
+    ("field", "replacement"),
+    [
+        ("service_id", lambda row: __import__("uuid").uuid4()),
+        ("environment_id", lambda row: __import__("uuid").uuid4()),
+        ("remediation_target_id", lambda row: __import__("uuid").uuid4()),
+        ("remediation_action_id", lambda row: __import__("uuid").uuid4()),
+        ("profile_id", lambda row: "attacker-profile"),
+        ("profile_version", lambda row: row.profile_version + 1),
+        ("criteria_hash", lambda row: "0" * 64),
+        ("metric", lambda row: "unrelated_metric"),
+        ("source_capability", lambda row: "read.logs"),
+        ("source_provider", lambda row: "unapproved-source"),
+        ("read_execution_id", lambda row: __import__("uuid").uuid4()),
+        ("observed_at", lambda row: row.observed_at - __import__("datetime").timedelta(hours=1)),
+        ("observed_at", lambda row: row.captured_at + __import__("datetime").timedelta(seconds=1)),
+        ("captured_at", lambda row: row.captured_at + __import__("datetime").timedelta(seconds=1)),
+    ],
+)
+def test_baseline_binding_and_freshness_guards_are_load_bearing(
+    field: str,
+    replacement: Any,
+    kernel_session: Any,
+    session_factory: Any,
+    resolver: Any,
+    remediation_resolver: Any,
+    clock: Any,
+) -> None:
+    fixture, hypothesis_id = _prepared(
+        kernel_session, session_factory, resolver, clock, f"baseline-{field.replace('_', '-')}"
+    )
+    outcome = _run_remediation(
+        session_factory,
+        remediation_resolver,
+        clock,
+        fixture,
+        hypothesis_id,
+        _remediation_scenario(),
+    )
+    kernel_session.expire_all()
+    action = kernel_session.scalar(
+        sa.select(RemediationAction).where(
+            RemediationAction.workflow_run_id == outcome.workflow_run_id
+        )
+    )
+    assert action is not None and action.executed_at is not None
+    target = kernel_session.get(RemediationTarget, action.remediation_target_id)
+    baseline = kernel_session.scalar(
+        sa.select(RemediationBaseline).where(RemediationBaseline.remediation_action_id == action.id)
+    )
+    assert target is not None and baseline is not None
+    deps = SimpleNamespace(
+        session=kernel_session,
+        context=SimpleNamespace(tenant_id=fixture.tenant_id),
+        objective=SimpleNamespace(
+            service_name=fixture.service.name,
+            environment_name=fixture.environment.name,
+        ),
+        clock=clock,
+    )
+    profile = profile_for(action.tool_name)
+    assert trusted_baseline(deps, profile, baseline, action, target, dispatch_at=action.executed_at)
+    original = getattr(baseline, field)
+    setattr(baseline, field, replacement(baseline))
+    baseline.provenance_hash = _baseline_provenance(baseline)
+    assert getattr(baseline, field) != original
+    assert not trusted_baseline(
+        deps, profile, baseline, action, target, dispatch_at=action.executed_at
+    )
+    verdict, observed, margin = _evaluate(
+        deps, profile, dict(action.verification_criteria), baseline, action, target
+    )
+    assert (verdict, observed, margin) == (
+        VerificationVerdict.INCONCLUSIVE,
+        {"reason": "invalid trusted baseline"},
+        None,
+    )
+    kernel_session.rollback()
 
 
 @pytest.mark.parametrize("invalidation", ["expiry", "revocation"])

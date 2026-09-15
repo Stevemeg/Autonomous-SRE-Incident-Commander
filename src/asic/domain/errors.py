@@ -160,7 +160,7 @@ class ModelProviderError(DomainError):
 class PolicyEvaluationFailed(DomainError):
     """The deterministic policy gate could not reach a verdict.
 
-    SI-11: the system fails closed. Raised when a dependency the gate needs - the tenant's
+    SI-14: the system fails closed. Raised when a dependency the gate needs - the tenant's
     policy configuration, the registry - is unavailable; the caller treats this exactly
     like a deny, never like an allow.
     """
@@ -180,7 +180,7 @@ class ApprovalInvalid(DomainError):
 class SelfApprovalAttempt(DomainError):
     """An actor attempted to approve an action they proposed.
 
-    SI-10: separation of duties applies to humans exactly as it does to nodes.
+    INV-10: separation of duties applies to humans exactly as it does to nodes.
     """
 
 

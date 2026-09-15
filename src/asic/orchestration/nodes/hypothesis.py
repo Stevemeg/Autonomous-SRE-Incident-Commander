@@ -161,6 +161,7 @@ def hypothesis_node(deps: NodeDependencies) -> Any:
             try:
                 output, tokens, cost = _ask_model(deps, state, evidence, span, budget)
             except (BudgetExhausted, SchemaViolation, ModelProviderError) as exc:
+                budget = deps.durable_budget(budget)
                 metrics.schema_violations_total.add(1, {"node": NodeId.G5_HYPOTHESIS_ENGINE.value})
                 span.fail(str(exc))
                 update = {
@@ -325,6 +326,11 @@ def _ask_model(
             deps.model,
             request,
             budget.charge(tokens=tokens, cost_usd=cost),
+            durable=deps.model_budget,
+            invocation_key=(
+                f"{NodeId.G5_HYPOTHESIS_ENGINE.value}:"
+                f"{int(state.get('iteration', 0))}:{attempt + 1}"
+            ),
         )
         tokens += response.total_tokens
         cost += response.cost_usd

@@ -33,7 +33,7 @@ flowchart LR
     FAST --> UNIT["Unit + schema/contract tests"]
     UNIT --> INT["Integration<br/>DB · adapters vs simulators"]
     INT --> SEC["Security gates<br/>secrets · SAST · dependencies"]
-    SEC --> SAFE["<b>Safety suite</b><br/>SI-1…SI-12 adversarial"]
+    SEC --> SAFE["<b>Safety suite</b><br/>SI-1…SI-15 adversarial"]
     SAFE --> EVALS["Evaluation smoke<br/>3 scenarios"]
     EVALS --> MERGE{"Merge"}
 

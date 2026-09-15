@@ -22,6 +22,20 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed — final pre-Phase-10 safety corrections
+
+- Bound each pre-write verification baseline to the immutable target, action, versioned
+  server profile, approved read source and real broker execution; stale or mismatched
+  evidence now fails closed before dispatch or yields an inconclusive verdict.
+- Added durable per-attempt model reservations so malformed output, failed repairs and
+  interrupted calls cannot erase consumed or potentially consumed token/cost allowance.
+- Added a tenant-isolated connector/service/environment catalogue binding and enforce it
+  before constructing trusted ingestion context.
+- Moved pending-approval environment authorization into SQL before cursor limiting, and
+  made duplicate safety-invariant identifiers a documentation-validation failure.
+- Added migration `0014_pre_phase10_safety`. External connectors and live model providers
+  remain deferred; this milestone establishes only the boundaries they will consume.
+
 ### Fixed — Phase 6–9 architecture and security audit corrections
 
 - Froze remediation incident, investigation, hypothesis, service, environment and permission

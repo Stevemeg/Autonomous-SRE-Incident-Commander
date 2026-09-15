@@ -38,6 +38,7 @@ from asic.domain.enums import (
     IncidentEventType,
     IncidentSeverity,
     IncidentStatus,
+    NodeId,
     ProvenanceLabel,
     TerminationReason,
     TimelineCategory,
@@ -415,4 +416,53 @@ class WorkflowRun(Base, TenantScoped, TimestampMixin):
         ),
         sa.CheckConstraint("resumed_count >= 0", name="resumed_count_non_negative"),
         sa.Index("ix_workflow_run_lease", "status", "lease_expires_at"),
+    )
+
+
+class ModelCallReservation(Base, TenantScoped, TimestampMixin):
+    """Durable admission and settlement for one model attempt."""
+
+    __tablename__ = "model_call_reservation"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    workflow_run_id: Mapped[uuid.UUID] = mapped_column(pg.UUID(as_uuid=True), nullable=False)
+    invocation_key: Mapped[str] = mapped_column(sa.String(255), nullable=False)
+    node_id: Mapped[NodeId] = mapped_column(enum_column(NodeId, "node_id"), nullable=False)
+    reserved_tokens: Mapped[int] = mapped_column(sa.Integer, nullable=False)
+    reserved_cost_usd: Mapped[float] = mapped_column(sa.Numeric(12, 6), nullable=False)
+    actual_input_tokens: Mapped[int | None] = mapped_column(sa.Integer, nullable=True)
+    actual_output_tokens: Mapped[int | None] = mapped_column(sa.Integer, nullable=True)
+    actual_cost_usd: Mapped[float | None] = mapped_column(sa.Numeric(12, 6), nullable=True)
+    response: Mapped[dict[str, Any] | None] = mapped_column(pg.JSONB, nullable=True)
+    status: Mapped[str] = mapped_column(
+        sa.String(16), nullable=False, server_default=sa.text("'reserved'")
+    )
+
+    __table_args__ = (
+        *tenant_identity_constraints("model_call_reservation"),
+        tenant_fk(
+            "workflow_run_id",
+            "workflow_run",
+            ondelete="CASCADE",
+            name="fk_model_call_reservation_run",
+        ),
+        sa.UniqueConstraint(
+            "tenant_id", "workflow_run_id", "invocation_key", name="uq_model_call_reservation"
+        ),
+        sa.CheckConstraint("reserved_tokens >= 0", name="reserved_tokens_non_negative"),
+        sa.CheckConstraint("reserved_cost_usd >= 0", name="reserved_cost_non_negative"),
+        sa.CheckConstraint("status IN ('reserved', 'completed')", name="status_known"),
+        sa.CheckConstraint(
+            "(status = 'completed') = (response IS NOT NULL)", name="completed_has_response"
+        ),
+        sa.CheckConstraint(
+            "status <> 'completed' OR "
+            "(actual_input_tokens IS NOT NULL AND actual_input_tokens >= 0 "
+            "AND actual_output_tokens IS NOT NULL AND actual_output_tokens >= 0 "
+            "AND actual_input_tokens + actual_output_tokens <= reserved_tokens "
+            "AND actual_cost_usd IS NOT NULL AND actual_cost_usd >= 0 "
+            "AND actual_cost_usd <= reserved_cost_usd)",
+            name="completed_usage_within_reservation",
+        ),
+        sa.Index("ix_model_call_reservation_run", "tenant_id", "workflow_run_id", "created_at"),
     )

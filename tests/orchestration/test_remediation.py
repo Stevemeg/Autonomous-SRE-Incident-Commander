@@ -128,11 +128,16 @@ def _resume_remediation(
     fixture: Fixture,
     outcome: Any,
 ) -> Any:
+    selected = (
+        _remediation_scenario()
+        if outcome.incident_status is IncidentStatus.AWAITING_APPROVAL
+        else _post_remediation_scenario()
+    )
     kernel = RemediationKernel(
         session_factory=session_factory,
         resolver=remediation_resolver,
-        providers=[SimulatorProvider(_post_remediation_scenario(), clock=clock)],
-        model=DeterministicModelProvider(_post_remediation_scenario()),
+        providers=[SimulatorProvider(selected, clock=clock)],
+        model=DeterministicModelProvider(selected),
         clock=clock,
     )
     return kernel.resume(tenant_id=fixture.tenant_id, workflow_run_id=outcome.workflow_run_id)

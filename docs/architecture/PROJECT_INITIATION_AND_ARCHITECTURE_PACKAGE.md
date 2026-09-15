@@ -157,7 +157,7 @@ Scenario 8 — "no discoverable cause" — treats correct uncertainty as a passi
 
 ## J. Safety and remediation policy
 
-Twelve safety invariants (SI-1…SI-12), each enforced by a type, a credential or a
+Fifteen safety invariants (SI-1…SI-15), each enforced by a type, a credential or a
 deterministic path — never by a prompt instruction — and each with an adversarial test.
 
 Four risk tiers. **R3 destructive actions are not approval-gated; they are not expressible**

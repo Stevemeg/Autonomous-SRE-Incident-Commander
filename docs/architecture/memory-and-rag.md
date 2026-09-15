@@ -28,7 +28,7 @@ creates a specific, nameable failure.
 
 T1 → T3 happens at incident close, mechanically, append-only. T3 → T5 and T3 → T4 require
 a proposal and a human approval record. There is no automatic path from "this worked
-once" to "this is what we do" (§10, SI-12).
+once" to "this is what we do" (§10, SI-15).
 
 **Implementation note:** the proposal/approval mechanism is `asic.memory.service.
 MemoryGovernanceService` — a deterministic service called directly, not the `G12_MEMORY_

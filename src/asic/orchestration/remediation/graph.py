@@ -2,16 +2,9 @@
 
 .. code-block:: text
 
-    START -> G6 --nothing/rejected--> END
-              |
-              +--proposed--> G10 (baseline) --> G7 --deny-------------> END
-                              |
-                              +--allow-----> G9 --> G10 --> END
-                              |
-                              +--approval--> G8 --pending--------> END (suspend)
-                                              |
-                                              +--approved--> G9 --> G10 --> END
-                                              +--rejected/expired/invalidated--> END
+    START -> G6 --> G7 --deny--> END
+                      |--allow--> G10 (baseline) --> G9 --> G10 (verify) --> END
+                      `--approval--> G8 --approved--> G10 --> G9 --> G10 --> END
 
 Every edge is explicit, exactly as investigation's graph requires of itself - a router
 returning an unmapped value is a ``KeyError`` at graph construction, never a silent
@@ -56,9 +49,7 @@ GRAPH_VERSION: Final[str] = "1.0.0"
 
 
 def _route_after_planner(state: RemediationGraphState) -> str:
-    if state.get("terminated"):
-        return END
-    return POLICY_GATE if state.get("baseline_captured") else VERIFIER
+    return END if state.get("terminated") else POLICY_GATE
 
 
 def _route_after_policy_gate(state: RemediationGraphState) -> str:
@@ -68,7 +59,7 @@ def _route_after_policy_gate(state: RemediationGraphState) -> str:
     if decision is None:  # pragma: no cover - defensive; the node always sets it when continuing
         return END
     if decision.verdict is PolicyVerdict.ALLOW:
-        return EXECUTOR
+        return VERIFIER
     if decision.verdict is PolicyVerdict.REQUIRE_APPROVAL:
         return APPROVAL_SERVICE
     return END  # pragma: no cover - DENY already sets terminated=True above
@@ -76,7 +67,7 @@ def _route_after_policy_gate(state: RemediationGraphState) -> str:
 
 def _route_after_approval(state: RemediationGraphState) -> str:
     if state.get("phase") == "executing":
-        return EXECUTOR
+        return VERIFIER
     return END  # either pending (suspend) or a terminal rejection/expiry/invalidation
 
 
@@ -85,7 +76,7 @@ def _route_after_executor(state: RemediationGraphState) -> str:
 
 
 def _route_after_verifier(state: RemediationGraphState) -> str:
-    return POLICY_GATE if state.get("phase") == "baseline_captured" else END
+    return EXECUTOR if state.get("phase") == "baseline_captured" else END
 
 
 def build_graph(
@@ -110,20 +101,18 @@ def build_graph(
     graph.add_conditional_edges(
         PLANNER,
         _route_after_planner,
-        {VERIFIER: VERIFIER, POLICY_GATE: POLICY_GATE, END: END},
+        {POLICY_GATE: POLICY_GATE, END: END},
     )
     graph.add_conditional_edges(
         POLICY_GATE,
         _route_after_policy_gate,
-        {EXECUTOR: EXECUTOR, APPROVAL_SERVICE: APPROVAL_SERVICE, END: END},
+        {VERIFIER: VERIFIER, APPROVAL_SERVICE: APPROVAL_SERVICE, END: END},
     )
     graph.add_conditional_edges(
-        APPROVAL_SERVICE, _route_after_approval, {EXECUTOR: EXECUTOR, END: END}
+        APPROVAL_SERVICE, _route_after_approval, {VERIFIER: VERIFIER, END: END}
     )
     graph.add_conditional_edges(EXECUTOR, _route_after_executor, {VERIFIER: VERIFIER, END: END})
-    graph.add_conditional_edges(
-        VERIFIER, _route_after_verifier, {POLICY_GATE: POLICY_GATE, END: END}
-    )
+    graph.add_conditional_edges(VERIFIER, _route_after_verifier, {EXECUTOR: EXECUTOR, END: END})
 
     return graph.compile(name=f"asic-remediation-{GRAPH_VERSION}")
 
