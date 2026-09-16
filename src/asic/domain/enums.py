@@ -391,6 +391,71 @@ class ToolProviderKind(StrEnum):
 
 
 @unique
+class ToolEffectClass(StrEnum):
+    """What kind of effect a registered tool can have (Phase 10, ADR-0026).
+
+    Risk tiers (section 6) classify *infrastructure remediation*. They say nothing useful
+    about a chat message or a ticket, which change no workload and cannot be rolled back
+    by a tool call either. Rather than bend a risk tier to fit, the effect class names the
+    distinction, and the database derives each execution's class from its definition.
+    """
+
+    #: No side effect. Exactly the ``RO`` tier.
+    READ = "read"
+    #: A change to production infrastructure. Policy gate, approval, rollback, verification.
+    INFRASTRUCTURE_MUTATION = "infrastructure_mutation"
+    #: An externally visible record (message, page, ticket, annotation). Never retried
+    #: after an unknown outcome; compensated by a follow-up record, never "rolled back".
+    EXTERNAL_RECORD = "external_record"
+
+
+@unique
+class IntegrationKind(StrEnum):
+    """External systems with a native adapter (master specification section 14)."""
+
+    PROMETHEUS = "prometheus"
+    LOKI = "loki"
+    KUBERNETES = "kubernetes"
+    SLACK = "slack"
+    TEAMS = "teams"
+    PAGERDUTY = "pagerduty"
+    JIRA = "jira"
+    GRAFANA = "grafana"
+
+
+@unique
+class IntegrationFailureClass(StrEnum):
+    """Normalised vendor failure categories. Recorded on every failed execution."""
+
+    UNAUTHORIZED = "unauthorized"
+    FORBIDDEN = "forbidden"
+    NOT_FOUND = "not_found"
+    CONFLICT = "conflict"
+    RATE_LIMITED = "rate_limited"
+    TIMEOUT = "timeout"
+    TRANSIENT_UNAVAILABLE = "transient_unavailable"
+    MALFORMED_RESPONSE = "malformed_response"
+    INVALID_REQUEST = "invalid_request"
+    SCOPE_DENIED = "scope_denied"
+    CONFIGURATION_ERROR = "configuration_error"
+    UNKNOWN_OUTCOME = "unknown_outcome"
+
+
+@unique
+class ExecutionMode(StrEnum):
+    """How a deployment's tool providers are composed. Never mixed within one broker.
+
+    ``LIVE`` uses native adapters against real systems; ``SIMULATOR`` uses deterministic
+    scenario fixtures; ``REPLAY`` re-serves recorded results. Evaluation metadata records
+    which one produced a result, so a simulated outcome is never reported as live.
+    """
+
+    LIVE = "live"
+    SIMULATOR = "simulator"
+    REPLAY = "replay"
+
+
+@unique
 class ToolExecutionOutcome(StrEnum):
     SUCCEEDED = "succeeded"
     #: Failed with certainty that no effect was applied.

@@ -3,21 +3,16 @@
 This directory holds every non-code artifact required by the master specification
 (section 16, "REQUIRED ARCHITECTURE/DOCUMENTATION").
 
-> **Current project stage: Phase 7 complete — bounded investigation agents, evidence
-> reasoning and bounded reflection.** A bounded, read-only, simulator-backed incident
-> investigation runs end to end through a typed graph with a capability broker, durable
-> checkpointing and structured traces, retrieves versioned operational knowledge through
-> the same broker as every other capability, and now reflects on its own hypotheses within
-> hard structural limits: continuing on a different gap, deliberately seeking counter-
-> evidence, revising a hypothesis (superseding it, never silently replacing it), or
-> proposing a terminal outcome — always validated by a deterministic guard, never trusted
-> as the model stated it, and always resolved through the same five-category termination
-> rule set every other outcome already used. A governed memory write path lets a human,
-> never a model and never storage alone, promote a verified outcome or an operational fact
-> into durable memory.
-> **No remediation, no external integration, no API and no frontend exists**, and no
-> capability above risk tier `RO` is registered. No metric anywhere in this directory is a
-> measurement beyond what is explicitly labelled as measured on a stated corpus.
+> **Current project stage: Phase 10 complete - external integrations.** Bounded,
+> tenant-aware investigation and safety-gated remediation run through one capability broker.
+> Phase 10 adds native Prometheus, Loki, Kubernetes, Slack, Microsoft Teams, PagerDuty, Jira
+> and Grafana adapters behind that broker, with server-side connector authority, credential
+> references resolved only at the execution boundary, normalised failure classes and a
+> deterministic notification service. These adapters are validated against **local
+> deterministic HTTP servers only**; no live vendor system has been exercised. The evaluation
+> harness (Phase 11) and observability completion (Phase 12) are not yet built. No metric
+> anywhere in this directory is a measurement beyond what is explicitly labelled as measured
+> on a stated corpus.
 
 ## Start here
 
@@ -35,7 +30,8 @@ area and points to the document that owns the detail.
 | [`architecture/tenancy-and-rls.md`](./architecture/tenancy-and-rls.md) | How tenant isolation survives an application bug | **Implemented and tested** |
 | [`architecture/orchestration-kernel.md`](./architecture/orchestration-kernel.md) | The graph, node contracts, tool broker, budgets, checkpointing and trace model | **Implemented and tested** |
 | [`architecture/bounded-reflection.md`](./architecture/bounded-reflection.md) | The reflection decision loop: vocabulary, deterministic guards, hypothesis revision, failure handling | **Implemented and tested** |
-| [`adr/`](./adr/) | 20 Architecture Decision Records | **15 Accepted**; the remainder proposed or deferred |
+| [`architecture/integrations.md`](./architecture/integrations.md) | Native external adapters, connector authority, credentials, failure model | **Implemented; tested against local servers only** |
+| [`adr/`](./adr/) | Architecture Decision Records | See the ADR index for current status |
 | [`security/`](./security/) | Threat model (§L) and the active repository security checklist | **Authored** |
 | [`evaluation/`](./evaluation/) | Evaluation harness architecture (§I) | **Authored** |
 

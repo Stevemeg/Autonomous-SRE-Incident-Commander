@@ -56,6 +56,20 @@ tool_refusals_total = _meter.create_counter(
     "asic.tool.refusals",
     description="Capability requests refused by the broker, by the pipeline stage that refused.",
 )
+integration_calls_total = _meter.create_counter(
+    "asic.integration.calls",
+    description=(
+        "Native external-integration calls, by integration kind, outcome and normalised "
+        "failure class. All three dimensions are closed vocabularies."
+    ),
+)
+notification_failures_total = _meter.create_counter(
+    "asic.notification.failures",
+    description=(
+        "Notification announcements that could not run at all (infrastructure failure), by "
+        "event type. Per-destination failures are integration calls with a failure class."
+    ),
+)
 investigation_iterations = _meter.create_histogram(
     "asic.investigation.iterations",
     description="Planning iterations consumed per run.",
@@ -120,11 +134,13 @@ __all__ = [
     "checkpoints_total",
     "hypothesis_revisions_total",
     "injection_flags_total",
+    "integration_calls_total",
     "investigation_iterations",
     "llm_calls_total",
     "llm_tokens_total",
     "node_duration_seconds",
     "node_failures_total",
+    "notification_failures_total",
     "reflection_decisions_total",
     "resumes_total",
     "runs_terminated_total",

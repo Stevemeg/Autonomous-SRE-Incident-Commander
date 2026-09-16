@@ -55,7 +55,12 @@ def precondition_holds(name: str, arguments: Mapping[str, Any], payload: Mapping
 def effect_observed(tool: str, arguments: Mapping[str, Any], payload: Mapping[str, Any]) -> bool:
     if tool == "k8s.deployment.rollback":
         fields = resource(payload, "Deployment", arguments.get("deployment"))
-        return fields.get("revision") == str(arguments.get("to_revision"))
+        target = str(arguments.get("to_revision"))
+        # A real API server renumbers the ReplicaSet it rolls back to and records the
+        # revision it replaced in ``revision_history``. That exact, explicit identity also
+        # counts - a missing or malformed history never does.
+        history = fields.get("revision_history", "")
+        return fields.get("revision") == target or target in history.split(",")
     if tool == "k8s.hpa.adjust":
         fields = resource(payload, "HorizontalPodAutoscaler", arguments.get("hpa_name"))
         return fields.get("min") == str(arguments.get("min_replicas")) and fields.get("max") == str(

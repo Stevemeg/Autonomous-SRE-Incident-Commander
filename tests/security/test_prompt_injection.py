@@ -67,18 +67,40 @@ class TestStructuralProperties:
             "asic.tools.provider",
             "asic.tools.registry",
         }
-        node_dir = Path(__file__).resolve().parents[2] / "src" / "asic" / "orchestration" / "nodes"
+        # Phase 10: native adapters are reachable only through the broker, from any node in
+        # either graph (remediation nodes legitimately look descriptors up in the registry).
+        integrations = {
+            "asic.integrations",
+            "asic.integrations.base",
+            "asic.integrations.provider",
+            "asic.integrations.transport",
+            "asic.integrations.credentials",
+            "asic.integrations.kubernetes",
+            "asic.integrations.prometheus",
+            "asic.integrations.loki",
+            "asic.integrations.collaboration",
+            "asic.integrations.composition",
+        }
+        orchestration = Path(__file__).resolve().parents[2] / "src" / "asic" / "orchestration"
+        checks = [
+            (path, forbidden | integrations)
+            for path in sorted((orchestration / "nodes").glob("*.py"))
+        ]
+        checks += [
+            (path, integrations)
+            for path in sorted((orchestration / "remediation" / "nodes").glob("*.py"))
+        ]
         offenders: list[str] = []
-        for path in sorted(node_dir.glob("*.py")):
+        for path, banned in checks:
             tree = ast.parse(path.read_text(encoding="utf-8"))
             for statement in ast.walk(tree):
-                if isinstance(statement, ast.ImportFrom) and statement.module in forbidden:
+                if isinstance(statement, ast.ImportFrom) and statement.module in banned:
                     offenders.append(f"{path.name} imports {statement.module}")
                 elif isinstance(statement, ast.Import):
                     offenders.extend(
                         f"{path.name} imports {alias.name}"
                         for alias in statement.names
-                        if alias.name in forbidden
+                        if alias.name in banned
                     )
         assert offenders == [], "a node reached past the broker: " + "; ".join(offenders)
 

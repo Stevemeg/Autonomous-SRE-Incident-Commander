@@ -112,6 +112,20 @@ class ToolRegistry:
             version=f"{CATALOGUE_VERSION}+{REMEDIATION_CATALOGUE_VERSION}",
         )
 
+    @classmethod
+    def integrations(cls) -> ToolRegistry:
+        """The Phase 10 external-record catalogue (ADR-0026), for the S2 service only.
+
+        Separate from both other catalogues: the investigation kernel cannot see a message
+        tool, and the remediation kernel cannot page anyone.
+        """
+        from asic.tools.integration_catalogue import (
+            INTEGRATION_CATALOGUE,
+            INTEGRATION_CATALOGUE_VERSION,
+        )
+
+        return cls(INTEGRATION_CATALOGUE, version=INTEGRATION_CATALOGUE_VERSION)
+
     @property
     def version(self) -> str:
         return self._version
@@ -207,6 +221,7 @@ def _compare(descriptor: ToolDescriptor, row: ToolDefinition) -> Iterable[str]:
     checks: tuple[tuple[str, object, object], ...] = (
         ("capability", descriptor.capability, row.capability),
         ("risk_tier", descriptor.risk_tier, row.risk_tier),
+        ("effect_class", descriptor.effect_class, row.effect_class),
         ("major_version", descriptor.major_version, row.major_version),
         ("timeout_seconds", descriptor.timeout_seconds, row.timeout_seconds),
         ("settling_seconds", descriptor.settling_seconds, row.settling_seconds),

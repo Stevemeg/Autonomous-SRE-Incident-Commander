@@ -10,7 +10,13 @@ from __future__ import annotations
 from asic.db.base import Base, metadata_obj
 from asic.db.models.api import ApiIdempotencyRecord
 from asic.db.models.audit import AuditRecord
-from asic.db.models.catalog import ConnectorScopeBinding, Environment, Service, ServiceDependency
+from asic.db.models.catalog import (
+    ConnectorScopeBinding,
+    Environment,
+    IntegrationConnector,
+    Service,
+    ServiceDependency,
+)
 from asic.db.models.evaluation import (
     BehaviourVersion,
     EvaluationRun,
@@ -126,6 +132,7 @@ __all__ = [
     "Incident",
     "IncidentEvent",
     "IncidentReopenCandidate",
+    "IntegrationConnector",
     "InvestigationDispatch",
     "InvestigationStep",
     "KnowledgeChunk",

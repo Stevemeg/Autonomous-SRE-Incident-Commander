@@ -37,12 +37,28 @@ from asic.db.base import (
 )
 from asic.domain.enums import (
     ActorType,
+    IntegrationFailureClass,
     NodeId,
     RiskTier,
+    ToolEffectClass,
     ToolExecutionOutcome,
     ToolProviderKind,
 )
 from asic.domain.idempotency import KEY_LENGTH
+
+
+def _default_effect_class(context: Any) -> str:
+    """Derive the class from the tier when a caller omits it.
+
+    Never yields ``external_record``: that class is only ever declared explicitly.
+    """
+    tier = context.get_current_parameters().get("risk_tier")
+    value = getattr(tier, "value", tier)
+    return (
+        ToolEffectClass.READ.value
+        if value == RiskTier.RO.value
+        else ToolEffectClass.INFRASTRUCTURE_MUTATION.value
+    )
 
 
 class ToolDefinition(Base, TimestampMixin):
@@ -71,6 +87,12 @@ class ToolDefinition(Base, TimestampMixin):
         default=ToolProviderKind.NATIVE,
     )
     risk_tier: Mapped[RiskTier] = mapped_column(enum_column(RiskTier, "risk_tier"), nullable=False)
+    #: Read, infrastructure mutation or external record (ADR-0026). Added by migration 0016.
+    effect_class: Mapped[ToolEffectClass] = mapped_column(
+        enum_column(ToolEffectClass, "tool_effect_class"),
+        nullable=False,
+        default=_default_effect_class,
+    )
 
     #: Typed argument schema. Validated on insert against the forbidden-field list.
     input_schema: Mapped[dict[str, Any]] = mapped_column(pg.JSONB, nullable=False)
@@ -118,10 +140,21 @@ class ToolDefinition(Base, TimestampMixin):
         # SI-5: destructive actions are not expressible. A capability the system cannot
         # name is safer than one it is instructed not to use.
         sa.CheckConstraint("risk_tier <> 'r3'", name="no_destructive_tool_registered"),
-        # A write tool must declare how to undo itself.
+        # An infrastructure write must declare how to undo itself. An external record
+        # (message, page, ticket) cannot be un-sent and declares no invented rollback.
         sa.CheckConstraint(
-            "risk_tier = 'ro' OR rollback_tool_name IS NOT NULL",
+            "risk_tier = 'ro' OR effect_class = 'external_record' "
+            "OR rollback_tool_name IS NOT NULL",
             name="write_tool_declares_rollback",
+        ),
+        sa.CheckConstraint(
+            "(risk_tier = 'ro') = (effect_class = 'read')",
+            name="read_effect_matches_tier",
+        ),
+        sa.CheckConstraint(
+            "effect_class <> 'external_record' OR "
+            "(risk_tier = 'r1' AND rollback_tool_name IS NULL AND settling_seconds = 0)",
+            name="external_record_is_low_risk_without_rollback",
         ),
         # A read-only tool must not carry a settling delay or rollback: it changes nothing.
         sa.CheckConstraint(
@@ -267,6 +300,20 @@ class ToolExecution(Base, TenantScoped, CreatedAtMixin):
 
     correlation_id: Mapped[uuid.UUID] = mapped_column(pg.UUID(as_uuid=True), nullable=False)
 
+    #: Derived by a database trigger from the definition when omitted, and refused when a
+    #: caller supplies a class that disagrees with it (migration 0016).
+    effect_class: Mapped[ToolEffectClass | None] = mapped_column(
+        enum_column(ToolEffectClass, "tool_effect_class"), nullable=False
+    )
+    #: The tenant connector that served the call, for native integrations only.
+    connector_id: Mapped[str | None] = mapped_column(sa.String(255), nullable=True)
+    #: Normalised failure category (never vendor text alone).
+    failure_class: Mapped[IntegrationFailureClass | None] = mapped_column(
+        enum_column(IntegrationFailureClass, "integration_failure_class"), nullable=True
+    )
+    #: The external system's identifier for what was created (ticket key, message ts).
+    external_reference: Mapped[str | None] = mapped_column(sa.String(255), nullable=True)
+
     __table_args__ = (
         *tenant_identity_constraints("tool_execution"),
         tenant_fk("incident_id", "incident", ondelete="CASCADE", name="fk_tool_execution_incident"),
@@ -302,8 +349,20 @@ class ToolExecution(Base, TenantScoped, CreatedAtMixin):
         # A non-read-only execution must belong to a remediation action, which is what
         # forces it through the policy gate.
         sa.CheckConstraint(
-            "risk_tier = 'ro' OR remediation_action_id IS NOT NULL",
+            "risk_tier = 'ro' OR effect_class = 'external_record' "
+            "OR remediation_action_id IS NOT NULL",
             name="write_execution_requires_action",
+        ),
+        # An external record is sent only by the deterministic notification service, and
+        # never under a remediation action's authority.
+        sa.CheckConstraint(
+            "effect_class <> 'external_record' OR (remediation_action_id IS NULL "
+            "AND requested_by_node = 's2_notification_service')",
+            name="external_record_from_notification_service",
+        ),
+        sa.CheckConstraint(
+            "(outcome IS DISTINCT FROM 'succeeded') OR failure_class IS NULL",
+            name="succeeded_has_no_failure_class",
         ),
         sa.Index("ix_tool_execution_incident", "tenant_id", "incident_id"),
         sa.Index("ix_tool_execution_action", "tenant_id", "remediation_action_id"),

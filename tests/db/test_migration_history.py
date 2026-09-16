@@ -174,6 +174,7 @@ class TestPinnedListsMatchHistory:
             "remediation_baseline",
             "model_call_reservation",
             "connector_scope_binding",
+            "integration_connector",
         }
 
     def test_post_phase_3_append_only_additions(self, phase_3_tables: dict[str, list[str]]) -> None:
@@ -455,6 +456,7 @@ class TestUpgradePaths:
             "remediation_baseline",
             "model_call_reservation",
             "connector_scope_binding",
+            "integration_connector",
         }
 
     def test_accepted_phase_5_head_upgrades_to_current_head(self, throwaway_database: str) -> None:
@@ -469,8 +471,47 @@ class TestUpgradePaths:
             with engine.connect() as conn:
                 assert (
                     conn.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one()
-                    == "0015_verified_memory_ledger"
+                    == "0016_external_integrations"
                 )
+        finally:
+            engine.dispose()
+
+    def test_phase10_integration_migration_round_trips_from_0015(
+        self, throwaway_database: str
+    ) -> None:
+        config = _alembic_config(throwaway_database)
+        command.upgrade(config, "0015_verified_memory_ledger")
+        engine = sa.create_engine(throwaway_database)
+
+        def state() -> tuple[bool, bool, int, int]:
+            with engine.connect() as connection:
+                columns = {
+                    column["name"]
+                    for column in sa.inspect(connection).get_columns("tool_execution")
+                }
+                tables = set(sa.inspect(connection).get_table_names())
+                trigger = connection.scalar(
+                    sa.text(
+                        "SELECT count(*) FROM pg_trigger WHERE tgname = "
+                        "'derive_tool_execution_effect_class' AND NOT tgisinternal"
+                    )
+                )
+                records = connection.scalar(
+                    sa.text(
+                        "SELECT count(*) FROM tool_definition WHERE capability LIKE 'notify.%' "
+                        "OR capability LIKE 'write.%'"
+                    )
+                )
+            return ("effect_class" in columns, "integration_connector" in tables, trigger, records)
+
+        try:
+            assert state() == (False, False, 0, 0)
+            command.upgrade(config, "0016_external_integrations")
+            assert state() == (True, True, 1, 6)
+            command.downgrade(config, "0015_verified_memory_ledger")
+            assert state() == (False, False, 0, 0)
+            command.upgrade(config, "0016_external_integrations")
+            assert state() == (True, True, 1, 6)
         finally:
             engine.dispose()
 

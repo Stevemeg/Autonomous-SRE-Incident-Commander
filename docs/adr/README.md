@@ -6,8 +6,8 @@
 > accepted the decisions whose evidence now exists; the table below is authoritative for
 > current status. ADRs 0012-0014 were raised during Phase 3, 0015-0018 during Phase 4 and
 > its migration-history correction, 0019 during Phase 5, 0022 during Phase 7, and 0023
-> during Phase 8, 0024 during Phase 9, and 0025 during the Phase 6–9 audit correction. ADR numbers 0020 and 0021 are reserved by forward references left in the
-> Phase 6 correction (the `provider_kind` label defect and a retrieval-quality bound) and are
+> during Phase 8, 0024 during Phase 9, and 0025 during the Phase 6–9 audit correction. ADR 0020 (the `provider_kind` label) was written in Phase 10; 0021 remains reserved by a
+> forward reference left in the Phase 6 correction (a retrieval-quality bound) and is
 > not yet written; Phase 7 and Phase 8 number their own records 0022 and 0023 rather than
 > collide with them.
 
@@ -87,10 +87,13 @@ not replace an accepted ADR.
 | [0017](./0017-read-only-capability-ceiling.md) | A read-only capability ceiling enforced in three independent places | **`Accepted`** | 6, 7, 15 | 2026-09-07 |
 | [0018](./0018-migrations-are-historical-contracts.md) | Migrations are historical contracts and never read live application code | **`Accepted`** | 12, 15, 20 | 2026-09-09 |
 | [0019](./0019-transactional-signal-ingestion.md) | Transactional signal ingestion and durable investigation requests | **`Accepted`** | 12, 14, 15, 17 | 2026-09-11 |
+| [0020](./0020-provider-kind-label-and-execution-mode-composition.md) | `provider_kind` is a catalogue label; execution mode decides providers | **`Accepted`** | 7, 14, 20 | 2026-09-16 |
 | [0022](./0022-bounded-reflection-without-a-new-node.md) | Bounded reflection extends the hypothesis engine's output, not a new graph node | **`Accepted`** | 3, 4, 15 | 2026-09-13 |
 | [0023](./0023-bounded-remediation-as-a-separate-graph.md) | Bounded remediation runs as a separate graph/kernel, entered only from a human-reopened investigation | **`Accepted`** | 3, 6, 17 | 2026-09-14 |
 | [0024](./0024-phase9-api-and-dashboard.md) | Authenticated API edge and server-rendered incident-command dashboard | **`Accepted`** | 15, 16 | 2026-09-14 |
 | [0025](./0025-freeze-remediation-authority-before-effects.md) | Freeze remediation authority before operational effects | **`Accepted`** | 5, 6, 12, 15 | 2026-09-15 |
+| [0026](./0026-external-integrations-behind-the-broker.md) | External integrations are native adapters behind the broker, with server-side connector authority | **`Accepted`** | 6, 7, 11, 14, 15, 20 | 2026-09-16 |
+| [0027](./0027-loki-as-the-log-backend.md) | Loki is the log backend adapter; Elasticsearch/OpenSearch is not built | **`Accepted`** | 13, 14 | 2026-09-16 |
 
 ## Priority order for acceptance
 
@@ -155,6 +158,14 @@ during implementation become ADRs rather than being made silently:
 |---|---|---|
 | [0025](./0025-freeze-remediation-authority-before-effects.md) | Target reconstruction, cached write grants, model-selected thresholds and replay-before-authorization each allowed stale or untrusted data to cross an authority boundary | migration `0013_audit_corrections`; remediation, API, budget and lifecycle mutation tests |
 
+## Decisions raised by Phase 10
+
+| ADR | Discovered because | Evidence |
+|---|---|---|
+| [0020](./0020-provider-kind-label-and-execution-mode-composition.md) | Native adapters arrived for tools whose historical seed label says `simulator`; runtime provider choice needed an explicit, unmixable composition | `TestComposition`, `TestNoSimulatedFallback` |
+| [0026](./0026-external-integrations-behind-the-broker.md) | Outbound calls needed tenant connector authority, secret handling, and an honest classification for records that cannot be rolled back | `tests/integrations/`, migration `0016_external_integrations` |
+| [0027](./0027-loki-as-the-log-backend.md) | Candidate decision C1 (log backend) had to be settled to build `logs.query` | `tests/integrations/test_adapters.py::TestLoki` |
+
 ## Candidate decisions still to be written
 
 Identified during the Architecture Package but not yet ADRs, because the evidence to decide
@@ -162,7 +173,7 @@ them does not exist. Recorded so the scope is visible.
 
 | # | Candidate decision | Spec ref | Blocked until |
 |---|---|---|---|
-| C1 | Telemetry log backend: Loki vs Elasticsearch/OpenSearch | 14 | Phase 10 — depends on adapter experience |
+| C1 | ~~Telemetry log backend: Loki vs Elasticsearch/OpenSearch~~ | 14 | **Resolved by ADR-0027** |
 | C2 | Integration simulator design and replay-fixture format | 14 | Phase 4 — needs the first adapter |
 | C3 | Evaluation judge model strategy and calibration approach | 9 | Phase 11 — needs a labelled corpus |
 | C4 | Frontend scope and framework commitment beyond Next.js baseline | 13 | Deferred beyond Phase 9; ADR-0024 fixes the Phase 9 baseline |

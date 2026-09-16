@@ -25,10 +25,10 @@ approval, verifies outcomes, and preserves operational memory.
 >
 > | | |
 > |---|---|
-> | **Completed** | Phase 0 bootstrap · Phase 1 requirements · Phase 2 architecture · Phase 3 persistence · Phase 4 orchestration · Phase 5 telemetry ingestion and correlation · Phase 6 operational knowledge, RAG and governed memory · Phase 7 bounded investigation · Phase 8 bounded remediation · **Phase 9 authenticated API, RBAC and dashboard** |
-> | **In progress** | Nothing — Phase 9 is complete |
-> | **Next** | Phase 10 external integrations (not started) |
-> | **External integrations** | Deferred to Phase 10; Phase 8 execution uses deterministic simulators |
+> | **Completed** | Phase 0 bootstrap · Phase 1 requirements · Phase 2 architecture · Phase 3 persistence · Phase 4 orchestration · Phase 5 telemetry ingestion and correlation · Phase 6 operational knowledge, RAG and governed memory · Phase 7 bounded investigation · Phase 8 bounded remediation · Phase 9 authenticated API, RBAC and dashboard · **Phase 10 external integrations** |
+> | **In progress** | Nothing — Phase 10 is complete |
+> | **Next** | Phase 11 evaluation harness, replay and regression framework |
+> | **External integrations** | Native Prometheus, Loki, Kubernetes, Slack, Teams, PagerDuty, Jira and Grafana adapters behind the broker, validated against **local deterministic servers only** — no live vendor system has been exercised ([integrations](docs/architecture/integrations.md)) |
 >
 > Phase 4 delivered five graph nodes under enforced contracts, a tool broker that is the
 > sole egress point, six deterministic simulators, eleven scenarios, budgets checked before
@@ -86,7 +86,7 @@ people do.
 | Capability | Status |
 |---|---|
 | Intelligent alert correlation into coherent incidents | **Deterministic v2 built** — database-filtered service, environment, category and fixed time window with a stable tie-break; no LLM correlation |
-| Autonomous investigation across logs, metrics, traces, Kubernetes, deployments and configuration changes | **Simulator-backed** — orchestration, authorization and the evidence path are built; no real adapter exists |
+| Autonomous investigation across logs, metrics, traces, Kubernetes, deployments and configuration changes | **Native adapters built (Phase 10)** for metrics, logs, Kubernetes state and deployment history, tested against local servers; traces remain simulator-only |
 | Ranked RCA hypotheses with evidence, confidence and counter-evidence | **Structure built** — citation integrity and the confidence ceiling are enforced in code; reasoning quality is unmeasured |
 | Operational RAG over runbooks, service docs, known errors and postmortems | **Phase 6 built** — governed ingestion, authorization-first hybrid retrieval and current-authority citation replay; semantic quality is unmeasured |
 | Evidence-backed incident timeline reconstruction | **Built** — a deterministic projection over the event log |
@@ -94,12 +94,13 @@ people do.
 | Human approval before risky or irreversible actions | **Phase 8 exact-effect approval** |
 | Controlled remediation using permission-scoped tools only | **Phase 8 broker-enforced** |
 | Independent post-remediation verification | **Phase 8 fail-closed verifier** |
-| Slack/Teams collaboration and PagerDuty/Jira workflows | Not started |
+| Slack/Teams collaboration and PagerDuty/Jira workflows | **Phase 10 outbound built** — deterministic S2 notifications through the broker; inbound chat approval intentionally not built |
 | Historical incident replay for testing and evaluation | Not started |
 | Governed operational memory and learning | **Phase 6/8 built** — human-gated T4/T5 promotion; verified remediation memory requires complete trusted G10 baseline and independent post-read lineage |
 
-Where a row says *built*, it means built against deterministic simulators and covered by
-tests — not exercised against production telemetry, which is Phase 10.
+Where a row says *built*, it means built and covered by tests against deterministic
+simulators or local test servers — not exercised against production telemetry or any live
+vendor account.
 
 ### Design commitments
 

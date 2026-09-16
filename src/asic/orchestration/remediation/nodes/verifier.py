@@ -60,7 +60,7 @@ from asic.remediation.trust import (
     observation_provenance,
     trusted_baseline_record,
 )
-from asic.remediation.verification import VerificationProfile, profile_for
+from asic.remediation.verification import VerificationProfile, profile_for_criteria
 from asic.tools.broker import CapabilityRequest
 from asic.tools.registry import ToolRegistry
 
@@ -86,7 +86,7 @@ def verifier_node(deps: RemediationDependencies) -> Any:
                 )
             ).scalar_one()
             descriptor = ToolRegistry.remediation_full().by_name(action.tool_name)
-            profile = profile_for(action.tool_name)
+            profile = profile_for_criteria(action.tool_name, action.verification_criteria)
             target = deps.session.execute(
                 sa.select(RemediationTarget).where(
                     RemediationTarget.id == action.remediation_target_id

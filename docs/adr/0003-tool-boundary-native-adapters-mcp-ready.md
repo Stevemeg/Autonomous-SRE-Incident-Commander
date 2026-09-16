@@ -9,6 +9,9 @@
   investigation through this provider and the broker, and through nothing else; there is no
   second, uncontrolled egress path for retrieved content. See
   [`../architecture/memory-and-rag.md`](../architecture/memory-and-rag.md) §2.3.
+  Phase 10 adds `NativeIntegrationProvider` for Prometheus, Loki, Kubernetes, Slack, Teams,
+  PagerDuty, Jira and Grafana under the same seam; still no MCP provider. See
+  [ADR-0026](./0026-external-integrations-behind-the-broker.md).
 - **Date:** 2026-09-04
 - **Deciders:** Project owner (pending approval)
 - **Spec reference:** §7, §13, §14, §15, §20 of [`../spec/MASTER_PROJECT_PROMPT_V3.md`](../spec/MASTER_PROJECT_PROMPT_V3.md)

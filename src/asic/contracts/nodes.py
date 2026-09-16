@@ -713,6 +713,56 @@ G10_VERIFIER: Final = NodeContract(
 )
 
 
+#: Capabilities of the deterministic notification service (S2, Phase 10). External records
+#: only - nothing here reads telemetry or mutates infrastructure.
+NOTIFICATION_CAPABILITIES: Final[frozenset[str]] = frozenset(
+    {
+        "notify.slack_channel",
+        "notify.teams_channel",
+        "write.pagerduty_event",
+        "write.jira_issue",
+        "write.jira_comment",
+        "write.grafana_annotation",
+    }
+)
+
+S2_NOTIFICATION_SERVICE: Final = NodeContract(
+    node_id=NodeId.S2_NOTIFICATION_SERVICE,
+    node_version="1.0.0",
+    contract_version="1.0.0",
+    purpose=(
+        "Render deterministic templates from incident records and deliver them to the "
+        "tenant's configured collaboration, paging, ticketing and dashboard systems through "
+        "the tool broker. Not a graph node and not a reasoning component."
+    ),
+    inputs=("incident", "notification_event"),
+    outputs=("delivery_receipts",),
+    # A derived service writes no graph state at all.
+    permitted_state_keys=frozenset(),
+    capabilities=NOTIFICATION_CAPABILITIES,
+    model_backed=False,
+    timeout_seconds=60,
+    retry=RetryContract(max_attempts=1, operation_class=OperationClass.C3_NON_IDEMPOTENT_WRITE),
+    idempotency=(
+        "Each delivery is keyed on a deterministic event id derived from the tenant, "
+        "incident, event type and source record; the broker's durable effect claim refuses "
+        "a second dispatch, so a transition produces at most one record per destination."
+    ),
+    failure_modes=(
+        "connector not configured or binding revoked (refused, no request sent)",
+        "credential unavailable (failed clean)",
+        "vendor rejection or rate limit (failed clean)",
+        "timeout after sending (unknown outcome; never re-sent)",
+    ),
+    termination_behaviour=(
+        "Returns one typed receipt per destination and never raises into the incident "
+        "workflow: a delivery failure never fails the incident."
+    ),
+    audit_events=(AuditEventType.TOOL_EXECUTED, AuditEventType.TOOL_AUTHORIZATION_EVALUATED),
+    span_kind=TraceSpanKind.INTEGRATION_CALL,
+)
+
+
 #: Graph-node key -> contract. Keyed by the graph node name rather than by
 #: :class:`~asic.domain.enums.NodeId` because the coordinator contributes two nodes to the
 #: graph - entry routing and termination - with different permitted mutations.
@@ -742,6 +792,8 @@ def contract_for(graph_node: str) -> NodeContract:
 
 __all__ = [
     "NODE_CONTRACTS",
+    "NOTIFICATION_CAPABILITIES",
+    "S2_NOTIFICATION_SERVICE",
     "NodeContract",
     "RetryContract",
     "contract_for",

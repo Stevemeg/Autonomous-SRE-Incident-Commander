@@ -136,7 +136,9 @@ what an attacker could attempt, and what actually stops it.
 | **Deployment metadata** | `deploy.read` | Inject in a commit message or release note | `RETRIEVED`; used as evidence, never as instruction |
 | **Model output** | LLM provider | Fabricate evidence IDs; propose unregistered tools; widen scope via arguments | Schema validation; evidence IDs verified to exist; unregistered tools rejected without repair; scope resolved from context, not from arguments |
 | **Telemetry values** | Metrics/traces adapters | Poison metrics to steer a hypothesis | Trusted for *values* only; corroboration across domains; human approval before production action |
-| **Approval replies** (Slack) | Collaboration adapter | Spoof an approval message | Chat identity must resolve to an RBAC identity; approval bound to `action_version_hash`; self-approval rejected |
+| **Approval replies** (Slack) | Collaboration adapter | Spoof an approval message | Phase 10 builds **outbound collaboration only**: no inbound chat path exists, so a chat message cannot reach approval at all. Approval remains the authenticated approval API; a future inbound path must resolve an RBAC identity and bind to `action_version_hash` |
+| **External API responses** (Phase 10) | Prometheus, Loki, Kubernetes, Slack, Teams, PagerDuty, Jira, Grafana adapters | Return oversized, redirecting, contradictory or instruction-bearing payloads; echo tokens in errors | Size-capped responses, no redirects, strict parsing with `malformed_response` on doubt, vendor error bodies never persisted, log/event text bounded to single-line display text and returned as data |
+| **Incident titles in outbound records** (Phase 10) | S2 notification templates | Ping a channel (`<!channel>`), forge a link, inject newlines into a message or observation | Bounded display text with every control character removed; Slack mrkdwn and Markdown escaped per destination; destination never an argument |
 
 ### 4.1 The point worth restating
 
@@ -219,6 +221,10 @@ STRIDE-derived, ordered by severity. Likelihood is qualitative and pre-mitigatio
 | T16 | Evaluation baseline tampering hides regressions | Tampering | Medium | Low | Baselines versioned in Git; runs immutable; CI-signed | Low |
 | T17 | PII in incident data beyond retention | Compliance | Medium | Medium | Retention policy per class; redaction at ingestion; deletion workflows | Depends on customer log hygiene |
 | T18 | Insider platform-admin abuse | Elevation | High | Low | Separation of duties; admin actions audited; step-up auth; no self-approval | Requires organisational control |
+| T19 | Connector redirection: rewrite an endpoint to exfiltrate authenticated requests (Phase 10) | Disclosure | High | Low | `integration_connector` read-only to the application role; https only; no userinfo/query in endpoints; host allowlists for SaaS endpoints; no redirects followed | Administrator-level configuration compromise |
+| T20 | Stale or cross-tenant connector authority (Phase 10) | Elevation | High | Medium | Connector and scope binding resolved from tenant-bound rows on every call, before idempotent replay; revocation refuses the next call | Low |
+| T21 | Duplicate or phantom external records after an unknown outcome (Phase 10) | Tampering | Medium | Medium | Durable effect claim per deterministic event id; unknown outcomes never retried; `failed_clean` only when an adapter proves no effect | A lost message after a genuinely unknown outcome is reported, not re-sent |
+| T22 | Simulator or fixture data answering for a live system (Phase 10) | Tampering | High | Low | Live composition is native-only with production credentials; the broker refuses mixed providers; no provider fall-through on failure | Low |
 
 ---
 
@@ -234,6 +240,7 @@ STRIDE-derived, ordered by severity. Likelihood is qualitative and pre-mitigatio
 | In telemetry | Redacted at emission (SEC-I6) |
 | Rotation | Scheduled; **mandatory and immediate on any suspected exposure** |
 | CI | Repository secret scanning; `scripts/check_repo_hygiene.py` pre-commit; gitleaks in CI from Phase 14 |
+| Implemented (Phase 10) | Connector rows hold `asic/...` references only (check constraint). `EnvironmentCredentialProvider` resolves mounted secret files or environment variables per call and fails closed; resolved secrets exist only as a non-renderable `SecretValue` inside the outbound request. Kubernetes read and write references must differ. External secret-manager integration (Vault/KMS) remains a deployment concern for Phase 14 |
 
 ---
 

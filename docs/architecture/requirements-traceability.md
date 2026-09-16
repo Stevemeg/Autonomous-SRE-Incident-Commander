@@ -24,6 +24,24 @@ terminal dispatch, read-only trigger deduplication,
 pre-drive crash recovery, trace redaction and migration clean/accepted-head/round-trip/drift.
 No production scale or performance result is implied.
 
+## Phase 10 implementation evidence
+
+[`integrations.md`](./integrations.md), `src/asic/integrations`, `src/asic/notifications`
+and `tests/integrations` implement native adapters behind the broker. Evidence is
+**INTEGRATION + LOCAL SERVICE** (deterministic local HTTP servers under the unprivileged
+application role); no live vendor system was exercised.
+
+| Requirement | Implemented evidence and limits |
+|---|---|
+| FR-INT-01 | Prometheus, Loki, Kubernetes, Slack, Teams, PagerDuty, Jira and Grafana adapters behind `NativeIntegrationProvider`; OpenTelemetry trace context propagated on outbound calls. No trace-store adapter and no Elasticsearch/OpenSearch (ADR-0027) |
+| FR-INT-02 | Existing deterministic simulators unchanged; adapter contract tests use deterministic local servers. Recorded replay fixtures are Phase 11 |
+| FR-INT-03 | The whole suite runs against local servers and PostgreSQL only |
+| FR-INT-04 | Live composition refuses test credentials, loopback endpoints and non-native providers; the broker refuses mixed live/simulated providers (ADR-0020). Build-level exclusion remains Phase 14 |
+| FR-CLB-01 | S2 notification service delivers typed records to Slack, Teams, PagerDuty, Jira and Grafana through the broker |
+| FR-CLB-02 | Deterministic event ids and durable effect claims; unknown outcomes never re-sent; a failing destination or notification infrastructure never fails the investigation |
+| FR-CLB-03 | No inbound chat approval path exists; approval authority remains the authenticated approval API |
+| NFR-SEC-04 | Per-tenant connector references, separate Kubernetes read/write credentials, per-call resolution with fail-closed production provider |
+
 ## Phase 9 implementation evidence
 
 [`phase9-api-dashboard.md`](./phase9-api-dashboard.md), `src/asic/api`, `frontend/`, and
@@ -121,7 +139,7 @@ Every requirement identifier defined in the SRS appears here exactly once, mappe
 architecture component that will satisfy it, the phase in which it is built, how it will be
 validated, and the acceptance criterion.
 
-> **Implementation status.** Phases 3 through 8 are complete; later phases are not started.
+> **Implementation status.** Phases 3 through 10 are complete; later phases are not started.
 > Rather than repeat a status column 138 times, the rule is: a requirement is
 > implemented **only** where a passing test is named in the Validation column *and* that
 > test exists and passes today.

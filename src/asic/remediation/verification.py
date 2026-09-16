@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from collections.abc import Mapping
+from dataclasses import asdict, dataclass, replace
 from typing import Any, Final
 
 from asic.domain.errors import SchemaViolation
@@ -29,7 +30,7 @@ class VerificationProfile:
         return value
 
 
-_LATENCY_RECOVERY: Final = VerificationProfile(
+_LATENCY_RECOVERY_V1: Final = VerificationProfile(
     profile_id="latency-p95-recovery-v1",
     profile_version=1,
     source_capability="read.metrics",
@@ -44,19 +45,54 @@ _LATENCY_RECOVERY: Final = VerificationProfile(
     approved_sources=("prometheus-simulator",),
 )
 
-_PROFILES: Final[dict[str, VerificationProfile]] = {
-    "k8s.deployment.rollback": _LATENCY_RECOVERY,
-    "k8s.hpa.adjust": _LATENCY_RECOVERY,
-    "k8s.node.cordon": _LATENCY_RECOVERY,
-    "k8s.node.uncordon": _LATENCY_RECOVERY,
-}
+#: Phase 10 (ADR-0026): identical judgement, with the native Prometheus adapter added to the
+#: approved measurement sources. A new version rather than an edit: an action's criteria are
+#: frozen when it is proposed, and an action frozen under v1 is judged by v1 forever.
+_LATENCY_RECOVERY_V2: Final = replace(
+    _LATENCY_RECOVERY_V1,
+    profile_id="latency-p95-recovery-v2",
+    profile_version=2,
+    approved_sources=("prometheus", "prometheus-simulator"),
+)
+
+_TOOLS: Final[tuple[str, ...]] = (
+    "k8s.deployment.rollback",
+    "k8s.hpa.adjust",
+    "k8s.node.cordon",
+    "k8s.node.uncordon",
+)
+
+#: The profile a *new* proposal must select.
+_PROFILES: Final[dict[str, VerificationProfile]] = dict.fromkeys(_TOOLS, _LATENCY_RECOVERY_V2)
+
+#: Every profile version ever registered per tool, oldest first. Frozen criteria resolve here.
+_HISTORY: Final[dict[str, tuple[VerificationProfile, ...]]] = dict.fromkeys(
+    _TOOLS, (_LATENCY_RECOVERY_V1, _LATENCY_RECOVERY_V2)
+)
 
 
 def profile_for(tool_name: str) -> VerificationProfile:
+    """The current profile, for new proposals only."""
     try:
         return _PROFILES[tool_name]
     except KeyError as exc:
         raise SchemaViolation(f"no deterministic verification profile for {tool_name!r}") from exc
+
+
+def profile_for_criteria(tool_name: str, criteria: Mapping[str, Any]) -> VerificationProfile:
+    """The registered profile version an action's frozen criteria select - exactly.
+
+    Dispatch, verification and T5 lineage all judge an action by the policy it was
+    approved under, never by whatever the current policy happens to be.
+    """
+    profile_for(tool_name)
+    frozen = dict(criteria)
+    for profile in _HISTORY[tool_name]:
+        if profile.to_dict() == frozen:
+            return profile
+    raise SchemaViolation(
+        f"frozen verification criteria for {tool_name!r} match no registered profile version"
+    )
 
 
 def require_permitted_proposal(tool_name: str, proposed: dict[str, Any]) -> VerificationProfile:
@@ -81,4 +117,9 @@ def require_permitted_proposal(tool_name: str, proposed: dict[str, Any]) -> Veri
     )
 
 
-__all__ = ["VerificationProfile", "profile_for", "require_permitted_proposal"]
+__all__ = [
+    "VerificationProfile",
+    "profile_for",
+    "profile_for_criteria",
+    "require_permitted_proposal",
+]

@@ -997,7 +997,7 @@ def create_app(
         if factory is None:
             resolved_factory.kw["bind"].dispose()
 
-    app = FastAPI(title="Autonomous SRE Incident Commander", version="0.9.0", lifespan=lifespan)
+    app = FastAPI(title="Autonomous SRE Incident Commander", version="0.10.0", lifespan=lifespan)
     app.state.api_settings = resolved_settings
     app.state.session_factory = resolved_factory
     app.state.rate_limiter = RateLimiter(resolved_settings.rate_limit_per_minute)

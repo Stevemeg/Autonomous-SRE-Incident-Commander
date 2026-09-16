@@ -91,6 +91,8 @@ ALLOWED_SOURCE_ROOTS = (
     "src/asic/orchestration",
     "src/asic/remediation",  # Phase 8 - the human-decision surface behind the graph (ADR-0023)
     "src/asic/api",  # Phase 9 - authenticated HTTP surfaces
+    "src/asic/integrations",  # Phase 10 - native external adapters behind the broker
+    "src/asic/notifications",  # Phase 10 - S2 deterministic notification service
     "src/asic/simulators",
     "src/asic/tools",
     "migrations",
@@ -100,8 +102,10 @@ ALLOWED_SOURCE_ROOTS = (
 
 #: Packages whose existence would mean a later phase started early.
 FORBIDDEN_PACKAGES = (
-    "src/asic/integrations",  # Phase 10 - external adapters
+    # Phase 10 adapters live only in src/asic/integrations; a parallel adapter tree would
+    # be a second egress path the broker does not control.
     "src/asic/adapters",
+    "src/asic/connectors",
     "src/asic/evaluation",  # Phase 11 - harness
     "src/asic/agents",  # Phase 7  - specialised investigation agents
     # Phase 6 lives in knowledge/ and memory/. A parallel retrieval tree would be a second
@@ -398,9 +402,9 @@ def check_responsibility_coverage(f: Findings) -> int:
 def check_phase_boundary(f: Findings) -> int:
     """Assert no later phase has started early.
 
-    Through Phase 9, the repository holds governed knowledge, bounded investigation,
-    safety-gated remediation and authenticated API/dashboard surfaces. External
-    integrations and the evaluation harness remain explicitly out of scope.
+    Through Phase 10, the repository holds governed knowledge, bounded investigation,
+    safety-gated remediation, authenticated API/dashboard surfaces and native external
+    integrations behind the broker. The evaluation harness remains out of scope.
     """
     scanned = 0
 
@@ -489,6 +493,31 @@ def _check_capability_catalogue(f: Findings) -> None:
             )
 
     _check_remediation_capability_catalogue(f)
+    _check_integration_capability_catalogue(f)
+
+
+def _check_integration_capability_catalogue(f: Findings) -> None:
+    """Assert the Phase 10 external-record catalogue contains only external records.
+
+    Every descriptor must be an ``external_record`` at tier ``r1``, name a ``notify.`` or
+    ``write.`` capability, declare no rollback (a message cannot be un-sent) and no retry.
+    """
+    sys.path.insert(0, str(REPO / "src"))
+    try:
+        from asic.tools.integration_catalogue import INTEGRATION_CATALOGUE
+    except Exception as exc:  # the validator reports problems, it does not crash on them
+        f.add("phase", f"the integration capability catalogue could not be loaded: {exc}")
+        return
+    finally:
+        sys.path.pop(0)
+
+    for descriptor in INTEGRATION_CATALOGUE:
+        if descriptor.effect_class.value != "external_record" or descriptor.risk_tier.value != "r1":
+            f.add("phase", f"tool {descriptor.name} is not an r1 external record")
+        if not descriptor.capability.startswith(("notify.", "write.")):
+            f.add("phase", f"tool {descriptor.name} is not a notify./write. capability")
+        if descriptor.rollback_tool_name is not None or descriptor.max_attempts != 1:
+            f.add("phase", f"tool {descriptor.name} declares a rollback or retries")
 
 
 def _check_remediation_capability_catalogue(f: Findings) -> None:
@@ -592,7 +621,7 @@ def main() -> int:
     print(f"mermaid diagrams  : {blocks} checked")
     print(f"requirement IDs   : {defined} defined in SRS, {traced} referenced in matrix")
     print(f"spec section 4    : {responsibilities} responsibilities checked for disposition")
-    print(f"repository files  : {scanned} scanned against the Phase 9 boundary")
+    print(f"repository files  : {scanned} scanned against the Phase 10 boundary")
     print(f"safety invariants : {invariants} unique definitions checked")
     print()
 
@@ -601,7 +630,7 @@ def main() -> int:
         ("mermaid", "Mermaid structure"),
         ("traceability", "Requirement traceability"),
         ("coverage", "Specification coverage"),
-        ("phase", "Phase 9 scope boundary"),
+        ("phase", "Phase 10 scope boundary"),
         ("claims", "No unmeasured claims"),
         ("invariants", "Unique safety invariant IDs"),
     ]

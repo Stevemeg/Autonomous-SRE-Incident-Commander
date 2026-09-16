@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from asic.domain.enums import IntegrationFailureClass
+
 if TYPE_CHECKING:  # pragma: no cover - import cycle guard, types only
     from asic.domain.enums import BudgetKind
 
@@ -140,6 +142,54 @@ class ToolAdapterError(ToolFailure):
     def __init__(self, message: str, *, transient: bool = False) -> None:
         super().__init__(message)
         self.transient = transient
+
+
+class IntegrationError(ToolAdapterError):
+    """A native integration failed, classified before any retry decision (Phase 10).
+
+    ``effect_not_applied`` is a *positive* statement, set only where the adapter knows no
+    request reached the external system or the system definitively refused it before any
+    effect (connection refused, 4xx validation, missing credential). Anything else is an
+    unknown outcome for a write, and a write with an unknown outcome is never retried.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        failure_class: IntegrationFailureClass,
+        transient: bool = False,
+        effect_not_applied: bool = False,
+        retry_after_seconds: float | None = None,
+        status_code: int | None = None,
+    ) -> None:
+        super().__init__(message, transient=transient)
+        self.failure_class = failure_class
+        self.effect_not_applied = effect_not_applied
+        self.retry_after_seconds = retry_after_seconds
+        self.status_code = status_code
+
+
+class IntegrationUnknownOutcome(ToolTimeout):
+    """A request was (or may have been) sent and no trustworthy answer came back.
+
+    A subclass of :class:`ToolTimeout` because the broker already treats a write timeout
+    as class C4: never retried, never assumed failed, reconciled by query.
+    """
+
+    failure_class = IntegrationFailureClass.UNKNOWN_OUTCOME
+
+
+class ConnectorScopeDenied(CapabilityNotGranted):
+    """No enabled connector and binding authorise this tenant/service/environment tuple.
+
+    Resolved from server-side rows immediately before every call, so a revoked binding
+    refuses the very next request; an earlier success confers nothing.
+    """
+
+
+class CredentialUnavailable(DomainError):
+    """A credential reference could not be resolved. Fails closed; never substituted."""
 
 
 class ModelProviderError(DomainError):

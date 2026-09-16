@@ -22,6 +22,34 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added — Phase 10 external integrations
+
+- Native, typed adapters behind the tool broker for Prometheus (reviewed PromQL templates,
+  bounded range/points, non-finite samples dropped and counted), Loki (typed selector,
+  literal line filter, bounded single-line data), Kubernetes (workload/deployment reads and
+  the four approved remediation writes with optimistic concurrency and service-label scope
+  checks), Slack, Microsoft Teams, PagerDuty Events v2, Jira Cloud and Grafana annotations.
+  No vendor SDK; standard-library HTTP with explicit connect/send/receive failure phases.
+- Tenant connector authority: `integration_connector` plus the existing
+  `connector_scope_binding`, resolved on every call before idempotent replay; both are
+  read-only to the application role.
+- Credential references resolved at the execution boundary into a non-renderable
+  `SecretValue`; production resolution fails closed; test credentials refused in production.
+- `tool_effect_class` (`read`, `infrastructure_mutation`, `external_record`) with a trigger
+  deriving each execution's class from its definition; external records only from the S2
+  notification service, never under a remediation action, never retried.
+- Normalised integration failure classes, connector id and external reference on every
+  execution; outbound W3C `traceparent` from the durable trace identity.
+- S2 notification service with deterministic event ids; delivery failure never fails an
+  investigation.
+- Explicit execution-mode composition; a broker refuses live and simulated providers
+  together (ADR-0020). ADR-0026, ADR-0027. Migration `0016_external_integrations`.
+- Versioned verification profile v2 approving the native Prometheus source; actions are
+  judged by the exact profile version frozen on them.
+
+Validated against local deterministic HTTP servers and PostgreSQL under the unprivileged
+role. **No live vendor integration has been exercised.**
+
 ### Fixed — final Phase-10 gate corrections
 
 - Require complete G10 remediation lineage before a T5 verified-outcome proposal or human

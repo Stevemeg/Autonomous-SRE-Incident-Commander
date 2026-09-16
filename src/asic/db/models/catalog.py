@@ -24,7 +24,7 @@ from asic.db.base import (
     tenant_identity_constraints,
     uuid_pk,
 )
-from asic.domain.enums import DependencyKind, ServiceCriticality
+from asic.domain.enums import DependencyKind, IntegrationKind, ServiceCriticality
 
 
 class Environment(Base, TenantScoped, TimestampMixin):
@@ -180,5 +180,82 @@ class ConnectorScopeBinding(Base, TenantScoped, CreatedAtMixin):
             "service_id",
             "environment_id",
             "is_enabled",
+        ),
+    )
+
+
+class IntegrationConnector(Base, TenantScoped, CreatedAtMixin):
+    """One tenant's configured external system, per environment (Phase 10, ADR-0026).
+
+    Holds *where* and *which credential reference*, never a secret. The application role
+    may only read it: a process that could rewrite a connector's endpoint could redirect
+    authenticated traffic. Whether a connector may serve a given service is a separate,
+    revocable :class:`ConnectorScopeBinding` row, checked before every call.
+    """
+
+    __tablename__ = "integration_connector"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    connector_id: Mapped[str] = mapped_column(sa.String(255), nullable=False)
+    kind: Mapped[IntegrationKind] = mapped_column(
+        enum_column(IntegrationKind, "integration_kind"), nullable=False
+    )
+    environment_id: Mapped[uuid.UUID] = mapped_column(pg.UUID(as_uuid=True), nullable=False)
+    #: Base URL of the external API. Validated again in code before any request.
+    endpoint_url: Mapped[str | None] = mapped_column(sa.String(512), nullable=True)
+    #: Read-path credential reference. A name, never a secret.
+    credential_ref: Mapped[str | None] = mapped_column(sa.String(255), nullable=True)
+    #: Separate write-path credential reference (Kubernetes mutations). Never shared with
+    #: reads, so an investigation credential is physically incapable of mutation (SI-4).
+    write_credential_ref: Mapped[str | None] = mapped_column(sa.String(255), nullable=True)
+    #: Bounded, non-secret settings (project key, channel id, dashboard uid).
+    settings: Mapped[dict[str, Any]] = mapped_column(
+        pg.JSONB, nullable=False, server_default=sa.text("'{}'::jsonb")
+    )
+    is_enabled: Mapped[bool] = mapped_column(
+        sa.Boolean, nullable=False, server_default=sa.text("true")
+    )
+    revoked_at: Mapped[Any | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (
+        *tenant_identity_constraints("integration_connector"),
+        tenant_fk(
+            "environment_id",
+            "environment",
+            ondelete="CASCADE",
+            name="fk_integration_connector_environment",
+        ),
+        sa.UniqueConstraint("tenant_id", "connector_id", name="uq_integration_connector_id"),
+        sa.CheckConstraint(
+            "(is_enabled AND revoked_at IS NULL) OR (NOT is_enabled)",
+            name="enabled_connector_not_revoked",
+        ),
+        sa.CheckConstraint(
+            "credential_ref IS NULL OR credential_ref ~ '^asic/[a-z0-9][a-z0-9/_.-]{0,200}$'",
+            name="credential_ref_is_reference",
+        ),
+        sa.CheckConstraint(
+            "write_credential_ref IS NULL OR "
+            "write_credential_ref ~ '^asic/[a-z0-9][a-z0-9/_.-]{0,200}$'",
+            name="write_credential_ref_is_reference",
+        ),
+        sa.CheckConstraint(
+            "write_credential_ref IS NULL OR write_credential_ref IS DISTINCT FROM credential_ref",
+            name="write_credential_separate_from_read",
+        ),
+        sa.CheckConstraint(
+            r"endpoint_url IS NULL OR endpoint_url ~ '^https?://[^\s@]+$'",
+            name="endpoint_url_has_no_userinfo",
+        ),
+        sa.CheckConstraint(
+            "connector_id ~ '^[a-z0-9][a-z0-9._-]{0,127}$'", name="connector_id_format"
+        ),
+        sa.Index(
+            "uq_integration_connector_active_kind",
+            "tenant_id",
+            "environment_id",
+            "kind",
+            unique=True,
+            postgresql_where=sa.text("is_enabled"),
         ),
     )

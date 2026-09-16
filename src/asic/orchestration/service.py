@@ -58,6 +58,8 @@ from asic.knowledge.retrieval import KnowledgeRetriever
 from asic.llm.deterministic import DeterministicModelProvider
 from asic.llm.port import ModelProvider
 from asic.llm.prompts import PROMPT_SET_VERSION
+from asic.notifications.service import NotificationEvent, NotificationService
+from asic.observability import metrics
 from asic.orchestration.kernel import InvestigationKernel, RunOutcome
 from asic.simulators.provider import SimulatorProvider
 from asic.simulators.scenarios import PRIMARY_SCENARIO_ID, Scenario, scenario
@@ -83,7 +85,14 @@ class InvestigationRequest:
 class InvestigationService:
     """Wires dependencies and delegates. Deliberately almost empty."""
 
-    __slots__ = ("_budget_policy", "_clock", "_model", "_providers", "_session_factory")
+    __slots__ = (
+        "_budget_policy",
+        "_clock",
+        "_model",
+        "_notifier",
+        "_providers",
+        "_session_factory",
+    )
 
     def __init__(
         self,
@@ -93,12 +102,14 @@ class InvestigationService:
         model: ModelProvider,
         clock: Clock | None = None,
         budget_policy: BudgetPolicy | None = None,
+        notifier: NotificationService | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._providers = list(providers)
         self._model = model
         self._clock = clock or SystemClock()
         self._budget_policy = budget_policy
+        self._notifier = notifier
 
     def _kernel(self) -> InvestigationKernel:
         return InvestigationKernel(
@@ -113,7 +124,7 @@ class InvestigationService:
     def start(
         self, request: InvestigationRequest, *, fixture_refs: dict[str, object] | None = None
     ) -> RunOutcome:
-        return self._kernel().start(
+        outcome = self._kernel().start(
             tenant_id=request.tenant_id,
             incident_id=request.incident_id,
             behaviour_version_id=request.behaviour_version_id,
@@ -122,9 +133,41 @@ class InvestigationService:
             random_seed=request.random_seed,
             dispatch_id=request.dispatch_id,
         )
+        self._announce(request.tenant_id, outcome)
+        return outcome
 
     def resume(self, *, tenant_id: uuid.UUID, workflow_run_id: uuid.UUID) -> RunOutcome:
-        return self._kernel().resume(tenant_id=tenant_id, workflow_run_id=workflow_run_id)
+        outcome = self._kernel().resume(tenant_id=tenant_id, workflow_run_id=workflow_run_id)
+        self._announce(tenant_id, outcome)
+        return outcome
+
+    def _announce(self, tenant_id: uuid.UUID, outcome: RunOutcome) -> None:
+        """Announce a terminal outcome. Delivery never fails the investigation (FR-CLB-02).
+
+        Only the two outcomes a responder must hear about are announced; the notification
+        service turns each destination's failure into a typed receipt.
+        """
+        event_type = _ANNOUNCED_STATUSES.get(outcome.incident_status)
+        if self._notifier is None or not outcome.terminated or event_type is None:
+            return
+        try:
+            self._notifier.announce(
+                NotificationEvent(
+                    tenant_id=tenant_id,
+                    incident_id=outcome.incident_id,
+                    event_type=event_type,
+                    source_record_id=outcome.workflow_run_id,
+                    execution_trace_id=outcome.execution_trace_id,
+                )
+            )
+        except Exception:  # delivery infrastructure failure is recorded, never propagated
+            metrics.notification_failures_total.add(1, {"event_type": event_type})
+
+
+_ANNOUNCED_STATUSES: dict[IncidentStatus, str] = {
+    IncidentStatus.ESCALATED: "incident_escalated",
+    IncidentStatus.RESOLVED: "incident_resolved",
+}
 
 
 # ------------------------------------------------------------------ demonstration wiring

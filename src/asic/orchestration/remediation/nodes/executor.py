@@ -43,7 +43,7 @@ from asic.domain.idempotency import action_version_hash, incident_event_key
 from asic.orchestration.remediation.context import RemediationDependencies
 from asic.orchestration.remediation.nodes.verifier import trusted_baseline
 from asic.remediation.observations import effect_observed, precondition_holds
-from asic.remediation.verification import profile_for
+from asic.remediation.verification import profile_for_criteria
 from asic.tools.broker import CapabilityRequest
 from asic.tools.descriptor import ToolDescriptor
 from asic.tools.registry import ToolRegistry
@@ -181,7 +181,7 @@ def remediation_executor_node(deps: RemediationDependencies) -> Any:
                 or target is None
                 or not trusted_baseline(
                     deps,
-                    profile_for(action.tool_name),
+                    profile_for_criteria(action.tool_name, action.verification_criteria),
                     baseline,
                     action,
                     target,

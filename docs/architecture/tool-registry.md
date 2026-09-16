@@ -9,6 +9,13 @@
   tenant/environment grant and global tool enabled state immediately before dispatch, and
   requires the action, immutable target and resolved scope to agree. Read menus may remain
   cached within one run because they cannot authorize writes.
+  **Phase 10:** native adapters implement the read and Kubernetes write tools behind the
+  same broker, and a third, separate catalogue registers six `external_record` tools for
+  the S2 notification service. Every native call also requires a server-side connector and
+  scope binding. Section 8's `notify.collaboration` / `write.ticketing` classes are
+  registered as one capability per tool (`notify.slack_channel`, `write.jira_issue`, ...),
+  because a capability menu admits one tool per capability. See
+  [`integrations.md`](./integrations.md) and ADR-0026.
 - **Master specification references:** Sections 6, 7, 15, 23(G)
 - **Related:** [`remediation-safety-policy.md`](./remediation-safety-policy.md) · [`../security/THREAT_MODEL.md`](../security/THREAT_MODEL.md)
 
@@ -371,8 +378,8 @@ do.
 | `mutate.k8s_pod` | R1 | `k8s.pod.delete` | Recreated by controller; blast radius one pod |
 | `mutate.k8s_node` | R2 | `k8s.node.cordon`, `k8s.node.drain` | Never autonomous |
 | `mutate.k8s_network` | R2 | `k8s.networkpolicy.apply` | Never autonomous; from a registered template |
-| `notify.collaboration` | R1 | `slack.post`, `teams.post` | Outbound only |
-| `write.ticketing` | R1 | `jira.create`, `jira.update`, `pagerduty.update` | |
+| `notify.collaboration` | R1 | `slack.post`, `teams.post` | Outbound only. *Phase 10 registers these as `notify.slack_channel` / `notify.teams_channel`, effect class `external_record`* |
+| `write.ticketing` | R1 | `jira.create`, `jira.update`, `pagerduty.update` | *Phase 10: `write.jira_issue`, `write.jira_comment`, `write.pagerduty_event`, plus `write.grafana_annotation`; external records, no rollback, never retried* |
 
 Deliberately absent: anything deleting persistent state, anything modifying RBAC or
 policy, anything executing an arbitrary command or applying an arbitrary manifest.

@@ -56,16 +56,21 @@ from asic.domain.enums import (
     ActorType,
     AuditEventType,
     BrokerStage,
+    IntegrationFailureClass,
     NodeId,
     OperationClass,
     ProvenanceLabel,
     RiskTier,
+    ToolEffectClass,
     ToolExecutionOutcome,
+    ToolProviderKind,
     TraceSpanKind,
 )
 from asic.domain.errors import (
     CapabilityNotGranted,
+    ConnectorScopeDenied,
     DomainError,
+    IntegrationError,
     RiskTierNotPermitted,
     SchemaViolation,
     ToolAdapterError,
@@ -88,8 +93,17 @@ from asic.tools.capability import (
     assert_tenant_matches,
 )
 from asic.tools.catalogue import RETRIEVED_DOMAINS, capability_for_domain
+from asic.tools.connector_scope import resolve_connector
 from asic.tools.descriptor import ToolDescriptor
-from asic.tools.provider import InvocationContext, ToolProvider
+from asic.tools.provider import (
+    ConnectorGrant,
+    ExternalIntegrationProvider,
+    InvocationContext,
+    ToolProvider,
+)
+
+#: Longest a broker waits on a vendor ``Retry-After`` before retrying a read.
+MAX_RETRY_AFTER_SECONDS = 5.0
 
 
 class CapabilityRequest(BaseModel):
@@ -128,6 +142,11 @@ class BrokerFailure:
     message: str
     operation_class: OperationClass
     retryable: bool
+    #: Normalised integration failure category, when one applies.
+    failure_class: IntegrationFailureClass | None = None
+    #: The adapter positively established that no external effect occurred.
+    effect_not_applied: bool = False
+    retry_after_seconds: float | None = None
 
 
 class ToolResult(BaseModel):
@@ -190,6 +209,7 @@ class ToolBroker:
     ) -> None:
         if not providers:
             raise ValueError("a broker with no provider can refuse but never answer")
+        _assert_no_simulated_fallback(providers)
         self._resolver = resolver
         self._providers = tuple(providers)
         self._scope = scope
@@ -259,6 +279,16 @@ class ToolBroker:
                 return self._refused(request, failure)
 
             descriptor = granted.descriptor
+            try:
+                provider = self._provider_for(descriptor)
+                connector = self._connector_for(session, request, descriptor, provider)
+            except DomainError as exc:
+                failure = _classify_refusal(stage_of(exc), exc)
+                span.fail(failure.message)
+                span.set_attributes(refused_at=failure.stage.value, error=failure.error_type)
+                self._audit_refusal(session, request, failure)
+                metrics.tool_refusals_total.add(1, {"stage": failure.stage.value})
+                return self._refused(request, failure)
             resolved_scope = self._scope.resolve_arguments(
                 descriptor, service_name=request.service_name
             )
@@ -317,6 +347,8 @@ class ToolBroker:
                 request=request,
                 contract=contract,
                 descriptor=descriptor,
+                provider=provider,
+                connector=connector,
                 granted_credential_ref=granted.credential_ref,
                 bound=bound,
                 resolved_scope=resolved_scope,
@@ -369,10 +401,22 @@ class ToolBroker:
                 actor_id=request.node_id.value,
                 incident_id=request.incident_id,
                 correlation_id=request.correlation_id,
-                target_type="remediation_action",
-                target_id=str(request.remediation_action_id),
+                target_type=(
+                    "tool_definition"
+                    if descriptor.effect_class is ToolEffectClass.EXTERNAL_RECORD
+                    else "remediation_action"
+                ),
+                target_id=(
+                    f"{descriptor.name}@{descriptor.version}"
+                    if descriptor.effect_class is ToolEffectClass.EXTERNAL_RECORD
+                    else str(request.remediation_action_id)
+                ),
                 risk_tier=descriptor.risk_tier,
-                payload={"effect_key": effect_key, "dispatch_claimed": True},
+                payload={
+                    "effect_key": effect_key,
+                    "dispatch_claimed": True,
+                    "effect_class": descriptor.effect_class.value,
+                },
             )
             claim_session.commit()
         except BaseException:
@@ -406,9 +450,23 @@ class ToolBroker:
             )
 
         # 3. Capability resolution against tenant, environment and grant.
-        is_write = not request.capability.startswith("read.")
-        menu = self.menu_for(session, contract, refresh=is_write)
+        is_effect = not request.capability.startswith("read.")
+        menu = self.menu_for(session, contract, refresh=is_effect)
         granted = menu.get(request.capability)
+        if is_effect == (granted.descriptor.effect_class is ToolEffectClass.READ):
+            raise CapabilityNotGranted("capability verb and tool effect class disagree")
+        is_external_record = granted.descriptor.effect_class is ToolEffectClass.EXTERNAL_RECORD
+        if is_external_record and (
+            request.node_id is not NodeId.S2_NOTIFICATION_SERVICE
+            or request.remediation_action_id is not None
+        ):
+            # An external record is an announcement, never remediation: only the
+            # deterministic notification service sends one, and never under an action.
+            raise CapabilityNotGranted(
+                "external records are sent only by the notification service, never under "
+                "a remediation action"
+            )
+        is_write = is_effect and not is_external_record
         action = None
         if is_write:
             action = session.execute(
@@ -455,6 +513,27 @@ class ToolBroker:
             )
         ).scalar_one_or_none()
 
+    def _connector_for(
+        self,
+        session: Session,
+        request: CapabilityRequest,
+        descriptor: ToolDescriptor,
+        provider: ToolProvider,
+    ) -> ConnectorGrant | None:
+        """Resolve the tenant connector and scope binding for a native integration.
+
+        Queried on every call, never cached: a revoked binding refuses the next request,
+        including one that would otherwise have replayed a recorded execution.
+        """
+        if not isinstance(provider, ExternalIntegrationProvider):
+            return None
+        return resolve_connector(
+            session,
+            scope=self._scope,
+            service_name=request.service_name,
+            kind=provider.connector_kind_for(descriptor),
+        )
+
     def _provider_for(self, descriptor: ToolDescriptor) -> ToolProvider:
         for provider in self._providers:
             if provider.supports(descriptor):
@@ -471,6 +550,8 @@ class ToolBroker:
         request: CapabilityRequest,
         contract: NodeContract,
         descriptor: ToolDescriptor,
+        provider: ToolProvider,
+        connector: ConnectorGrant | None,
         granted_credential_ref: str | None,
         bound: Mapping[str, Any],
         resolved_scope: Mapping[str, Any],
@@ -479,7 +560,6 @@ class ToolBroker:
         span: SpanHandle,
     ) -> ToolResult:
         """Stages 7-10: invoke, validate, persist, audit."""
-        provider = self._provider_for(descriptor)
         attempts = 0
         failure: BrokerFailure | None = None
         payload: Mapping[str, Any] = {}
@@ -491,9 +571,13 @@ class ToolBroker:
                 tenant_id=self._scope.tenant_id,
                 correlation_id=request.correlation_id,
                 idempotency_key=idempotency_key,
-                credential_ref=granted_credential_ref,
+                credential_ref=(
+                    connector.credential_ref if connector is not None else granted_credential_ref
+                ),
                 timeout_seconds=descriptor.timeout_seconds,
                 attempt=attempts,
+                connector=connector,
+                traceparent=_traceparent(self._tracer.trace_id, span.span_id),
             )
             try:
                 raw = self._invoke_with_deadline(provider, descriptor, bound, context)
@@ -516,6 +600,28 @@ class ToolBroker:
                         else OperationClass.C1_PURE_READ
                     ),
                     retryable=not is_write,
+                    failure_class=(
+                        IntegrationFailureClass.UNKNOWN_OUTCOME
+                        if is_write
+                        else IntegrationFailureClass.TIMEOUT
+                    ),
+                )
+            except IntegrationError as exc:
+                effectful = descriptor.risk_tier is not RiskTier.RO
+                failure = BrokerFailure(
+                    stage=BrokerStage.ADAPTER_INVOCATION,
+                    error_type="IntegrationError",
+                    message=str(exc),
+                    operation_class=(
+                        OperationClass.C1_PURE_READ
+                        if exc.transient and not effectful
+                        else OperationClass.C5_SEMANTIC_FAILURE
+                    ),
+                    # A native write is never retried by the broker, whatever upstream said.
+                    retryable=exc.transient and not effectful,
+                    failure_class=exc.failure_class,
+                    effect_not_applied=exc.effect_not_applied,
+                    retry_after_seconds=exc.retry_after_seconds,
                 )
             except ToolAdapterError as exc:
                 failure = BrokerFailure(
@@ -538,6 +644,7 @@ class ToolBroker:
                     message=str(exc),
                     operation_class=OperationClass.C6_DETERMINISTIC_REJECTION,
                     retryable=False,
+                    failure_class=IntegrationFailureClass.MALFORMED_RESPONSE,
                 )
                 metrics.schema_violations_total.add(1, {"tool": descriptor.name})
                 break
@@ -553,11 +660,19 @@ class ToolBroker:
 
             if not (failure and failure.retryable and attempts < descriptor.max_attempts):
                 break
-            self._sleep(descriptor.retry_backoff_seconds * attempts)
+            delay = descriptor.retry_backoff_seconds * attempts
+            if failure.retry_after_seconds is not None:
+                delay = max(delay, min(failure.retry_after_seconds, MAX_RETRY_AFTER_SECONDS))
+            self._sleep(delay)
 
         duration_ms = max(0, int((time.perf_counter() - began) * 1000))
         if failure is None:
             outcome = ToolExecutionOutcome.SUCCEEDED
+        elif failure.effect_not_applied:
+            # The adapter positively established that nothing reached, or was accepted
+            # by, the external system (refused connection, 4xx rejection, missing
+            # credential). Only such a statement makes a write failure known-clean.
+            outcome = ToolExecutionOutcome.FAILED_CLEAN
         elif (
             descriptor.risk_tier is not RiskTier.RO
             or failure.operation_class is OperationClass.C4_UNKNOWN_OUTCOME
@@ -595,6 +710,10 @@ class ToolBroker:
             completed_at=self._clock.now(),
             duration_ms=duration_ms,
             correlation_id=request.correlation_id,
+            effect_class=descriptor.effect_class,
+            connector_id=connector.connector_id if connector is not None else None,
+            failure_class=failure.failure_class if failure is not None else None,
+            external_reference=_external_reference(payload) if failure is None else None,
         )
         session.add(execution)
         session.flush()
@@ -634,10 +753,32 @@ class ToolBroker:
                 "failure": failure.message if failure else None,
                 "purpose": request.purpose,
                 "node_contract_version": contract.contract_version,
+                "effect_class": descriptor.effect_class.value,
+                "connector_id": connector.connector_id if connector is not None else None,
+                "connector_kind": connector.kind.value if connector is not None else None,
+                "failure_class": (
+                    failure.failure_class.value
+                    if failure is not None and failure.failure_class is not None
+                    else None
+                ),
+                "external_reference": execution.external_reference,
             },
         )
 
         metrics.tool_invocations_total.add(1, {"tool": descriptor.name, "outcome": outcome.value})
+        if connector is not None:
+            metrics.integration_calls_total.add(
+                1,
+                {
+                    "integration": connector.kind.value,
+                    "outcome": outcome.value,
+                    "failure_class": (
+                        failure.failure_class.value
+                        if failure is not None and failure.failure_class is not None
+                        else "none"
+                    ),
+                },
+            )
         metrics.tool_latency_seconds.record(duration_ms / 1000.0, {"tool": descriptor.name})
         if failure is not None:
             metrics.tool_failures_total.add(
@@ -779,6 +920,9 @@ class ToolBroker:
                 "message": failure.message,
                 "service": request.service_name,
                 "purpose": request.purpose,
+                "failure_class": (
+                    failure.failure_class.value if failure.failure_class is not None else None
+                ),
             },
         )
 
@@ -817,7 +961,47 @@ def _classify_refusal(stage: BrokerStage, exc: DomainError) -> BrokerFailure:
         message=str(exc),
         operation_class=OperationClass.C6_DETERMINISTIC_REJECTION,
         retryable=False,
+        failure_class=(
+            IntegrationFailureClass.SCOPE_DENIED if isinstance(exc, ConnectorScopeDenied) else None
+        ),
+        effect_not_applied=True,
     )
+
+
+def _traceparent(trace_id: str, span_id: str) -> str | None:
+    """W3C trace context for outbound calls, from the durable trace identity."""
+    if len(trace_id) != 32 or len(span_id) != 16:
+        return None
+    try:
+        int(trace_id, 16)
+        int(span_id, 16)
+    except ValueError:
+        return None
+    return f"00-{trace_id}-{span_id}-01"
+
+
+def _external_reference(payload: Mapping[str, Any]) -> str | None:
+    value = payload.get("external_reference")
+    if isinstance(value, str) and value:
+        return value[:255]
+    return None
+
+
+def _assert_no_simulated_fallback(providers: Sequence[ToolProvider]) -> None:
+    """Refuse a broker that mixes live external integrations with non-native providers.
+
+    The broker picks the first provider that supports a descriptor and never falls through
+    to another on failure; this guard makes the stronger statement that no composition
+    can place a simulator or replay provider next to a live integration at all, so a live
+    failure can never be answered by fixture data.
+    """
+    live = [p for p in providers if isinstance(p, ExternalIntegrationProvider)]
+    fixtures = [p for p in providers if p.kind is not ToolProviderKind.NATIVE]
+    if live and fixtures:
+        raise ValueError(
+            "a broker cannot combine live external integrations with simulated or replayed "
+            "providers; a live failure must never be answered by fixture data"
+        )
 
 
 def _key_safe(value: Any) -> Any:
@@ -840,6 +1024,9 @@ def _result_summary(payload: Mapping[str, Any]) -> dict[str, Any]:
     for key, value in payload.items():
         if isinstance(value, (list, tuple)):
             summary[f"{key}_count"] = len(value)
+    reference = _external_reference(payload)
+    if reference is not None:
+        summary["external_reference"] = reference
     # G10 needs a durable, append-only link from the normalized scalar it judged back to
     # the broker response. Persist only the bounded metric identity and final sample, not
     # the full telemetry payload. Other result kinds retain the count-only policy above.

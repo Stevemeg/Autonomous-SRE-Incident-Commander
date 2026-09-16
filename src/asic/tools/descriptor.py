@@ -29,7 +29,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from asic.domain.enums import RiskTier, ToolProviderKind
+from asic.domain.enums import RiskTier, ToolEffectClass, ToolProviderKind
 from asic.domain.errors import SchemaViolation
 from asic.domain.safety import check_field_names
 
@@ -222,6 +222,9 @@ class ToolDescriptor(BaseModel):
     description: str
     risk_tier: RiskTier
     provider_kind: ToolProviderKind
+    #: Derived from the risk tier when omitted: ``RO`` is a read, any other tier an
+    #: infrastructure mutation. Only an explicit declaration makes a tool an external record.
+    effect_class: ToolEffectClass = ToolEffectClass.READ
 
     arguments: tuple[ArgumentSpec, ...]
     result_fields: tuple[ResultField, ...]
@@ -240,6 +243,20 @@ class ToolDescriptor(BaseModel):
     #: Result size ceiling. An unbounded result is a budget and a prompt-size problem.
     max_result_items: int = Field(default=200, ge=1)
     is_enabled: bool = True
+
+    @model_validator(mode="before")
+    @classmethod
+    def _derive_effect_class(cls, data: Any) -> Any:
+        if isinstance(data, Mapping) and data.get("effect_class") is None:
+            tier = data.get("risk_tier")
+            is_read = tier is RiskTier.RO or tier == RiskTier.RO.value
+            return {
+                **data,
+                "effect_class": (
+                    ToolEffectClass.READ if is_read else ToolEffectClass.INFRASTRUCTURE_MUTATION
+                ),
+            }
+        return data
 
     @field_validator("name", "capability")
     @classmethod
@@ -263,7 +280,28 @@ class ToolDescriptor(BaseModel):
                 f"{self.name} declares risk tier R3; destructive and irreversible actions "
                 "are not registered as agent-invocable tools at all (SI-5)"
             )
-        if self.risk_tier is RiskTier.RO:
+        if (self.risk_tier is RiskTier.RO) != (self.effect_class is ToolEffectClass.READ):
+            raise ValueError(
+                f"{self.name} pairs risk tier {self.risk_tier.value} with effect class "
+                f"{self.effect_class.value}; only a read-only tool has a read effect"
+            )
+        if self.effect_class is ToolEffectClass.EXTERNAL_RECORD:
+            # An external record (a message, a page, a ticket) cannot be un-sent, so it
+            # declares no rollback rather than an invented one; it is low risk, is never
+            # an infrastructure change, and is never retried after an unknown outcome.
+            if self.risk_tier is not RiskTier.R1:
+                raise ValueError(f"{self.name} is an external record and must be tier r1")
+            if self.rollback_tool_name is not None or self.settling_seconds:
+                raise ValueError(
+                    f"{self.name} is an external record; it is compensated by a follow-up "
+                    "record, never rolled back, and has nothing to settle"
+                )
+            if self.max_attempts != 1:
+                raise ValueError(
+                    f"{self.name} is an external record and declares retries; a repeated "
+                    "send after an unknown outcome is a duplicate user-visible message"
+                )
+        elif self.risk_tier is RiskTier.RO:
             if self.rollback_tool_name is not None or self.settling_seconds:
                 raise ValueError(
                     f"{self.name} is read-only but declares effect metadata; a read tool "

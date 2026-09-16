@@ -27,7 +27,7 @@ from asic.db.models.remediation import (
 from asic.db.models.tools import ToolExecution
 from asic.domain.enums import NodeId, RemediationActionStatus, RiskTier, ToolExecutionOutcome
 from asic.domain.errors import SchemaViolation
-from asic.remediation.verification import VerificationProfile, profile_for
+from asic.remediation.verification import VerificationProfile, profile_for_criteria
 
 
 def baseline_json(row: RemediationBaseline) -> dict[str, Any]:
@@ -212,7 +212,7 @@ def trusted_verified_outcome(
     if service_name is None or environment_name is None:
         return False
     try:
-        profile = profile_for(action.tool_name)
+        profile = profile_for_criteria(action.tool_name, action.verification_criteria)
     except SchemaViolation:
         return False
     if (

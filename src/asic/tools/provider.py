@@ -24,12 +24,33 @@ success value in place of a failure.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 from uuid import UUID
 
-from asic.domain.enums import ToolProviderKind
+from asic.domain.enums import IntegrationKind, ToolProviderKind
 from asic.tools.descriptor import ToolDescriptor
+
+
+@dataclass(frozen=True, slots=True)
+class ConnectorGrant:
+    """The server-side connector authorised for one call (Phase 10, ADR-0026).
+
+    Resolved by the broker from ``integration_connector`` and ``connector_scope_binding``
+    immediately before dispatch. It carries credential *references*; the secrets are
+    resolved by the adapter at the moment of the request and never stored here.
+    """
+
+    connector_id: str
+    kind: IntegrationKind
+    endpoint_url: str | None
+    credential_ref: str | None
+    write_credential_ref: str | None
+    service_name: str
+    environment_name: str
+    settings: Mapping[str, Any] = field(default_factory=dict)
+    #: The service's registered namespaces, from the catalogue - never from a caller.
+    namespaces: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,6 +70,10 @@ class InvocationContext:
     credential_ref: str | None
     timeout_seconds: int
     attempt: int
+    #: Set only for native integrations: the connector that authorised this call.
+    connector: ConnectorGrant | None = None
+    #: W3C ``traceparent`` for the broker span, derived from the durable trace identity.
+    traceparent: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,4 +121,23 @@ class ToolProvider(Protocol):
         """Current availability, used to degrade rather than abort an investigation."""
 
 
-__all__ = ["InvocationContext", "ProviderHealth", "ToolProvider"]
+@runtime_checkable
+class ExternalIntegrationProvider(ToolProvider, Protocol):
+    """A provider whose calls reach a tenant-configured external system.
+
+    The broker resolves an enabled connector and scope binding for every call to such a
+    provider, and refuses the call when none exists. A provider cannot opt out: the
+    connector kind is declared per tool here and checked by the broker.
+    """
+
+    def connector_kind_for(self, descriptor: ToolDescriptor) -> IntegrationKind:
+        """Which tenant connector kind must authorise calls to this tool."""
+
+
+__all__ = [
+    "ConnectorGrant",
+    "ExternalIntegrationProvider",
+    "InvocationContext",
+    "ProviderHealth",
+    "ToolProvider",
+]
