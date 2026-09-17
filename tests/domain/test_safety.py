@@ -126,5 +126,14 @@ class TestNodeTopology:
 
     def test_topology_matches_the_approved_counts(self) -> None:
         """ADR-0001: 12 graph nodes plus 2 derived services; 8 invoke a model."""
-        assert len(NodeId) == 14
-        assert sum(1 for n in NodeId if n.uses_model) == 8
+        product = [n for n in NodeId if n.in_product_topology]
+        assert len(product) == 14
+        assert sum(1 for n in product if n.uses_model) == 8
+
+    def test_the_evaluation_judge_is_outside_the_product_topology(self) -> None:
+        """ADR-0028: the judge calls a model but is no graph node and holds no contract."""
+        from asic.contracts.nodes import NODE_CONTRACTS
+
+        assert [n for n in NodeId if not n.in_product_topology] == [NodeId.E1_EVALUATION_JUDGE]
+        assert NodeId.E1_EVALUATION_JUDGE.uses_model
+        assert NodeId.E1_EVALUATION_JUDGE not in {c.node_id for c in NODE_CONTRACTS.values()}

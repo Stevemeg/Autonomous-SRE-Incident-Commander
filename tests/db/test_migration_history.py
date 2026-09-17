@@ -175,6 +175,9 @@ class TestPinnedListsMatchHistory:
             "model_call_reservation",
             "connector_scope_binding",
             "integration_connector",
+            "evaluation_suite_run",
+            "evaluation_judge_result",
+            "evaluation_replay_fixture",
         }
 
     def test_post_phase_3_append_only_additions(self, phase_3_tables: dict[str, list[str]]) -> None:
@@ -190,6 +193,11 @@ class TestPinnedListsMatchHistory:
             "api_idempotency_record",
             "remediation_target",
             "remediation_baseline",
+            "evaluation_scenario",
+            "evaluation_run",
+            "evaluation_suite_run",
+            "evaluation_judge_result",
+            "evaluation_replay_fixture",
         }
 
 
@@ -457,6 +465,9 @@ class TestUpgradePaths:
             "model_call_reservation",
             "connector_scope_binding",
             "integration_connector",
+            "evaluation_suite_run",
+            "evaluation_judge_result",
+            "evaluation_replay_fixture",
         }
 
     def test_accepted_phase_5_head_upgrades_to_current_head(self, throwaway_database: str) -> None:
@@ -471,7 +482,7 @@ class TestUpgradePaths:
             with engine.connect() as conn:
                 assert (
                     conn.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one()
-                    == "0016_external_integrations"
+                    == "0017_evaluation_harness"
                 )
         finally:
             engine.dispose()
@@ -512,6 +523,69 @@ class TestUpgradePaths:
             assert state() == (False, False, 0, 0)
             command.upgrade(config, "0016_external_integrations")
             assert state() == (True, True, 1, 6)
+        finally:
+            engine.dispose()
+
+    def test_phase11_evaluation_migration_round_trips_and_refuses_losing_history(
+        self, throwaway_database: str
+    ) -> None:
+        config = _alembic_config(throwaway_database)
+        command.upgrade(config, "0016_external_integrations")
+        engine = sa.create_engine(throwaway_database)
+
+        def state() -> tuple[bool, bool, bool]:
+            with engine.connect() as connection:
+                inspector = sa.inspect(connection)
+                tables = set(inspector.get_table_names())
+                columns = {c["name"] for c in inspector.get_columns("evaluation_run")}
+                app_may_update = connection.scalar(
+                    sa.text("SELECT has_table_privilege('asic_app', 'evaluation_run', 'UPDATE')")
+                )
+            return (
+                {"evaluation_suite_run", "evaluation_judge_result", "evaluation_replay_fixture"}
+                <= tables,
+                "suite_run_id" in columns,
+                bool(app_may_update),
+            )
+
+        try:
+            assert state() == (False, False, True)
+            command.upgrade(config, "0017_evaluation_harness")
+            assert state() == (True, True, False)
+            command.downgrade(config, "0016_external_integrations")
+            assert state() == (False, False, True)
+            command.upgrade(config, "0017_evaluation_harness")
+            assert state() == (True, True, False)
+
+            with engine.begin() as connection:
+                tenant = connection.scalar(
+                    sa.text(
+                        "INSERT INTO tenant (slug, display_name, status) "
+                        "VALUES ('mig-eval', 'Migration evaluation', 'active') RETURNING id"
+                    )
+                )
+                behaviour = connection.scalar(
+                    sa.text(
+                        "INSERT INTO behaviour_version (label, code_version, prompt_set_version, "
+                        "retriever_config_version, policy_version, tool_registry_version, "
+                        "fingerprint) VALUES ('m', '0', '0', '0', '0', '0', 'mig-eval') "
+                        "RETURNING id"
+                    )
+                )
+                connection.execute(
+                    sa.text(
+                        "INSERT INTO evaluation_suite_run (tenant_id, suite_key, suite_version, "
+                        "corpus_digest, behaviour_version_id, execution_mode, evaluator_version, "
+                        "gate_status, scenario_count, report, report_digest, started_at, "
+                        "completed_at) VALUES (:t, 'golden', 1, :d, :b, 'simulator', 'v', "
+                        "'passed', 0, '{}'::jsonb, :d, now(), now())"
+                    ),
+                    {"t": tenant, "b": behaviour, "d": "0" * 64},
+                )
+            # Recorded evaluation history is never silently discarded by a downgrade.
+            with pytest.raises(sa.exc.DBAPIError, match="evaluation suite history exists"):
+                command.downgrade(config, "0016_external_integrations")
+            assert state() == (True, True, False)
         finally:
             engine.dispose()
 

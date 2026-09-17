@@ -32,8 +32,11 @@ from asic.db.base import (
     uuid_pk,
 )
 from asic.domain.enums import (
+    EvaluationGateStatus,
     EvaluationRunVerdict,
     EvaluationScenarioClass,
+    ExecutionMode,
+    JudgeOutcome,
     NodeId,
     SpanStatus,
     TerminationReason,
@@ -274,6 +277,7 @@ class EvaluationScenario(Base, TenantScoped, TimestampMixin):
     """
 
     __tablename__ = "evaluation_scenario"
+    __append_only__ = True
 
     id: Mapped[uuid.UUID] = uuid_pk()
     #: Stable human key, e.g. ``SC-0007``.
@@ -316,6 +320,7 @@ class EvaluationRun(Base, TenantScoped, TimestampMixin):
     """
 
     __tablename__ = "evaluation_run"
+    __append_only__ = True
 
     id: Mapped[uuid.UUID] = uuid_pk()
     evaluation_scenario_id: Mapped[uuid.UUID] = mapped_column(pg.UUID(as_uuid=True), nullable=False)
@@ -343,6 +348,26 @@ class EvaluationRun(Base, TenantScoped, TimestampMixin):
     disagreement: Mapped[dict[str, Any]] = mapped_column(
         pg.JSONB, nullable=False, server_default=sa.text("'{}'::jsonb")
     )
+    #: Phase 11 (migration 0017): the suite this result belongs to.
+    suite_run_id: Mapped[uuid.UUID | None] = mapped_column(pg.UUID(as_uuid=True), nullable=True)
+    #: The real workflow run the harness executed and observed.
+    workflow_run_id: Mapped[uuid.UUID | None] = mapped_column(pg.UUID(as_uuid=True), nullable=True)
+    #: Digest of the scenario definition and its fixtures, so a tampered or silently edited
+    #: scenario can never be compared against an earlier result.
+    scenario_digest: Mapped[str | None] = mapped_column(sa.String(64), nullable=True)
+    execution_mode: Mapped[ExecutionMode | None] = mapped_column(
+        enum_column(ExecutionMode, "execution_mode"), nullable=True
+    )
+    evaluator_version: Mapped[str | None] = mapped_column(sa.String(64), nullable=True)
+    #: Deterministic check results, each with its failure classification.
+    checks: Mapped[dict[str, Any]] = mapped_column(
+        pg.JSONB, nullable=False, server_default=sa.text("'{}'::jsonb")
+    )
+    failure_classes: Mapped[list[str]] = mapped_column(
+        pg.ARRAY(sa.String(64)), nullable=False, server_default=sa.text("'{}'::varchar[]")
+    )
+    #: Harness-measured wall clock. Not deterministic; never used for regression gating.
+    wall_clock_ms: Mapped[int | None] = mapped_column(sa.Integer, nullable=True)
 
     started_at: Mapped[datetime] = mapped_column(
         sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()
@@ -365,14 +390,173 @@ class EvaluationRun(Base, TenantScoped, TimestampMixin):
         ),
         sa.UniqueConstraint(
             "tenant_id",
+            "suite_run_id",
             "evaluation_scenario_id",
-            "scenario_version",
-            "behaviour_version_id",
             "repetition_index",
             name="uq_evaluation_run_repetition",
+        ),
+        tenant_fk(
+            "suite_run_id",
+            "evaluation_suite_run",
+            ondelete="RESTRICT",
+            name="fk_evaluation_run_suite_run",
+        ),
+        tenant_fk(
+            "workflow_run_id",
+            "workflow_run",
+            ondelete="RESTRICT",
+            name="fk_evaluation_run_workflow_run",
+        ),
+        sa.CheckConstraint(
+            "scenario_digest IS NULL OR scenario_digest ~ '^[0-9a-f]{64}$'",
+            name="scenario_digest_format",
+        ),
+        sa.CheckConstraint(
+            "wall_clock_ms IS NULL OR wall_clock_ms >= 0", name="wall_clock_non_negative"
         ),
         sa.CheckConstraint("repetition_index >= 0", name="repetition_non_negative"),
         sa.CheckConstraint("scenario_version >= 1", name="scenario_version_positive"),
         sa.Index("ix_evaluation_run_behaviour", "tenant_id", "behaviour_version_id"),
         sa.Index("ix_evaluation_run_scenario", "tenant_id", "evaluation_scenario_id"),
+    )
+
+
+class EvaluationSuiteRun(Base, TenantScoped, CreatedAtMixin):
+    """One execution of an evaluation suite and its gate decision. Append-only.
+
+    Written once, complete, after every scenario has been scored: a suite result that could
+    be edited afterwards could be edited into a pass.
+    """
+
+    __tablename__ = "evaluation_suite_run"
+    __append_only__ = True
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    suite_key: Mapped[str] = mapped_column(sa.String(64), nullable=False)
+    suite_version: Mapped[int] = mapped_column(sa.Integer, nullable=False)
+    corpus_digest: Mapped[str] = mapped_column(sa.String(64), nullable=False)
+    behaviour_version_id: Mapped[uuid.UUID] = mapped_column(pg.UUID(as_uuid=True), nullable=False)
+    execution_mode: Mapped[ExecutionMode] = mapped_column(
+        enum_column(ExecutionMode, "execution_mode"), nullable=False
+    )
+    evaluator_version: Mapped[str] = mapped_column(sa.String(64), nullable=False)
+    baseline_suite_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        pg.UUID(as_uuid=True), nullable=True
+    )
+    gate_status: Mapped[EvaluationGateStatus] = mapped_column(
+        enum_column(EvaluationGateStatus, "evaluation_gate_status"), nullable=False
+    )
+    scenario_count: Mapped[int] = mapped_column(sa.Integer, nullable=False)
+    #: The complete machine-readable report, sealed by ``report_digest``.
+    report: Mapped[dict[str, Any]] = mapped_column(pg.JSONB, nullable=False)
+    report_digest: Mapped[str] = mapped_column(sa.String(64), nullable=False)
+    started_at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True), nullable=False)
+    completed_at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (
+        *tenant_identity_constraints("evaluation_suite_run"),
+        sa.ForeignKeyConstraint(
+            ["behaviour_version_id"],
+            ["behaviour_version.id"],
+            ondelete="RESTRICT",
+            name="fk_evaluation_suite_run_behaviour_version",
+        ),
+        tenant_fk(
+            "baseline_suite_run_id",
+            "evaluation_suite_run",
+            ondelete="RESTRICT",
+            name="fk_evaluation_suite_run_baseline",
+        ),
+        sa.CheckConstraint("suite_version >= 1", name="suite_version_positive"),
+        sa.CheckConstraint("scenario_count >= 0", name="scenario_count_non_negative"),
+        sa.CheckConstraint("corpus_digest ~ '^[0-9a-f]{64}$'", name="corpus_digest_format"),
+        sa.CheckConstraint("report_digest ~ '^[0-9a-f]{64}$'", name="report_digest_format"),
+        sa.CheckConstraint("completed_at >= started_at", name="completed_after_start"),
+        sa.CheckConstraint(
+            "baseline_suite_run_id IS NULL OR baseline_suite_run_id <> id",
+            name="baseline_is_not_self",
+        ),
+        sa.Index("ix_evaluation_suite_run_suite", "tenant_id", "suite_key", "completed_at"),
+    )
+
+
+class EvaluationJudgeResult(Base, TenantScoped, CreatedAtMixin):
+    """One LLM judge's result for one evaluation run. Append-only; evaluation data only."""
+
+    __tablename__ = "evaluation_judge_result"
+    __append_only__ = True
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    evaluation_run_id: Mapped[uuid.UUID] = mapped_column(pg.UUID(as_uuid=True), nullable=False)
+    judge_key: Mapped[str] = mapped_column(sa.String(64), nullable=False)
+    judge_provider: Mapped[str] = mapped_column(sa.String(128), nullable=False)
+    judge_model: Mapped[str] = mapped_column(sa.String(128), nullable=False)
+    rubric_id: Mapped[str] = mapped_column(sa.String(64), nullable=False)
+    rubric_version: Mapped[str] = mapped_column(sa.String(32), nullable=False)
+    outcome: Mapped[JudgeOutcome] = mapped_column(
+        enum_column(JudgeOutcome, "judge_outcome"), nullable=False
+    )
+    score: Mapped[float | None] = mapped_column(sa.Numeric(5, 4), nullable=True)
+    #: ``uncalibrated`` until a judge version is measured against human labels.
+    calibration_status: Mapped[str] = mapped_column(sa.String(16), nullable=False)
+    cited_evidence_ids: Mapped[list[str]] = mapped_column(
+        pg.ARRAY(sa.String(64)), nullable=False, server_default=sa.text("'{}'::varchar[]")
+    )
+    failure_reason: Mapped[str | None] = mapped_column(sa.String(255), nullable=True)
+
+    __table_args__ = (
+        *tenant_identity_constraints("evaluation_judge_result"),
+        tenant_fk(
+            "evaluation_run_id",
+            "evaluation_run",
+            ondelete="RESTRICT",
+            name="fk_evaluation_judge_result_run",
+        ),
+        sa.UniqueConstraint(
+            "tenant_id", "evaluation_run_id", "judge_key", "rubric_id", name="uq_judge_result"
+        ),
+        sa.CheckConstraint(
+            "(outcome = 'scored') = (score IS NOT NULL)", name="score_only_when_scored"
+        ),
+        sa.CheckConstraint("score IS NULL OR (score >= 0 AND score <= 1)", name="score_range"),
+        sa.CheckConstraint(
+            "calibration_status IN ('uncalibrated', 'calibrated')",
+            name="calibration_status_known",
+        ),
+    )
+
+
+class EvaluationReplayFixture(Base, TenantScoped, CreatedAtMixin):
+    """Recorded tool results and model responses that make a run replayable. Append-only.
+
+    The digest is computed over the canonical content by the harness and re-verified on
+    every load; a fixture whose content no longer matches its digest is refused.
+    """
+
+    __tablename__ = "evaluation_replay_fixture"
+    __append_only__ = True
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    source_workflow_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        pg.UUID(as_uuid=True), nullable=True
+    )
+    scenario_key: Mapped[str] = mapped_column(sa.String(32), nullable=False)
+    scenario_digest: Mapped[str] = mapped_column(sa.String(64), nullable=False)
+    format_version: Mapped[int] = mapped_column(sa.Integer, nullable=False)
+    digest: Mapped[str] = mapped_column(sa.String(64), nullable=False)
+    content: Mapped[dict[str, Any]] = mapped_column(pg.JSONB, nullable=False)
+
+    __table_args__ = (
+        *tenant_identity_constraints("evaluation_replay_fixture"),
+        tenant_fk(
+            "source_workflow_run_id",
+            "workflow_run",
+            ondelete="RESTRICT",
+            name="fk_evaluation_replay_fixture_run",
+        ),
+        sa.UniqueConstraint("tenant_id", "digest", name="uq_evaluation_replay_fixture_digest"),
+        sa.CheckConstraint("digest ~ '^[0-9a-f]{64}$'", name="digest_format"),
+        sa.CheckConstraint("scenario_digest ~ '^[0-9a-f]{64}$'", name="scenario_digest_format"),
+        sa.CheckConstraint("format_version >= 1", name="format_version_positive"),
+        sa.CheckConstraint("octet_length(content::text) <= 8000000", name="content_bounded"),
     )

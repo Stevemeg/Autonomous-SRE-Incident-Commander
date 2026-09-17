@@ -25,9 +25,10 @@ approval, verifies outcomes, and preserves operational memory.
 >
 > | | |
 > |---|---|
-> | **Completed** | Phase 0 bootstrap · Phase 1 requirements · Phase 2 architecture · Phase 3 persistence · Phase 4 orchestration · Phase 5 telemetry ingestion and correlation · Phase 6 operational knowledge, RAG and governed memory · Phase 7 bounded investigation · Phase 8 bounded remediation · Phase 9 authenticated API, RBAC and dashboard · **Phase 10 external integrations** |
-> | **In progress** | Nothing — Phase 10 is complete |
-> | **Next** | Phase 11 evaluation harness, replay and regression framework |
+> | **Completed** | Phase 0 bootstrap · Phase 1 requirements · Phase 2 architecture · Phase 3 persistence · Phase 4 orchestration · Phase 5 telemetry ingestion and correlation · Phase 6 operational knowledge, RAG and governed memory · Phase 7 bounded investigation · Phase 8 bounded remediation · Phase 9 authenticated API, RBAC and dashboard · Phase 10 external integrations · **Phase 11 evaluation, replay and regression harness** |
+> | **In progress** | Phase 12 observability and SLO instrumentation |
+> | **Next** | Phase 13 |
+> | **Evaluation** | Versioned 18-scenario golden corpus, strict replay at the provider seams, regression comparison and an executable gate. Results are **simulator/replay runs with a scripted model provider only** — they validate the pipeline and safety invariants, not reasoning quality; LLM judges are not measured ([evaluation harness](docs/evaluation/EVALUATION_ARCHITECTURE.md#11-phase-11-implementation-status)) |
 > | **External integrations** | Native Prometheus, Loki, Kubernetes, Slack, Teams, PagerDuty, Jira and Grafana adapters behind the broker, validated against **local deterministic servers only** — no live vendor system has been exercised ([integrations](docs/architecture/integrations.md)) |
 >
 > Phase 4 delivered five graph nodes under enforced contracts, a tool broker that is the
@@ -48,8 +49,8 @@ approval, verifies outcomes, and preserves operational memory.
 > explicit limitations, and [bounded remediation](docs/architecture/bounded-remediation.md)
 > for Phase 8's authorization, crash-recovery and verification boundaries.
 > Phase 9 adds the authenticated API and server-rendered incident-command dashboard; see
-> [Phase 9 API/dashboard](docs/architecture/phase9-api-dashboard.md). External connectors
-> and evaluation/replay remain deferred.
+> [Phase 9 API/dashboard](docs/architecture/phase9-api-dashboard.md). Phase 10 adds native
+> external adapters and Phase 11 the evaluation, replay and regression harness.
 > The repository gates include the full pytest suite against an unprivileged PostgreSQL role,
 > strict typing, lint/format, migration drift and documentation/security validation.
 >
@@ -65,8 +66,9 @@ approval, verifies outcomes, and preserves operational memory.
 > Section 20 of the specification forbids fake integrations, fabricated metrics and
 > placeholder production logic. This README states that a capability exists only once it
 > exists and has been validated. **No performance has been measured, and no claim is made
-> about the quality of the system's reasoning** — the harness that could measure it is
-> Phase 11, and the only model provider wired today is a deterministic one.
+> about the quality of the system's reasoning** — the Phase 11 harness exists, but the only
+> model provider wired today is a deterministic one, so its runs validate the pipeline rather
+> than measure reasoning.
 
 ---
 
@@ -95,7 +97,7 @@ people do.
 | Controlled remediation using permission-scoped tools only | **Phase 8 broker-enforced** |
 | Independent post-remediation verification | **Phase 8 fail-closed verifier** |
 | Slack/Teams collaboration and PagerDuty/Jira workflows | **Phase 10 outbound built** — deterministic S2 notifications through the broker; inbound chat approval intentionally not built |
-| Historical incident replay for testing and evaluation | Not started |
+| Historical incident replay for testing and evaluation | **Phase 11 built** — strict replay of recorded harness runs (no production incident has been recorded) |
 | Governed operational memory and learning | **Phase 6/8 built** — human-gated T4/T5 promotion; verified remediation memory requires complete trusted G10 baseline and independent post-read lineage |
 
 Where a row says *built*, it means built and covered by tests against deterministic

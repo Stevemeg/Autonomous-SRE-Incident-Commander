@@ -34,6 +34,9 @@ from asic.db.models import (
     AuditRecord,
     ConnectorScopeBinding,
     Environment,
+    EvaluationRun,
+    EvaluationScenario,
+    EvaluationSuiteRun,
     Evidence,
     ExecutionTrace,
     Hypothesis,
@@ -65,6 +68,7 @@ from asic.domain.enums import (
 )
 from asic.domain.errors import ApprovalInvalid, IllegalStateTransition
 from asic.domain.idempotency import incident_event_key
+from asic.evaluation.versioning import digest
 from asic.ingestion.contracts import ConnectorContext, IngestionRejected
 from asic.ingestion.service import IngestionService
 from asic.remediation.approval_service import decide
@@ -812,12 +816,112 @@ async def ingest_webhook(
     return await ingest_alert(request, principal, session, idempotency_key)
 
 
-@evaluation.api_route("/{path:path}", methods=["GET", "POST"], status_code=501)
-def evaluation_deferred(path: str, principal: CurrentPrincipal) -> None:
-    del path
-    require_any_environment(principal, EVALUATION_READ)
-    raise HTTPException(
-        501, detail={"code": "deferred", "message": "evaluation and replay execution are Phase 11"}
+def _suite_run_json(item: EvaluationSuiteRun) -> dict[str, Any]:
+    return _row(
+        id=item.id,
+        suite_key=item.suite_key,
+        suite_version=item.suite_version,
+        execution_mode=item.execution_mode,
+        evaluator_version=item.evaluator_version,
+        gate_status=item.gate_status,
+        scenario_count=item.scenario_count,
+        corpus_digest=item.corpus_digest,
+        report_digest=item.report_digest,
+        baseline_suite_run_id=item.baseline_suite_run_id,
+        started_at=item.started_at,
+        completed_at=item.completed_at,
+    )
+
+
+# Evaluation results are read-only over the API. Suites are executed by the evaluation gate
+# (``python -m asic.evaluation.gate``), never triggered by an API caller. Results span the
+# tenant's evaluation environments, so reading them needs tenant-wide authority.
+
+
+@evaluation.get("/suite-runs")
+def list_suite_runs(
+    principal: CurrentPrincipal,
+    session: DbSession,
+    limit: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = 50,
+    cursor: str | None = None,
+) -> dict[str, Any]:
+    require_tenant_wide(principal, EVALUATION_READ)
+    statement = sa.select(EvaluationSuiteRun).where(
+        EvaluationSuiteRun.tenant_id == principal.tenant_id
+    )
+    after = _decode_cursor(cursor)
+    if after is not None:
+        statement = statement.where(EvaluationSuiteRun.id > after)
+    rows = list(session.scalars(statement.order_by(EvaluationSuiteRun.id).limit(limit + 1)))
+    return _page([_suite_run_json(item) for item in rows], limit)
+
+
+@evaluation.get("/suite-runs/{suite_run_id}")
+def get_suite_run(
+    suite_run_id: uuid.UUID, principal: CurrentPrincipal, session: DbSession
+) -> dict[str, Any]:
+    require_tenant_wide(principal, EVALUATION_READ)
+    item = session.scalar(
+        sa.select(EvaluationSuiteRun).where(
+            EvaluationSuiteRun.tenant_id == principal.tenant_id,
+            EvaluationSuiteRun.id == suite_run_id,
+        )
+    )
+    if item is None:
+        raise HTTPException(404, detail={"code": "not_found", "message": "suite run not found"})
+    # The stored digest is re-checked on read: a report altered after sealing is reported as
+    # unverified rather than served as if it were the gate's result.
+    return {
+        **_suite_run_json(item),
+        "report_verified": digest(dict(item.report)) == item.report_digest,
+        "report": item.report,
+    }
+
+
+@evaluation.get("/runs")
+def list_evaluation_runs(
+    principal: CurrentPrincipal,
+    session: DbSession,
+    suite_run_id: uuid.UUID | None = None,
+    limit: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = 50,
+    cursor: str | None = None,
+) -> dict[str, Any]:
+    require_tenant_wide(principal, EVALUATION_READ)
+    statement = (
+        sa.select(EvaluationRun, EvaluationScenario.key)
+        .join(
+            EvaluationScenario,
+            sa.and_(
+                EvaluationScenario.tenant_id == EvaluationRun.tenant_id,
+                EvaluationScenario.id == EvaluationRun.evaluation_scenario_id,
+            ),
+        )
+        .where(EvaluationRun.tenant_id == principal.tenant_id)
+    )
+    if suite_run_id is not None:
+        statement = statement.where(EvaluationRun.suite_run_id == suite_run_id)
+    after = _decode_cursor(cursor)
+    if after is not None:
+        statement = statement.where(EvaluationRun.id > after)
+    rows = session.execute(statement.order_by(EvaluationRun.id).limit(limit + 1)).all()
+    return _page(
+        [
+            _row(
+                id=run.id,
+                suite_run_id=run.suite_run_id,
+                scenario_key=key,
+                scenario_version=run.scenario_version,
+                scenario_digest=run.scenario_digest,
+                execution_mode=run.execution_mode,
+                evaluator_version=run.evaluator_version,
+                verdict=run.verdict,
+                failure_classes=run.failure_classes,
+                metrics=run.metrics,
+                workflow_run_id=run.workflow_run_id,
+            )
+            for run, key in rows
+        ],
+        limit,
     )
 
 
@@ -997,7 +1101,7 @@ def create_app(
         if factory is None:
             resolved_factory.kw["bind"].dispose()
 
-    app = FastAPI(title="Autonomous SRE Incident Commander", version="0.10.0", lifespan=lifespan)
+    app = FastAPI(title="Autonomous SRE Incident Commander", version="0.11.0", lifespan=lifespan)
     app.state.api_settings = resolved_settings
     app.state.session_factory = resolved_factory
     app.state.rate_limiter = RateLimiter(resolved_settings.rate_limit_per_minute)

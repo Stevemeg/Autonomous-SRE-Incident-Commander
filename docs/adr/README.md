@@ -1,12 +1,12 @@
 # Architecture Decision Records
 
-> **Twenty-three records. Eighteen are Accepted.**
+> **Twenty-seven records. Twenty-two are Accepted.**
 >
 > ADRs 0001-0011 were written during the Architecture Package. Later implementation phases
 > accepted the decisions whose evidence now exists; the table below is authoritative for
 > current status. ADRs 0012-0014 were raised during Phase 3, 0015-0018 during Phase 4 and
 > its migration-history correction, 0019 during Phase 5, 0022 during Phase 7, and 0023
-> during Phase 8, 0024 during Phase 9, and 0025 during the Phase 6–9 audit correction. ADR 0020 (the `provider_kind` label) was written in Phase 10; 0021 remains reserved by a
+> during Phase 8, 0024 during Phase 9, and 0025 during the Phase 6–9 audit correction. ADR 0020 (the `provider_kind` label), 0026 and 0027 were written in Phase 10, and 0028 in Phase 11; 0021 remains reserved by a
 > forward reference left in the Phase 6 correction (a retrieval-quality bound) and is
 > not yet written; Phase 7 and Phase 8 number their own records 0022 and 0023 rather than
 > collide with them.
@@ -94,6 +94,7 @@ not replace an accepted ADR.
 | [0025](./0025-freeze-remediation-authority-before-effects.md) | Freeze remediation authority before operational effects | **`Accepted`** | 5, 6, 12, 15 | 2026-09-15 |
 | [0026](./0026-external-integrations-behind-the-broker.md) | External integrations are native adapters behind the broker, with server-side connector authority | **`Accepted`** | 6, 7, 11, 14, 15, 20 | 2026-09-16 |
 | [0027](./0027-loki-as-the-log-backend.md) | Loki is the log backend adapter; Elasticsearch/OpenSearch is not built | **`Accepted`** | 13, 14 | 2026-09-16 |
+| [0028](./0028-evaluation-harness-replay-at-provider-seams.md) | The evaluation harness replays at the provider seams and never lets a judge gate | **`Accepted`** | 9, 10, 17, 18, 20 | 2026-09-17 |
 
 ## Priority order for acceptance
 
@@ -166,6 +167,12 @@ during implementation become ADRs rather than being made silently:
 | [0026](./0026-external-integrations-behind-the-broker.md) | Outbound calls needed tenant connector authority, secret handling, and an honest classification for records that cannot be rolled back | `tests/integrations/`, migration `0016_external_integrations` |
 | [0027](./0027-loki-as-the-log-backend.md) | Candidate decision C1 (log backend) had to be settled to build `logs.query` | `tests/integrations/test_adapters.py::TestLoki` |
 
+## Decisions raised by Phase 11
+
+| ADR | Discovered because | Evidence |
+|---|---|---|
+| [0028](./0028-evaluation-harness-replay-at-provider-seams.md) | Replay, scenario versioning, judge authority and gate history had to be decided to build a harness that cannot report a moved target or a fabricated reproduction | `tests/evaluation/`, migration `0017_evaluation_harness` |
+
 ## Candidate decisions still to be written
 
 Identified during the Architecture Package but not yet ADRs, because the evidence to decide
@@ -174,8 +181,8 @@ them does not exist. Recorded so the scope is visible.
 | # | Candidate decision | Spec ref | Blocked until |
 |---|---|---|---|
 | C1 | ~~Telemetry log backend: Loki vs Elasticsearch/OpenSearch~~ | 14 | **Resolved by ADR-0027** |
-| C2 | Integration simulator design and replay-fixture format | 14 | Phase 4 — needs the first adapter |
-| C3 | Evaluation judge model strategy and calibration approach | 9 | Phase 11 — needs a labelled corpus |
+| C2 | ~~Integration simulator design and replay-fixture format~~ | 14 | **Replay-fixture format resolved by ADR-0028** |
+| C3 | Evaluation judge calibration approach | 9 | Judge strategy settled by ADR-0028; calibration needs a human-labelled set and a live judge provider |
 | C4 | Frontend scope and framework commitment beyond Next.js baseline | 13 | Deferred beyond Phase 9; ADR-0024 fixes the Phase 9 baseline |
 | C5 | Kubernetes deployment topology and Terraform module boundaries | 13, 16 | Phase 14 |
 | C6 | Embedding model selection and re-index strategy | 8 | Phase 6 — needs the retrieval evaluation set |

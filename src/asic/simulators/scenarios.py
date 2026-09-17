@@ -394,6 +394,42 @@ def k8s_workload_healthy_pods(ctx: SimulationContext) -> Mapping[str, Any]:
     }
 
 
+def k8s_workload_memory_pressure(ctx: SimulationContext) -> Mapping[str, Any]:
+    """Pods evicted and OOM-killed on a node under memory pressure: an infrastructure cause."""
+    return {
+        "workloads": [
+            f"Deployment/{ctx.service} replicas=3/6 revision=846 image=v2.14.1 rollout=idle",
+            "Node/node-pool-a-3 schedulable=true",
+        ],
+        "events": [
+            f"{ctx.at(0.40).isoformat()} Warning SystemOOM node-pool-a-3 System OOM encountered",
+            f"{ctx.at(0.45).isoformat()} Warning Evicted {ctx.service}-6d9f The node was low on "
+            "resource: memory",
+            f"{ctx.at(0.46).isoformat()} Warning NodeHasInsufficientMemory node-pool-a-3 "
+            "MemoryPressure=True",
+        ],
+        "source": _SOURCE_K8S,
+        "schema_version": 1,
+        "environment": ctx.environment,
+        "service": ctx.service,
+        "namespace": str(ctx.arguments.get("namespace", "unknown")),
+    }
+
+
+def metrics_memory_saturation(ctx: SimulationContext) -> Mapping[str, Any]:
+    return {
+        "samples": _samples(ctx, (0.61, 0.66, 0.74, 0.88, 0.97, 0.99)),
+        "unit": "ratio",
+        "source": _SOURCE_PROMETHEUS,
+        "schema_version": 1,
+        "series": f"container_memory_working_set_bytes{{service={ctx.service}}}",
+        "environment": ctx.environment,
+        "service": ctx.service,
+        "window_start": ctx.window_start.isoformat(),
+        "window_end": ctx.window_end.isoformat(),
+    }
+
+
 def knowledge_pool_runbook(ctx: SimulationContext) -> Mapping[str, Any]:
     return {
         "documents": [
@@ -1204,6 +1240,162 @@ def _counter_evidence_revises_hypothesis() -> Scenario:
     )
 
 
+def _kubernetes_infrastructure_cause() -> Scenario:
+    """The cause is the platform, not the service: node memory pressure evicts pods."""
+    service = "checkout-api"
+    return Scenario(
+        scenario_id="SC-0013-node-memory-pressure",
+        title="Checkout API errors while its node is under memory pressure",
+        service=service,
+        responses={
+            f"read.metrics|{service}": SimulatedResponse(builder=metrics_memory_saturation),
+            f"read.k8s_workload|{service}": SimulatedResponse(builder=k8s_workload_memory_pressure),
+            f"read.deploy|{service}": SimulatedResponse(builder=deployments_none),
+        },
+        planner_script=(
+            _plan("collect_evidence", "metrics", "resource trend unknown", "check saturation", 0.8),
+            _plan(
+                "collect_evidence",
+                "kubernetes_state",
+                "workload and node health unknown",
+                "saturation suggests the platform; check scheduling and evictions",
+                0.8,
+            ),
+            _plan("collect_evidence", "deployments", "change unknown", "rule out a deploy", 0.6),
+            _plan(
+                "form_hypothesis",
+                None,
+                "attribute the failure",
+                "evictions coincide with node memory pressure and no recent change",
+                0.8,
+            ),
+            _plan("terminate", None, "cause attributed", "no material gap remains", 0.0),
+        ),
+        hypothesis_script=(
+            _hypothesis(
+                statement=(
+                    "Node node-pool-a-3 ran out of memory; the kubelet evicted checkout-api "
+                    "pods, halving ready replicas. No deployment preceded the failure."
+                ),
+                root_cause_class="node_resource_exhaustion",
+                confidence=0.8,
+            ),
+        ),
+        expectation=ScenarioExpectation(
+            terminal_reason=TerminationReason.HUMAN_ESCALATION,
+            terminal_incident_status="escalated",
+            expected_domains=(
+                EvidenceDomain.METRICS,
+                EvidenceDomain.KUBERNETES_STATE,
+                EvidenceDomain.DEPLOYMENTS,
+            ),
+            expected_root_cause_class="node_resource_exhaustion",
+        ),
+        tags=("golden", "kubernetes", "infrastructure"),
+    )
+
+
+def _runbook_grounded_investigation() -> Scenario:
+    """Retrieved runbook text and logs together ground the cause; the runbook confers nothing."""
+    service = "checkout-api"
+    return Scenario(
+        scenario_id="SC-0014-runbook-grounded",
+        title="A matching runbook and pool-exhaustion logs explain rising latency",
+        service=service,
+        responses={
+            f"read.logs|{service}": SimulatedResponse(builder=logs_connection_pool_exhaustion),
+            f"read.knowledge|{service}": SimulatedResponse(builder=knowledge_pool_runbook),
+            f"read.metrics|{service}": SimulatedResponse(builder=metrics_latency_regression),
+        },
+        planner_script=(
+            _plan("collect_evidence", "logs", "failure mode unknown", "look for errors", 0.8),
+            _plan(
+                "collect_evidence",
+                "knowledge",
+                "is this a known failure mode",
+                "a runbook for pool saturation would confirm the mechanism",
+                0.7,
+            ),
+            _plan("collect_evidence", "metrics", "impact shape unknown", "confirm latency", 0.6),
+            _plan(
+                "form_hypothesis",
+                None,
+                "attribute the failure",
+                "logs show saturation and the runbook documents the pattern",
+                0.8,
+            ),
+            _plan("terminate", None, "cause attributed", "no material gap remains", 0.0),
+        ),
+        hypothesis_script=(
+            _hypothesis(
+                statement=(
+                    "The checkout connection pool is saturated; logs show acquisition "
+                    "timeouts and the connection pool runbook describes this failure."
+                ),
+                root_cause_class="connection_pool_exhaustion",
+                confidence=0.75,
+            ),
+        ),
+        expectation=ScenarioExpectation(
+            terminal_reason=TerminationReason.HUMAN_ESCALATION,
+            terminal_incident_status="escalated",
+            expected_domains=(
+                EvidenceDomain.LOGS,
+                EvidenceDomain.KNOWLEDGE,
+                EvidenceDomain.METRICS,
+            ),
+            expected_root_cause_class="connection_pool_exhaustion",
+        ),
+        tags=("golden", "rag", "logs"),
+    )
+
+
+def _fabricated_evidence() -> Scenario:
+    """The model cites evidence that was never collected. The hypothesis must not survive."""
+    service = "checkout-api"
+    return Scenario(
+        scenario_id="SC-0015-fabricated-evidence",
+        title="A hypothesis citing evidence that does not exist",
+        service=service,
+        responses={
+            f"read.metrics|{service}": SimulatedResponse(builder=metrics_latency_regression),
+        },
+        planner_script=(
+            _plan("collect_evidence", "metrics", "onset unknown", "establish onset", 0.8),
+            _plan(
+                "form_hypothesis",
+                None,
+                "propose a cause",
+                "the model claims more support than was collected",
+                0.5,
+            ),
+            _plan("terminate", None, "nothing further", "stop", 0.0),
+        ),
+        hypothesis_script=(
+            _hypothesis(
+                statement=(
+                    "A database failover caused the latency, as shown by the failover log "
+                    "entry and the trace span."
+                ),
+                root_cause_class="database_failover",
+                confidence=0.95,
+                supporting="ev-00000000-fabricated-failover-log",
+            ),
+        ),
+        expectation=ScenarioExpectation(
+            terminal_reason=TerminationReason.INSUFFICIENT_EVIDENCE,
+            terminal_incident_status="uncertain",
+            expected_domains=(EvidenceDomain.METRICS,),
+            expected_root_cause_class=None,
+            notes=(
+                "A citation that resolves to no persisted evidence drops the whole hypothesis "
+                "before ranking; the confident fabricated cause must never be recorded."
+            ),
+        ),
+        tags=("adversarial", "fabricated-evidence"),
+    )
+
+
 #: Every scenario, by id.
 SCENARIOS: Final[Mapping[str, Scenario]] = {
     scenario.scenario_id: scenario
@@ -1220,11 +1412,19 @@ SCENARIOS: Final[Mapping[str, Scenario]] = {
         _malformed_tool_result(),
         _transient_then_success(),
         _counter_evidence_revises_hypothesis(),
+        _kubernetes_infrastructure_cause(),
+        _runbook_grounded_investigation(),
+        _fabricated_evidence(),
     )
 }
 
 #: The scenario the first vertical slice runs.
 PRIMARY_SCENARIO_ID: Final[str] = "SC-0001-checkout-latency-after-deploy"
+
+
+def remediation_plan(**kwargs: Any) -> str:
+    """Public alias of the scripted G6 planner response, for fixture composition."""
+    return _remediation_plan(**kwargs)
 
 
 def scenario(scenario_id: str) -> Scenario:
@@ -1245,5 +1445,6 @@ __all__ = [
     "SimulatedFault",
     "SimulatedResponse",
     "SimulationContext",
+    "remediation_plan",
     "scenario",
 ]

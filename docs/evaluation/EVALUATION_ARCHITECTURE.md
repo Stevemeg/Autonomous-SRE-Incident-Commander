@@ -1,13 +1,18 @@
 # Evaluation Harness Architecture
 
-- **Status:** Authored — Architecture Package (V3 §23 I). **Proposed; not implemented.**
+- **Status:** Authored — Architecture Package (V3 §23 I). **Partially implemented in Phase 11**
+  — see [§11](#11-phase-11-implementation-status) for what exists, what differs from this
+  design, and what is deferred. [ADR-0028](../adr/0028-evaluation-harness-replay-at-provider-seams.md)
+  records the decisions.
 - **Master specification references:** Sections 9, 10, 17, 18, 23(I)
 - **Related:** [`../architecture/observability.md`](../architecture/observability.md) · [`../architecture/agent-topology.md`](../architecture/agent-topology.md)
 
-> **No evaluation has been run and no result exists.** Every metric below is a definition of
-> something to be measured. Master specification section 9 forbids invented improvement
-> percentages; this document contains none and the reporting rules in §10 are written to
-> keep it that way.
+> **Sections 1–10 are the design.** Every metric there is a definition of something to be
+> measured. The only results that exist are the **simulator and replay** runs described in
+> §11, against a deterministic scripted model provider; they validate the pipeline, the
+> safety invariants and the harness itself, **not the quality of any model's reasoning**.
+> Master specification section 9 forbids invented improvement percentages; this document
+> contains none.
 
 ---
 
@@ -435,3 +440,76 @@ Binding, from §9 and §22.
 
 > Until the harness runs, the honest statement about this system's performance is: **no
 > performance has been measured.**
+
+---
+
+## 11. Phase 11 implementation status
+
+Code: `src/asic/evaluation/`. Migration: `0017_evaluation_harness`. Tests:
+`tests/evaluation/`. Executable gate: `python -m asic.evaluation.gate`.
+
+### 11.1 What exists
+
+| Design element | Implementation | Evidence label |
+|---|---|---|
+| Versioned corpus (§3) | 18 scenarios (`EV-INV-001…010`, `EV-COR-001`, `EV-REM-001…004`, `EV-SEC-001…003`) covering 23 declared categories; each has a key, a version and a SHA-256 digest over its definition **and** the simulator fixtures it runs on | UNIT |
+| Golden / adversarial classes (§3.2) | Both used; prompt injection and fabricated citations are adversarial | SIMULATOR |
+| Replay (§2) | Recording and replay at the tool-provider and model-provider seams, strict in order and identity; fixtures stored with a digest and a format version, refused if either does not match | REPLAY |
+| Deterministic checks (§4) | Zero-tolerance invariants on every run (cross-tenant execution, citations resolve, no unauthorised infrastructure mutation, external records only from the notification service, budgets, trusted verification lineage) plus per-scenario expectations | UNIT + SIMULATOR |
+| Judges (§5) | `LlmJudge` through the existing model-provider port; exact JSON schema, citations must name gathered evidence, panel status `not_measured` / `insufficient` / `agreed` / `contested` | UNIT (scripted judge model as test infrastructure) |
+| Metrics (§6) | Per run, with `None` where a metric does not apply; aggregated as a profile, never one number | SIMULATOR |
+| Regression comparison (§7) | Per scenario and per metric against a stored baseline; comparable only when scenario digest and evaluator version match | UNIT + REPLAY |
+| Behaviour version (§7.1) | Every suite run and result row records the behaviour version | INTEGRATION |
+| Failure classification (§8.1) | Recorded per run (see §11.3 for the vocabulary actually used) | SIMULATOR |
+| Persistence | `evaluation_suite_run`, `evaluation_run`, `evaluation_judge_result`, `evaluation_replay_fixture`, `evaluation_scenario`: tenant-scoped, forced RLS, append-only for the application role; suite reports sealed with a digest re-checked when read | INTEGRATION |
+| Reporting | Read-only API: `GET /api/v1/evaluation/suite-runs`, `/suite-runs/{id}`, `/runs` (tenant-wide `evaluation.read`) | INTEGRATION |
+
+### 11.2 What differs from the design, and why
+
+| Design says | Implementation does | Reason |
+|---|---|---|
+| Thirteen deterministic checks (§4) | Citation existence, cross-tenant execution, evidence recall, correlation grouping, action identity, approval requirement, termination reason, budget conformance and replay determinism are checked. **Forbidden-evidence queries, schema validity and audit completeness are not re-checked by the harness**; unsafe actions are checked as unauthorised effects rather than against a per-scenario forbidden list | Schema validity is enforced at runtime by node contracts; the others need labels the corpus does not yet carry. Stated rather than implied |
+| Citation scope across tenants/services (§4) | Cross-tenant *execution* is checked; citation scope is enforced by the database (RLS and composite foreign keys) and by governed retrieval, not re-checked by the harness | The database boundary is the authority; a harness re-check would be a weaker duplicate |
+| Replay of real incidents (§3.2) | Replay of **recorded harness runs** only. No production incident has been recorded | No production deployment exists |
+| Noise measured with *n* repetitions (§7) | Simulator and replay modes are deterministic, so deltas are exact and `repetitions = 1`. A live-model suite would need repetitions; the comparison labels live single-run deltas as not significant | No live model provider is wired (ADR-0016) |
+| Judge calibration against human labels (§5.4) | **Not performed.** Every judge result is recorded `uncalibrated`, and a judge can at most mark a run `contested` - it never fails or passes the gate | No labelled human set and no live judge provider exist |
+| Smoke / full / nightly / release / shadow modes (§9) | `smoke` and `golden` suites, `simulator` and `replay` modes, via the CLI gate. Nightly, release and shadow are not built; CI wiring is Phase 14 | Scope of Phase 11 |
+| Knowledge fixtures (§2) | RAG scenarios ingest versioned documents through the real governed pipeline and retrieve through the native store, in both modes; retrieval is not recorded because the store is rebuilt identically | Knowledge evidence is only accepted with a manifest the database verifies (P6-02); a simulated search result is correctly refused |
+
+### 11.3 Failure classes
+
+The implementation uses the master specification's section 10 vocabulary
+(`EvaluationFailureClass`): `retrieval`, `evidence_grounding`, `hallucination`, `planning`,
+`tool_selection`, `tool_authorization`, `rca`, `remediation`, `verification`, `budget`,
+`timeout`, `integration`, `harness`. The `F1`–`F10` table in §8.1 is the design taxonomy;
+`harness` is added so that a harness failure is never attributed to the system under test.
+
+### 11.4 Results that exist
+
+All results are **SIMULATED / REPLAY EVALUATION - not production results**, produced with
+the deterministic scripted model provider, on the local PostgreSQL gate database, on
+2026-09-17, evaluator version `2026.09.17-eval-1`, suite `golden` v1:
+
+- Simulator mode: 18 of 18 scenarios passed; 0 unsafe actions; 0 false-success verdicts.
+- Replay mode (separate process, fixtures read back from the database): 18 of 18 passed with
+  observation signatures identical to the simulator run; regression rate against that
+  baseline 0.
+- LLM judges: **not measured** (no judge provider configured).
+
+Because the model is scripted, RCA "accuracy" in these runs measures whether the pipeline
+records, cites and ranks what the script produced - it is **not** a measurement of
+reasoning quality, and no such claim is made. During development the harness did catch
+real defects: an evaluator expectation that treated an unlabelled cause as a
+hallucination, a RAG scenario whose knowledge evidence was backed by an empty retrieval,
+alert fingerprints that collided across suite runs, and an observation ordering that
+depended on random identifiers under a logical clock.
+
+### 11.5 Known limitations
+
+- Tool-call *order* is enforced by strict replay, but the stored observation signature
+  compares tool calls as a multiset: rows written under one logical instant carry no sequence
+  number.
+- The gate is executable and machine-readable (exit `0` passed, `1` failed, `2` errored);
+  it is not yet wired into CI (Phase 14).
+- A downgrade of migration `0017` is refused once any suite run exists, rather than
+  discarding recorded evaluation history.

@@ -3,14 +3,16 @@
 This directory holds every non-code artifact required by the master specification
 (section 16, "REQUIRED ARCHITECTURE/DOCUMENTATION").
 
-> **Current project stage: Phase 10 complete - external integrations.** Bounded,
+> **Current project stage: Phase 11 complete - evaluation, replay and regression harness.** Bounded,
 > tenant-aware investigation and safety-gated remediation run through one capability broker.
 > Phase 10 adds native Prometheus, Loki, Kubernetes, Slack, Microsoft Teams, PagerDuty, Jira
 > and Grafana adapters behind that broker, with server-side connector authority, credential
 > references resolved only at the execution boundary, normalised failure classes and a
 > deterministic notification service. These adapters are validated against **local
-> deterministic HTTP servers only**; no live vendor system has been exercised. The evaluation
-> harness (Phase 11) and observability completion (Phase 12) are not yet built. No metric
+> deterministic HTTP servers only**; no live vendor system has been exercised. Phase 11 adds a
+> versioned golden corpus, strict replay, regression comparison and an executable gate; its
+> results are simulator/replay runs with a scripted model provider, not reasoning
+> measurements. Observability completion (Phase 12) is not yet built. No metric
 > anywhere in this directory is a measurement beyond what is explicitly labelled as measured
 > on a stated corpus.
 
@@ -33,7 +35,7 @@ area and points to the document that owns the detail.
 | [`architecture/integrations.md`](./architecture/integrations.md) | Native external adapters, connector authority, credentials, failure model | **Implemented; tested against local servers only** |
 | [`adr/`](./adr/) | Architecture Decision Records | See the ADR index for current status |
 | [`security/`](./security/) | Threat model (§L) and the active repository security checklist | **Authored** |
-| [`evaluation/`](./evaluation/) | Evaluation harness architecture (§I) | **Authored** |
+| [`evaluation/`](./evaluation/) | Evaluation harness architecture (§I) and Phase 11 implementation status | **Implemented (simulator/replay) and tested** |
 
 ## Reading order for a new reviewer
 

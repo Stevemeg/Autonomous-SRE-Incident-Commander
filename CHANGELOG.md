@@ -22,6 +22,42 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added — Phase 11 evaluation, replay and regression harness
+
+- A versioned golden corpus of 18 scenarios covering 23 declared behaviours (clear,
+  ambiguous, conflicting and insufficient evidence; metrics, logs, traces, deployments,
+  Kubernetes and runbook-grounded investigation; prompt injection and fabricated citations;
+  correlation; remediation with approval, verification success and failure, and an unsafe
+  R2 refusal; authorization denial, connector revocation and duplicate execution). Each
+  scenario has a digest over its definition and fixtures; changing one without a version bump
+  errors the run.
+- Recording and strict replay at the tool- and model-provider seams, with digest-verified
+  fixtures; a divergent or incompletely consumed replay fails rather than fabricating a
+  reproduction. Verified identical observation signatures across simulator and replay runs,
+  including after a process restart.
+- Deterministic evaluators reading the durable records under RLS: zero-tolerance invariants
+  (cross-tenant execution, citations resolve, no unauthorised infrastructure mutation,
+  external records only from S2, budgets, trusted verification lineage) plus per-scenario
+  expectations, failure classification and per-run metrics that are `None` when not
+  applicable.
+- LLM judges through the model-provider port with strict output validation; panel status
+  `not_measured` / `insufficient` / `agreed` / `contested`; results recorded `uncalibrated`
+  and never able to fail or pass the gate.
+- Baseline comparison per scenario and metric, and `python -m asic.evaluation.gate` with exit
+  codes `0` passed, `1` failed, `2` errored and a sealed JSON report.
+- Migration `0017_evaluation_harness`: suite runs, judge results and replay fixtures;
+  evaluation results append-only for the application role; downgrade refused once history
+  exists. `node_id` gains `e1_evaluation_judge` (left in place on downgrade).
+- Read-only evaluation result routes replace the Phase 9 `501 deferred` placeholder.
+- `RemediationKernel.start` accepts optional fixture references so a remediation trace can be
+  bound to the evaluation that produced it.
+- Results (SIMULATED / REPLAY, scripted model, local PostgreSQL, 2026-09-17): golden suite 18
+  of 18 passed in simulator and in replay mode, 0 unsafe actions, 0 false-success verdicts;
+  judges not measured. These validate the pipeline and safety invariants, not reasoning
+  quality.
+- Package version `0.11.0` (`asic.__version__` had not been advanced past `0.5.0`; it now
+  matches the package).
+
 ### Added — Phase 10 external integrations
 
 - Native, typed adapters behind the tool broker for Prometheus (reviewed PromQL templates,

@@ -117,6 +117,7 @@ class RemediationKernel:
         hypothesis_id: uuid.UUID,
         behaviour_version_id: uuid.UUID,
         selected_service_id: uuid.UUID,
+        fixture_refs: Mapping[str, Any] | None = None,
     ) -> RemediationOutcome:
         """Open a remediation run against an incident that is currently investigating.
 
@@ -231,7 +232,7 @@ class RemediationKernel:
                 trace_id=trace_id,
                 correlation_id=correlation_id,
                 clock_start=run_started_at,
-                fixture_refs={},
+                fixture_refs=dict(fixture_refs or {}),
                 started_at=run_started_at,
             )
             session.add(trace_row)

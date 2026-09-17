@@ -19,8 +19,11 @@ from asic.db.models.catalog import (
 )
 from asic.db.models.evaluation import (
     BehaviourVersion,
+    EvaluationJudgeResult,
+    EvaluationReplayFixture,
     EvaluationRun,
     EvaluationScenario,
+    EvaluationSuiteRun,
     ExecutionTrace,
     TraceSpan,
 )
@@ -123,8 +126,11 @@ __all__ = [
     "BehaviourVersion",
     "ConnectorScopeBinding",
     "Environment",
+    "EvaluationJudgeResult",
+    "EvaluationReplayFixture",
     "EvaluationRun",
     "EvaluationScenario",
+    "EvaluationSuiteRun",
     "Evidence",
     "ExecutionTrace",
     "Hypothesis",

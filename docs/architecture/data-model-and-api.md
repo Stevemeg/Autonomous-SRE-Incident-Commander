@@ -7,8 +7,8 @@ surface below is implemented as the authenticated, read-focused Phase 9 API desc
 in §7.
 
 - **Status:** Persistence is implemented through Phase 9 and the §7 authenticated API is
-  implemented at its documented read-focused boundary. Production external adapters and
-  evaluation execution remain deferred.
+  implemented at its documented read-focused boundary. Phase 10 adds native external
+  adapters; Phase 11 adds evaluation persistence and read-only evaluation result routes.
 - **Master specification references:** Sections 8, 12, 13, 15, 16, 23(M)
 - **Related:** [`../security/THREAT_MODEL.md`](../security/THREAT_MODEL.md) · [`memory-and-rag.md`](./memory-and-rag.md)
 
@@ -306,7 +306,8 @@ ADMINISTRATION
 ```
 
 Incident annotation and administration GET routes for tools, policies, tenants, services,
-knowledge and audit are implemented. Evaluation execution remains Phase 11. Administrative
+knowledge and audit are implemented. Evaluation results are readable (Phase 11); suites are
+executed by the evaluation gate, not over the API. Administrative
 POST mutation of tool/policy/tenant/service/knowledge catalogues is intentionally outside
 the read-focused Phase 9 boundary; external connector configuration begins in Phase 10.
 Phase 9 nevertheless enforces a server-owned `connector_scope_binding` for every signed

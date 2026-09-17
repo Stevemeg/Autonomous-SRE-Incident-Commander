@@ -93,6 +93,7 @@ ALLOWED_SOURCE_ROOTS = (
     "src/asic/api",  # Phase 9 - authenticated HTTP surfaces
     "src/asic/integrations",  # Phase 10 - native external adapters behind the broker
     "src/asic/notifications",  # Phase 10 - S2 deterministic notification service
+    "src/asic/evaluation",  # Phase 11 - evaluation harness, replay and regression gate
     "src/asic/simulators",
     "src/asic/tools",
     "migrations",
@@ -106,7 +107,6 @@ FORBIDDEN_PACKAGES = (
     # be a second egress path the broker does not control.
     "src/asic/adapters",
     "src/asic/connectors",
-    "src/asic/evaluation",  # Phase 11 - harness
     "src/asic/agents",  # Phase 7  - specialised investigation agents
     # Phase 6 lives in knowledge/ and memory/. A parallel retrieval tree would be a second
     # path to content that bypasses the governed one.
@@ -402,9 +402,10 @@ def check_responsibility_coverage(f: Findings) -> int:
 def check_phase_boundary(f: Findings) -> int:
     """Assert no later phase has started early.
 
-    Through Phase 10, the repository holds governed knowledge, bounded investigation,
-    safety-gated remediation, authenticated API/dashboard surfaces and native external
-    integrations behind the broker. The evaluation harness remains out of scope.
+    Through Phase 11, the repository holds governed knowledge, bounded investigation,
+    safety-gated remediation, authenticated API/dashboard surfaces, native external
+    integrations behind the broker and the evaluation/replay harness. Observability
+    completion (Phase 12) and deployment (Phase 14) remain out of scope.
     """
     scanned = 0
 
@@ -621,7 +622,7 @@ def main() -> int:
     print(f"mermaid diagrams  : {blocks} checked")
     print(f"requirement IDs   : {defined} defined in SRS, {traced} referenced in matrix")
     print(f"spec section 4    : {responsibilities} responsibilities checked for disposition")
-    print(f"repository files  : {scanned} scanned against the Phase 10 boundary")
+    print(f"repository files  : {scanned} scanned against the Phase 11 boundary")
     print(f"safety invariants : {invariants} unique definitions checked")
     print()
 
@@ -630,7 +631,7 @@ def main() -> int:
         ("mermaid", "Mermaid structure"),
         ("traceability", "Requirement traceability"),
         ("coverage", "Specification coverage"),
-        ("phase", "Phase 10 scope boundary"),
+        ("phase", "Phase 11 scope boundary"),
         ("claims", "No unmeasured claims"),
         ("invariants", "Unique safety invariant IDs"),
     ]

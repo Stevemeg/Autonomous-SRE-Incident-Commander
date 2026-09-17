@@ -29,8 +29,10 @@ displayed text into authority and has no external connector or replay implementa
 
 ## Explicit boundary
 
-Phase 10 external adapters and Phase 11 evaluation/replay execution are not implemented.
-Evaluation routes return typed `501 deferred` responses after authorization. Incident
+Phase 10 external adapters and Phase 11 evaluation/replay were not part of Phase 9. Since
+Phase 11, the evaluation router serves read-only suite and run results to tenant-wide
+`evaluation.read` principals; suites are executed only by the evaluation gate, never by an
+API call ([evaluation harness](../evaluation/EVALUATION_ARCHITECTURE.md#11-phase-11-implementation-status)). Incident
 annotation and the documented administration GET surfaces for tools, policies, tenants,
 services, knowledge and audit are implemented. Administrative mutation of those
 catalogues is deliberately not exposed: connector/catalogue lifecycle configuration begins

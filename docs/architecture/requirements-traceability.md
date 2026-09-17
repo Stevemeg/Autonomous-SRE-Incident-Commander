@@ -24,6 +24,26 @@ terminal dispatch, read-only trigger deduplication,
 pre-drive crash recovery, trace redaction and migration clean/accepted-head/round-trip/drift.
 No production scale or performance result is implied.
 
+## Phase 11 implementation evidence
+
+[`EVALUATION_ARCHITECTURE.md` §11](../evaluation/EVALUATION_ARCHITECTURE.md#11-phase-11-implementation-status),
+[ADR-0028](../adr/0028-evaluation-harness-replay-at-provider-seams.md), `src/asic/evaluation`
+and `tests/evaluation` implement the harness. Evidence is **UNIT + INTEGRATION + SIMULATOR +
+REPLAY** with a deterministic scripted model provider under the unprivileged application
+role; no live model, live judge or production incident was evaluated.
+
+| Requirement | Implemented evidence and limits |
+|---|---|
+| FR-EVL-01 | Own data model (suite run, run, judge result, replay fixture, scenario), read-only API routes and an executable gate with machine-readable exit codes. CI wiring is Phase 14 |
+| FR-EVL-02 | 18 versioned scenarios covering 23 declared categories (golden and adversarial); replay of recorded harness runs. No production-incident replay case exists |
+| FR-EVL-03 | Zero-tolerance invariants and expectations, each shown to fail on its target defect by non-vacuity tests. Forbidden-evidence, schema-validity and audit-completeness checks are not re-checked by the harness (stated in §11.2) |
+| FR-EVL-04 | Multi-judge panel with disagreement recorded as `contested`, never averaged; malformed or fabricated-citation output discarded. **Calibration against human labels not performed**; judges not measured in the gate runs |
+| FR-EVL-05 | Per-scenario, per-metric deltas against a digest-verified baseline; not comparable when scenario digest or evaluator version changes |
+| FR-EVL-06 | Investigation, RCA @1/@3, unsupported-claim rate, evidence recall/precision, tool efficiency, remediation correctness, verification success, false success, unsafe actions, escalation, tokens, cost and regression rate computed per run; `None` where not applicable. Redundant-call rate, latency to first hypothesis and confidence calibration error are not computed |
+| FR-EVL-07 | Every report carries `SIMULATED / REPLAY EVALUATION - not production results`; unmeasured judges reported `not_measured` |
+| FR-EVL-09 | Behaviour version recorded on every suite run and result; scenario digests force re-baselining |
+| FR-EVL-11 | Results bind to the workflow run and execution trace they evaluate; a production incident has not been recorded, so the no-transformation round trip is shown only for harness runs |
+
 ## Phase 10 implementation evidence
 
 [`integrations.md`](./integrations.md), `src/asic/integrations`, `src/asic/notifications`
@@ -34,7 +54,7 @@ application role); no live vendor system was exercised.
 | Requirement | Implemented evidence and limits |
 |---|---|
 | FR-INT-01 | Prometheus, Loki, Kubernetes, Slack, Teams, PagerDuty, Jira and Grafana adapters behind `NativeIntegrationProvider`; OpenTelemetry trace context propagated on outbound calls. No trace-store adapter and no Elasticsearch/OpenSearch (ADR-0027) |
-| FR-INT-02 | Existing deterministic simulators unchanged; adapter contract tests use deterministic local servers. Recorded replay fixtures are Phase 11 |
+| FR-INT-02 | Existing deterministic simulators unchanged; adapter contract tests use deterministic local servers. Recorded replay fixtures were added in Phase 11 |
 | FR-INT-03 | The whole suite runs against local servers and PostgreSQL only |
 | FR-INT-04 | Live composition refuses test credentials, loopback endpoints and non-native providers; the broker refuses mixed live/simulated providers (ADR-0020). Build-level exclusion remains Phase 14 |
 | FR-CLB-01 | S2 notification service delivers typed records to Slack, Teams, PagerDuty, Jira and Grafana through the broker |
@@ -53,7 +73,7 @@ claimed.
 
 | Requirement | Implemented evidence and limits |
 |---|---|
-| FR-API-01 | Versioned ingestion, incident, approval, evaluation and administration routers with separate permissions; connector/evaluation execution is deferred |
+| FR-API-01 | Versioned ingestion, incident, approval, evaluation and administration routers with separate permissions; evaluation routes became read-only result reporting in Phase 11 |
 | FR-API-02 | Signed tenant claim plus current database assignment lookup; API tests prove cross-tenant reads return 404 |
 | FR-API-03 | Dashboard renders evidence, hypotheses, timeline and actions/approval state |
 | FR-API-04 | Independent administration/audit/incident/approval grants; viewer isolation is tested |

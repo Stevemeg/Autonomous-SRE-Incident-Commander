@@ -688,6 +688,47 @@ class EvaluationRunVerdict(StrEnum):
 
 
 @unique
+class EvaluationGateStatus(StrEnum):
+    """The machine-readable outcome of one evaluation suite (Phase 11)."""
+
+    PASSED = "passed"
+    FAILED = "failed"
+    #: The harness itself could not produce a trustworthy result. Never a pass.
+    ERRORED = "errored"
+
+
+@unique
+class JudgeOutcome(StrEnum):
+    """What one LLM judge produced. A judge result never confers product authority."""
+
+    SCORED = "scored"
+    #: The judge answered but its output was invalid (schema, or cited evidence that
+    #: does not exist) and was deterministically discarded.
+    FAILED = "failed"
+    #: No judge provider was configured or reachable.
+    UNAVAILABLE = "unavailable"
+
+
+@unique
+class EvaluationFailureClass(StrEnum):
+    """Failure classification for the improvement loop (master specification section 10)."""
+
+    RETRIEVAL = "retrieval"
+    EVIDENCE_GROUNDING = "evidence_grounding"
+    HALLUCINATION = "hallucination"
+    PLANNING = "planning"
+    TOOL_SELECTION = "tool_selection"
+    TOOL_AUTHORIZATION = "tool_authorization"
+    RCA = "rca"
+    REMEDIATION = "remediation"
+    VERIFICATION = "verification"
+    BUDGET = "budget"
+    TIMEOUT = "timeout"
+    INTEGRATION = "integration"
+    HARNESS = "harness"
+
+
+@unique
 class TraceSpanKind(StrEnum):
     """Span taxonomy from ``docs/architecture/observability.md`` section 3."""
 
@@ -727,7 +768,12 @@ class WorkflowRunStatus(StrEnum):
 
 @unique
 class NodeId(StrEnum):
-    """The approved topology: 12 graph nodes plus 2 derived services (ADR-0001)."""
+    """The approved topology: 12 graph nodes plus 2 derived services (ADR-0001).
+
+    ``E1_EVALUATION_JUDGE`` is outside that topology (ADR-0028): it identifies model calls
+    the evaluation harness makes to score a finished run, and appears in no graph, contract
+    or authority path. See :data:`EVALUATION_NODES`.
+    """
 
     G1_ALERT_CORRELATOR = "g1_alert_correlator"
     G2_INCIDENT_COORDINATOR = "g2_incident_coordinator"
@@ -743,6 +789,8 @@ class NodeId(StrEnum):
     G12_MEMORY_CURATOR = "g12_memory_curator"
     S1_TIMELINE_PROJECTION = "s1_timeline_projection"
     S2_NOTIFICATION_SERVICE = "s2_notification_service"
+    #: Phase 11: an evaluation judge. Evaluation data only; never on any authority path.
+    E1_EVALUATION_JUDGE = "e1_evaluation_judge"
 
     @property
     def uses_model(self) -> bool:
@@ -752,8 +800,15 @@ class NodeId(StrEnum):
         human authority or command dispatch inside a model would violate master
         specification sections 6 and 15 (ADR-0001).
         """
-        return self in _MODEL_BACKED_NODES
+        return self in _MODEL_BACKED_NODES or self in EVALUATION_NODES
 
+    @property
+    def in_product_topology(self) -> bool:
+        return self not in EVALUATION_NODES
+
+
+#: Model-calling identities used only by the evaluation harness, never by the product.
+EVALUATION_NODES = frozenset({NodeId.E1_EVALUATION_JUDGE})
 
 _MODEL_BACKED_NODES = frozenset(
     {
