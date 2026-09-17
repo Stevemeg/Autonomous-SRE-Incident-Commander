@@ -296,8 +296,6 @@ def _ask_model(
         metrics.llm_calls_total.add(
             1, {"provider": response.provider, "model": response.model_id, "outcome": "ok"}
         )
-        metrics.llm_tokens_total.add(response.input_tokens, {"direction": "input"})
-        metrics.llm_tokens_total.add(response.output_tokens, {"direction": "output"})
 
         try:
             return PlannerDecision.model_validate(json.loads(response.text)), tokens, cost

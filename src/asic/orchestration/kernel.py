@@ -25,10 +25,12 @@ ran in.
 
 from __future__ import annotations
 
+import logging
 import uuid
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from time import perf_counter
 from typing import Any, Final
 
 import sqlalchemy as sa
@@ -64,7 +66,9 @@ from asic.domain.idempotency import incident_event_key
 from asic.domain.incident_state import allowed_targets, is_terminal
 from asic.llm.accounting import DurableModelBudget
 from asic.llm.port import ModelProvider
+from asic.observability import metrics
 from asic.observability.audit import AuditWriter
+from asic.observability.logging import log_event
 from asic.observability.tracing import TraceRecorder, derive_span_id, derive_trace_id
 from asic.orchestration.checkpoint import (
     CheckpointStore,
@@ -82,6 +86,8 @@ from asic.orchestration.graph import build_graph, recursion_limit_for
 from asic.tools.broker import ToolBroker
 from asic.tools.capability import CapabilityResolver, IncidentScope, load_incident_scope
 from asic.tools.provider import ToolProvider
+
+_logger = logging.getLogger("asic.orchestration.kernel")
 
 #: How long a lease is held before it may be reclaimed. Longer than the longest node
 #: timeout, so a slow node cannot lose a lease it is still legitimately using.
@@ -478,12 +484,16 @@ class InvestigationKernel:
                 uow.commit()
 
             uow.begin()
+            step_started = perf_counter()
             for chunk in graph.stream(
                 state,
                 stream_mode="updates",
                 config={"recursion_limit": recursion_limit_for(self._budget_policy.max_iterations)},
             ):
                 for node_name, update in _updates(chunk):
+                    metrics.node_duration_seconds.record(
+                        perf_counter() - step_started, {"node": node_name}
+                    )
                     executed.append(node_name)
                     self._validate(node_name, update)
                     current = _merge(current, update)
@@ -510,6 +520,7 @@ class InvestigationKernel:
                         # crash leaves behind.
                         self._interrupt(node_name, len(executed))
                     uow.begin()
+                    step_started = perf_counter()
             uow.commit()
         except KernelInterrupted:
             interrupted = True
@@ -530,6 +541,18 @@ class InvestigationKernel:
             )
 
         status = self._finalise(context, current, tracer)
+        log_event(
+            _logger,
+            "investigation.run.finished",
+            tenant_id=str(context.tenant_id),
+            incident_id=str(context.incident_id),
+            workflow_run_id=str(context.workflow_run_id),
+            trace_id=tracer.trace_id,
+            terminated=bool(current.get("terminated")),
+            termination_reason=current.get("termination_reason"),
+            incident_status=status.value,
+            nodes_executed=len(executed),
+        )
         return _outcome(
             context,
             current,

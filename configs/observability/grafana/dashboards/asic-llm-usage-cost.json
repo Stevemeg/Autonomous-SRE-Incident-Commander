@@ -1,0 +1,300 @@
+{
+  "uid": "asic-llm-usage-cost",
+  "title": "ASIC / Model usage and cost",
+  "description": "Tokens and cost from committed spans carrying model-call metadata (model calls are recorded on the calling node or planner span). Deterministic providers report their own configured token and cost figures; they are not vendor invoices.",
+  "tags": [
+    "asic"
+  ],
+  "timezone": "utc",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": false,
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "refresh": "1m",
+  "templating": {
+    "list": []
+  },
+  "annotations": {
+    "list": []
+  },
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Model cost (24h, USD)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "asic-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "asic-prometheus"
+          },
+          "expr": "sum(increase(asic_llm_usage_cost_usd_total[24h]))"
+        }
+      ],
+      "id": 1,
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 6,
+        "h": 4
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Tokens (24h)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "asic-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "asic-prometheus"
+          },
+          "expr": "sum(increase(asic_llm_usage_tokens_total[24h]))"
+        }
+      ],
+      "id": 2,
+      "gridPos": {
+        "x": 6,
+        "y": 0,
+        "w": 6,
+        "h": 4
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Model calls by provider / model / outcome",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "asic-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "stacking": {
+              "mode": "none"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "asic-prometheus"
+          },
+          "expr": "sum by (provider, model, outcome) (increase(asic_llm_calls_total[$__rate_interval]))",
+          "legendFormat": "{{provider}} {{model}} {{outcome}}"
+        }
+      ],
+      "id": 3,
+      "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Tokens by direction",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "asic-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "stacking": {
+              "mode": "normal"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "asic-prometheus"
+          },
+          "expr": "sum by (direction) (increase(asic_llm_usage_tokens_total[$__rate_interval]))",
+          "legendFormat": "{{direction}}"
+        }
+      ],
+      "id": 4,
+      "gridPos": {
+        "x": 0,
+        "y": 8,
+        "w": 12,
+        "h": 8
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Cost by model (USD)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "asic-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "custom": {
+            "stacking": {
+              "mode": "none"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "asic-prometheus"
+          },
+          "expr": "sum by (provider, model) (increase(asic_llm_usage_cost_usd_total[$__rate_interval]))",
+          "legendFormat": "{{provider}} {{model}}"
+        }
+      ],
+      "id": 5,
+      "gridPos": {
+        "x": 12,
+        "y": 8,
+        "w": 12,
+        "h": 8
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Knowledge retrievals and embedding calls",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "asic-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "stacking": {
+              "mode": "none"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "asic-prometheus"
+          },
+          "expr": "sum by (mode, outcome) (increase(asic_knowledge_retrievals_total[$__rate_interval]))",
+          "legendFormat": "retrieval {{mode}} {{outcome}}"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "asic-prometheus"
+          },
+          "expr": "sum by (outcome) (increase(asic_knowledge_embedding_calls_total[$__rate_interval]))",
+          "legendFormat": "embedding {{outcome}}"
+        }
+      ],
+      "id": 6,
+      "gridPos": {
+        "x": 0,
+        "y": 16,
+        "w": 12,
+        "h": 8
+      }
+    }
+  ]
+}

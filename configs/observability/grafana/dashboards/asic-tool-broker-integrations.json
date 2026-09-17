@@ -1,0 +1,398 @@
+{
+  "uid": "asic-tool-broker-integrations",
+  "title": "ASIC / Tool broker and integrations",
+  "description": "Every capability request passes the broker; refusals are correct behaviour, not errors.",
+  "tags": [
+    "asic"
+  ],
+  "timezone": "utc",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": false,
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "refresh": "1m",
+  "templating": {
+    "list": []
+  },
+  "annotations": {
+    "list": []
+  },
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Tool invocations by outcome",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "asic-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "stacking": {
+              "mode": "normal"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "asic-prometheus"
+          },
+          "expr": "sum by (outcome) (increase(asic_tool_invocations_total[$__rate_interval]))",
+          "legendFormat": "{{outcome}}"
+        }
+      ],
+      "id": 1,
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Broker refusals by stage",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "asic-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "stacking": {
+              "mode": "normal"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "asic-prometheus"
+          },
+          "expr": "sum by (stage) (increase(asic_tool_refusals_total[$__rate_interval]))",
+          "legendFormat": "{{stage}}"
+        }
+      ],
+      "id": 2,
+      "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Tool latency p95 (s)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "asic-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "stacking": {
+              "mode": "none"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "asic-prometheus"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le, tool) (rate(asic_tool_latency_seconds_bucket[$__rate_interval])))",
+          "legendFormat": "{{tool}}"
+        }
+      ],
+      "id": 3,
+      "gridPos": {
+        "x": 0,
+        "y": 8,
+        "w": 12,
+        "h": 8
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Tool failures by reason",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "asic-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "stacking": {
+              "mode": "none"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "asic-prometheus"
+          },
+          "expr": "sum by (tool, reason) (increase(asic_tool_failures_total[$__rate_interval]))",
+          "legendFormat": "{{tool}} {{reason}}"
+        }
+      ],
+      "id": 4,
+      "gridPos": {
+        "x": 12,
+        "y": 8,
+        "w": 12,
+        "h": 8
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Integration calls by outcome",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "asic-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "stacking": {
+              "mode": "none"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "asic-prometheus"
+          },
+          "expr": "sum by (integration, outcome) (increase(asic_integration_calls_total[$__rate_interval]))",
+          "legendFormat": "{{integration}} {{outcome}}"
+        }
+      ],
+      "id": 5,
+      "gridPos": {
+        "x": 0,
+        "y": 16,
+        "w": 12,
+        "h": 8
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Integration failure classes",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "asic-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "stacking": {
+              "mode": "none"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "asic-prometheus"
+          },
+          "expr": "sum by (integration, failure_class) (increase(asic_integration_calls_total{failure_class!=\"none\"}[$__rate_interval]))",
+          "legendFormat": "{{integration}} {{failure_class}}"
+        }
+      ],
+      "id": 6,
+      "gridPos": {
+        "x": 12,
+        "y": 16,
+        "w": 12,
+        "h": 8
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Integration failure ratio (1h)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "asic-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "custom": {
+            "stacking": {
+              "mode": "none"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "asic-prometheus"
+          },
+          "expr": "asic:slo_integration_calls:failure_ratio_rate1h",
+          "legendFormat": "{{integration}}"
+        }
+      ],
+      "id": 7,
+      "gridPos": {
+        "x": 0,
+        "y": 24,
+        "w": 12,
+        "h": 8
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Notification infrastructure failures",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "asic-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "stacking": {
+              "mode": "none"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "asic-prometheus"
+          },
+          "expr": "sum by (event_type) (increase(asic_notification_failures_total[$__rate_interval]))",
+          "legendFormat": "{{event_type}}"
+        }
+      ],
+      "id": 8,
+      "gridPos": {
+        "x": 12,
+        "y": 24,
+        "w": 12,
+        "h": 8
+      }
+    },
+    {
+      "type": "logs",
+      "title": "Refusals (logs)",
+      "datasource": {
+        "type": "loki",
+        "uid": "asic-loki"
+      },
+      "options": {
+        "showTime": true,
+        "wrapLogMessage": true
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "asic-loki"
+          },
+          "expr": "{service_name=~\"asic.*\"} | json | event=\"tool.refused\""
+        }
+      ],
+      "id": 9,
+      "gridPos": {
+        "x": 0,
+        "y": 32,
+        "w": 24,
+        "h": 8
+      }
+    }
+  ]
+}

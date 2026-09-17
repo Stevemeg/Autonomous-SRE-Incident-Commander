@@ -31,6 +31,8 @@ from asic.db.session import DATABASE_URL_ENV, MIGRATION_URL_ENV, create_app_engi
 from asic.domain.enums import ExecutionMode
 from asic.evaluation.corpus import SUITE_KEY
 from asic.evaluation.harness import EvaluationHarness, HarnessConfig
+from asic.observability.logging import configure_logging
+from asic.observability.setup import TelemetrySettings, configure_telemetry
 
 EXIT_CODES: dict[str, int] = {"passed": 0, "failed": 1, "errored": 2}
 
@@ -85,6 +87,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if not args.database_url or not args.admin_database_url:
         parser.error("both --database-url and --admin-database-url are required")
+    # Structured logs go to stderr so stdout stays the human summary / JSON contract.
+    configure_logging(service="asic-evaluation-gate", stream=sys.stderr)
+    configure_telemetry(TelemetrySettings.from_environment(default_service="asic-evaluation-gate"))
     try:
         harness = EvaluationHarness(
             admin_factory=_factory(args.admin_database_url), app_factory=_factory(args.database_url)

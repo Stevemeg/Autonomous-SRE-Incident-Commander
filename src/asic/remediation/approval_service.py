@@ -18,6 +18,7 @@ Every check here enforces one of the safety invariants directly:
 
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import datetime, timedelta
 
@@ -31,6 +32,9 @@ from asic.domain.clock import Clock
 from asic.domain.enums import ApprovalDecision, RemediationActionStatus, RiskTier, UserStatus
 from asic.domain.errors import ApprovalInvalid
 from asic.domain.idempotency import approval_callback_key
+from asic.observability.logging import log_event
+
+_logger = logging.getLogger("asic.remediation.approval_service")
 
 #: The permission an approver must hold. Seeded by migration 0011.
 REMEDIATION_APPROVE_PERMISSION = "remediation.approve"
@@ -205,6 +209,15 @@ def decide(
     )
     session.add(row)
     session.flush()
+    log_event(
+        _logger,
+        "approval.decided",
+        tenant_id=str(tenant_id),
+        action_id=str(action_id),
+        decision=decision.value,
+        decision_channel=decision_channel,
+        risk_tier=action.risk_tier.value,
+    )
     return row
 
 

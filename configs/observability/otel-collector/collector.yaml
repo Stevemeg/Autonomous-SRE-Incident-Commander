@@ -1,0 +1,58 @@
+# OpenTelemetry Collector reference configuration (validated with `otelcol-contrib validate`).
+#
+# Traces arrive over OTLP from ASIC processes (ASIC_OTEL_TRACES_EXPORTER=otlp) and go to Tempo.
+# Logs are the processes' JSON lines, tailed from files and sent to Loki's native OTLP endpoint.
+# Loki promotes service.name and deployment.environment.name to stream labels; every other
+# field - tenant_id, incident_id, trace_id - stays in the log body, so identifiers never add
+# stream cardinality. Paths, endpoints and TLS are local defaults; deployment is Phase 14.
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+  filelog:
+    include: [/var/log/asic/*.log]
+    start_at: end
+    operators:
+      - type: json_parser
+        parse_to: body
+        timestamp:
+          parse_from: body.ts
+          layout_type: gotime
+          layout: "2006-01-02T15:04:05.000Z07:00"
+        severity:
+          parse_from: body.level
+      - type: move
+        from: body.service
+        to: resource["service.name"]
+      - type: trace_parser
+        trace_id:
+          parse_from: body.trace_id
+        span_id:
+          parse_from: body.span_id
+
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_percentage: 80
+    spike_limit_percentage: 20
+  batch: {}
+
+exporters:
+  otlphttp/loki:
+    endpoint: http://loki:3100/otlp
+  otlp/tempo:
+    endpoint: tempo:4317
+    tls:
+      insecure: true
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [otlp/tempo]
+    logs:
+      receivers: [filelog]
+      processors: [memory_limiter, batch]
+      exporters: [otlphttp/loki]

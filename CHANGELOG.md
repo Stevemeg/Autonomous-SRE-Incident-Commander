@@ -22,6 +22,36 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added — Phase 12 observability and SLO instrumentation
+
+- A metric catalogue (`asic.observability.catalogue`) fixing every instrument's unit, buckets
+  and allowed labels, enforced by OpenTelemetry views; a wildcard drop view keeps any
+  uncatalogued instrument out of the exposition, and an unrecognised HTTP method is reported as
+  `OTHER` so callers cannot mint label values. Tenant, incident, run, user and other
+  identifiers are forbidden as labels. The unused `base_attributes` helper that would have
+  labelled metrics by tenant is removed, and the design document corrected (ADR-0029).
+- Lifecycle metrics counted from committed rows through session listeners: incidents opened,
+  transitions and terminations, workflow runs, policy verdicts, approvals and approval wait,
+  remediation action statuses, verifications, authorization denials, model tokens and cost,
+  evaluation suite runs, results and judge outcomes. Rolled-back writes and savepoints are
+  never counted.
+- OpenTelemetry spans now use the persisted `execution_trace.trace_id`, nest, and are current
+  while running; exception text is never recorded as a span event and failure descriptions are
+  bounded and redacted. Evaluation suite and scenario spans and results carry the trace id they
+  scored. OTLP/HTTP trace export behind `ASIC_OTEL_TRACES_EXPORTER=otlp`.
+- Structured JSON logging with trace correlation and redaction at emission; lifecycle log
+  events for API requests, broker refusals and executions, run completion, approvals and
+  notification failures.
+- API: `/livez`, `/readyz` (database at the expected schema revision), `/metrics` (off unless
+  `ASIC_METRICS_ENABLED`), request metrics by route template; `python -m asic.api` entry point.
+- The kernels now record `asic.node.duration`, which was declared but never emitted. The
+  planner-only `asic.llm.tokens` counter is replaced by committed-record usage metrics.
+- Seven Grafana dashboards, Prometheus recording and alerting rules with `promtool` unit tests,
+  an OpenTelemetry Collector configuration, SLOs labelled INITIAL ENGINEERING TARGET and a
+  runbook per alert. Validated with `promtool` and `otelcol-contrib validate`; not deployed.
+- Dependencies: `opentelemetry-exporter-prometheus`, `opentelemetry-exporter-otlp-proto-http`,
+  `prometheus-client`; PyYAML for tests. Package version `0.12.0`.
+
 ### Added — Phase 11 evaluation, replay and regression harness
 
 - A versioned golden corpus of 18 scenarios covering 23 declared behaviours (clear,

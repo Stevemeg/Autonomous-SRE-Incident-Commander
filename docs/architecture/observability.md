@@ -4,9 +4,9 @@ Phase 5 adds bounded OTel ingestion/dispatch spans, stage counters and duration 
 Its [telemetry contract](./telemetry-ingestion.md) distinguishes durable receipt decisions,
 execution traces and unexported stage spans. No dashboard or performance claim is added.
 
-- **Status:** Authored — Architecture Package (V3 §23 K).
-  **Partially implemented:** the trace model, the span taxonomy and a subset of the metric
-  catalogue are emitted by the Phase 4 kernel. No exporter is configured; that is Phase 12.
+- **Status:** Authored — Architecture Package (V3 §23 K). **Implemented in Phase 12** at the
+  scope in [§10](#10-phase-12-implementation-status); where §4–§7 below differ from what was
+  built, §10 and [ADR-0029](../adr/0029-bounded-telemetry-from-committed-records.md) are authoritative.
 - **Master specification references:** Sections 9, 10, 11, 23(K)
 - **Related:** [`../evaluation/EVALUATION_ARCHITECTURE.md`](../evaluation/EVALUATION_ARCHITECTURE.md) · [`failure-and-recovery.md`](./failure-and-recovery.md)
 
@@ -116,8 +116,13 @@ Every span carries `tenant_id`, `incident_id`, `workflow_run_id` and `behaviour_
 
 ## 4. Metrics catalogue
 
-Section 11 names the required exposures. All are dimensioned by `tenant_id`, `environment`
-and `behaviour_version`; agent metrics add `node_id`.
+Section 11 names the required exposures. **Superseded on labels by ADR-0029:** the original
+design dimensioned every metric by `tenant_id`, `environment` and `behaviour_version`. That was
+not built and must not be: identifier labels grow series count with traffic and disclose
+tenancy through the scrape endpoint. Metrics carry only closed vocabularies
+([`catalogue.py`](../../src/asic/observability/catalogue.py)); tenant, incident and version
+questions are answered from records and traces. The table is the design inventory; §10 lists
+what exists.
 
 | Domain | Metric | Type |
 |---|---|---|
@@ -252,3 +257,45 @@ change rather than a re-instrumentation. Recorded as
 **Revisit trigger:** if building evaluation visualisation exceeds roughly two weeks of
 effort, or if judge-calibration tooling becomes a project of its own, adopt Phoenix for the
 evaluation UI while keeping OTel as the emission layer.
+
+---
+
+## 10. Phase 12 implementation status
+
+Code: `src/asic/observability/` (`catalogue`, `setup`, `lifecycle`, `logging`, `health`,
+`tracing`), `src/asic/api/app.py`, `python -m asic.api`. Configuration:
+[`configs/observability/`](../../configs/observability/). SLOs:
+[`../observability/SLOS.md`](../observability/SLOS.md). Runbooks: [`../runbooks/`](../runbooks/README.md).
+
+| Area | Implemented | Evidence label |
+|---|---|---|
+| Traces | Every `TraceRecorder` span (kinds in §10.1) is exported through OpenTelemetry with the persisted `execution_trace.trace_id` as its trace id, parented and current while it runs; OTLP/HTTP export when `ASIC_OTEL_TRACES_EXPORTER=otlp`. Evaluation suite and scenario spans carry the trace id they scored | UNIT, LOCAL SERVICE (OTLP receiver), INTEGRATION |
+| Span data safety | Attributes pass redaction; failure descriptions bounded and redacted; exception events are never recorded; no prompt bodies | UNIT, INTEGRATION (prompt-injection scenario) |
+| Metrics | 51 catalogued instruments; SDK views enforce each label allowlist and explicit buckets, and a wildcard drop view keeps uncatalogued instruments out of the exposition; identifier labels forbidden; caller-controlled values (HTTP method, path) mapped to closed sets | UNIT, INTEGRATION (exposition after real workflows) |
+| Lifecycle metrics | Incidents, transitions, terminations, runs, policy verdicts, approvals and wait, action statuses, verifications, authorization denials, model tokens and cost, evaluation results - counted only from committed rows | INTEGRATION (commit, rollback, savepoint cases) |
+| Prometheus endpoint | `/metrics` for this process, off unless `ASIC_METRICS_ENABLED`; distinct from the Phase 10 Prometheus adapter | INTEGRATION |
+| Logging | JSON lines with fixed envelope, trace correlation, redaction at emission; lifecycle events for API requests, broker refusals and executions, run completion, approvals, notification failures | UNIT |
+| Health | `/livez` (no dependencies), `/readyz` (database at the expected schema revision), `asic.dependency.up` | INTEGRATION |
+| Dashboards | Seven Grafana dashboards: incident operations, agent behaviour, tool broker and integrations, model usage and cost, remediation safety, evaluation, API health | UNIT (every query checked against the catalogue) |
+| SLOs and alerts | Five objectives (INITIAL ENGINEERING TARGET), multiwindow burn-rate alerts, invariant alerts, a runbook per alert | UNIT (`promtool test rules`), LOCAL SERVICE (`promtool check config`) |
+| Collector | OTLP traces to Tempo, JSON log files to Loki's OTLP endpoint with only service and environment as stream labels | LOCAL SERVICE (`otelcol-contrib validate`) |
+
+### 10.1 Differences from §3–§7, and why
+
+- **Span kinds.** The kernels emit `workflow.phase`, `node.execute`, `planner.step`,
+  `tool.invoke` and `integration.call`; the policy gate, approval, executor and verifier appear
+  as `node.execute` spans of those nodes rather than as `policy.evaluate`, `approval.wait`,
+  `remediation.execute` or `verification.check`. Model calls are recorded on the span that made
+  them, not as `llm.call` spans, so model usage metrics read any committed span carrying
+  model-call metadata. Retrieval appears as `knowledge.*` spans; `incident`, `correlation`,
+  `db.operation` and `evaluation.score` are not emitted (evaluation uses `evaluation.suite` and
+  `evaluation.scenario`).
+- **Metrics not built:** `incidents_active` (a gauge across tenants would need an RLS bypass),
+  `time_to_first_hypothesis`, ingestion queue depth and lag (no queue exists), redundant-call
+  rate, `unsafe_action_attempts_total` (unsafe actions are refused at the broker and appear as
+  refusals by stage), checkpoint write failures (a failed checkpoint dead-letters the run, which
+  is counted).
+- **Dashboards.** "Tenant health" is not built (no tenant labels by design); "reliability" is
+  folded into incident operations and API health.
+- **Deployment.** Prometheus, Grafana, Loki, Tempo and the collector are not deployed (Phase 14);
+  no metric, latency or availability value has been observed from a running deployment.

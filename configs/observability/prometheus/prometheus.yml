@@ -1,0 +1,24 @@
+# Prometheus scrape and rule configuration for the ASIC processes' own metrics.
+#
+# Reference configuration, validated with `promtool check config`. Targets, service discovery
+# and TLS are deployment concerns (Phase 14); the static targets below are local defaults.
+# This scrapes ASIC's /metrics endpoint. It is unrelated to the Phase 10 Prometheus adapter,
+# which queries a tenant's own Prometheus as investigation evidence.
+global:
+  scrape_interval: 30s
+  evaluation_interval: 30s
+
+rule_files:
+  - rules/asic-recording.rules.yml
+  - rules/asic-alerts.rules.yml
+
+scrape_configs:
+  - job_name: asic-api
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["127.0.0.1:8000"]
+    # Metric labels carry no tenant or incident identifiers (asic.observability.catalogue).
+    # Drop the per-scope labels the OpenTelemetry exporter adds; they are constant noise.
+    metric_relabel_configs:
+      - action: labeldrop
+        regex: otel_scope_(name|version|schema_url)

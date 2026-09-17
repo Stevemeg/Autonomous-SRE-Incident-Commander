@@ -1,0 +1,164 @@
+# Actionable alerts. Every alert names its severity, the SLO or invariant it protects, and a
+# runbook (docs/runbooks/). Thresholds derived from objectives use multiwindow burn rates;
+# every objective and every standalone threshold is an INITIAL ENGINEERING TARGET, to be
+# re-baselined against measured production traffic (docs/observability/SLOS.md).
+groups:
+  - name: asic-slo-burn
+    rules:
+      - alert: AsicApiAvailabilityFastBurn
+        # Objective 99.5% non-5xx over 30 days (error budget 0.5%); 14.4x burn spends 2% of
+        # the monthly budget in one hour.
+        expr: |
+          asic:slo_api_availability:error_ratio_rate1h > (14.4 * 0.005)
+          and
+          asic:slo_api_availability:error_ratio_rate5m > (14.4 * 0.005)
+        for: 2m
+        labels:
+          severity: page
+          slo: api-availability
+        annotations:
+          summary: API 5xx ratio is burning the availability error budget fast
+          description: 5xx ratio over 1h exceeds 14.4x the 0.5% budget (asic:slo_api_availability:error_ratio_rate1h).
+          runbook_url: docs/runbooks/api-availability-burn.md
+      - alert: AsicApiAvailabilitySlowBurn
+        expr: |
+          asic:slo_api_availability:error_ratio_rate6h > (6 * 0.005)
+          and
+          asic:slo_api_availability:error_ratio_rate30m > (6 * 0.005)
+        for: 15m
+        labels:
+          severity: ticket
+          slo: api-availability
+        annotations:
+          summary: API 5xx ratio is steadily burning the availability error budget
+          description: 5xx ratio {{ $value | humanizePercentage }} over 6h exceeds 6x the 0.5% budget.
+          runbook_url: docs/runbooks/api-availability-burn.md
+      - alert: AsicApiLatencyBurn
+        # Objective 99% of requests within 2.5 s over 30 days (budget 1%).
+        expr: |
+          asic:slo_api_latency:slow_ratio_rate1h > (14.4 * 0.01)
+          and
+          asic:slo_api_latency:slow_ratio_rate5m > (14.4 * 0.01)
+        for: 5m
+        labels:
+          severity: ticket
+          slo: api-latency
+        annotations:
+          summary: Too many API requests are slower than 2.5 s
+          description: Slow-request ratio {{ $value | humanizePercentage }} over 1h exceeds 14.4x the 1% budget.
+          runbook_url: docs/runbooks/api-latency-burn.md
+      - alert: AsicWorkflowRunsFailing
+        # Objective 99% of workflow runs finish without failing or dead-lettering (budget 1%).
+        expr: |
+          asic:slo_workflow_completion:failure_ratio_rate1h > (14.4 * 0.01)
+          and
+          sum(increase(asic_workflow_runs_finished_total[1h])) >= 5
+        for: 5m
+        labels:
+          severity: page
+          slo: workflow-completion
+        annotations:
+          summary: Investigation and remediation runs are failing
+          description: Failed or dead-lettered run ratio {{ $value | humanizePercentage }} over 1h.
+          runbook_url: docs/runbooks/workflow-runs-failing.md
+
+  - name: asic-safety-invariants
+    rules:
+      - alert: AsicWorkflowRunDeadLettered
+        expr: sum(increase(asic_workflow_runs_finished_total{status="dead_lettered"}[15m])) > 0
+        labels:
+          severity: page
+          invariant: run-recoverability
+        annotations:
+          summary: A workflow run was dead-lettered and needs manual inspection
+          description: Dead-lettered runs could not checkpoint or reached an inconsistent state.
+          runbook_url: docs/runbooks/workflow-run-dead-lettered.md
+      - alert: AsicToolUnknownOutcome
+        expr: sum by (tool) (increase(asic_tool_invocations_total{outcome="unknown"}[15m])) > 0
+        labels:
+          severity: page
+          invariant: no-double-application
+        annotations:
+          summary: "A tool call ended with an unknown outcome ({{ $labels.tool }})"
+          description: The effect may or may not have been applied; it must be reconciled, never retried blindly.
+          runbook_url: docs/runbooks/tool-unknown-outcome.md
+      - alert: AsicCompensationFailed
+        expr: sum(increase(asic_remediation_action_transitions_total{status="compensation_failed"}[15m])) > 0
+        labels:
+          severity: page
+          invariant: rollback-integrity
+        annotations:
+          summary: A remediation rollback failed
+          description: A remediation action could not be compensated; the target may be in a partially changed state.
+          runbook_url: docs/runbooks/compensation-failed.md
+      - alert: AsicVerificationNotVerified
+        expr: sum by (verdict) (increase(asic_remediation_verifications_total{verdict=~"not_verified|inconclusive"}[1h])) > 0
+        labels:
+          severity: ticket
+          invariant: independent-verification
+        annotations:
+          summary: "Remediation verification returned {{ $labels.verdict }}"
+          description: An executed remediation was not independently verified; the incident needs human review.
+          runbook_url: docs/runbooks/verification-not-verified.md
+
+  - name: asic-dependencies
+    rules:
+      - alert: AsicDatabaseNotReady
+        expr: min(asic_dependency_up{dependency="database"}) < 1
+        for: 2m
+        labels:
+          severity: page
+          slo: readiness
+        annotations:
+          summary: The database is down or at an unexpected schema revision
+          description: Readiness reports the database {{ if eq $value 0.0 }}unreachable{{ else }}degraded (schema revision mismatch){{ end }}.
+          runbook_url: docs/runbooks/database-not-ready.md
+      - alert: AsicMetricsScrapeFailing
+        expr: up{job="asic-api"} == 0
+        for: 5m
+        labels:
+          severity: page
+          slo: observability
+        annotations:
+          summary: Prometheus cannot scrape an ASIC API process
+          description: Without metrics every other alert is blind.
+          runbook_url: docs/runbooks/metrics-scrape-failing.md
+      - alert: AsicIntegrationFailing
+        # INITIAL ENGINEERING TARGET: more than 25% of calls to one integration failing for an
+        # hour, with at least 10 calls, is a sustained outage rather than noise.
+        expr: |
+          asic:slo_integration_calls:failure_ratio_rate1h > 0.25
+          and on (integration)
+          sum by (integration) (increase(asic_integration_calls_total[1h])) >= 10
+        for: 10m
+        labels:
+          severity: ticket
+          slo: integration-calls
+        annotations:
+          summary: "Integration {{ $labels.integration }} calls are failing"
+          description: Failure ratio {{ $value | humanizePercentage }} over 1h; investigations degrade and notifications may be lost.
+          runbook_url: docs/runbooks/integration-failing.md
+
+  - name: asic-evaluation-and-cost
+    rules:
+      - alert: AsicEvaluationGateNotPassing
+        expr: sum by (suite, mode, gate_status) (increase(asic_evaluation_suite_runs_total{gate_status!="passed"}[1d])) > 0
+        labels:
+          severity: ticket
+          invariant: evaluation-gate
+        annotations:
+          summary: "Evaluation suite {{ $labels.suite }} ({{ $labels.mode }}) {{ $labels.gate_status }}"
+          description: A behaviour change failed or could not be evaluated; it must not be released.
+          runbook_url: docs/runbooks/evaluation-gate-not-passing.md
+      - alert: AsicLlmCostBurn
+        # INITIAL ENGINEERING TARGET: 50 USD of model spend in one hour across the fleet.
+        # Replace with a tenant budget-derived value once live providers exist.
+        expr: sum(increase(asic_llm_usage_cost_usd_total[1h])) > 50
+        for: 10m
+        labels:
+          severity: ticket
+          slo: cost
+        annotations:
+          summary: Model spend in the last hour is above the engineering threshold
+          description: "{{ $value | humanize }} USD of committed model usage in 1h."
+          runbook_url: docs/runbooks/llm-cost-burn.md

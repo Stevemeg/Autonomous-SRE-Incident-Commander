@@ -1,0 +1,141 @@
+# promtool rule unit tests: `promtool test rules tests/asic-alerts.test.yml`.
+# Synthetic series only (UNIT evidence) - they prove each alert fires on the condition it names
+# and stays silent on healthy input, not that any threshold suits production traffic.
+rule_files:
+  - ../rules/asic-recording.rules.yml
+  - ../rules/asic-alerts.rules.yml
+
+evaluation_interval: 1m
+
+tests:
+  - name: availability fast burn fires on sustained 5xx and not on healthy traffic
+    interval: 1m
+    input_series:
+      - series: 'asic_api_requests_total{method="GET", route="/api/v1/incidents", status_class="2xx"}'
+        values: "0+50x90"
+      - series: 'asic_api_requests_total{method="GET", route="/api/v1/incidents", status_class="5xx"}'
+        values: "0+10x40 410+30x50"
+      - series: 'asic_api_requests_total{method="GET", route="/api/v1/admin/tools", status_class="2xx"}'
+        values: "0+100x90"
+    alert_rule_test:
+      # 10 of 160 requests a minute (6.25%) is below the 7.2% fast-burn threshold.
+      - eval_time: 38m
+        alertname: AsicApiAvailabilityFastBurn
+        exp_alerts: []
+      # 30 of 180 requests a minute (16.7%) for the last 50 minutes burns fast.
+      - eval_time: 90m
+        alertname: AsicApiAvailabilityFastBurn
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              slo: api-availability
+            exp_annotations:
+              summary: API 5xx ratio is burning the availability error budget fast
+              description: 5xx ratio over 1h exceeds 14.4x the 0.5% budget (asic:slo_api_availability:error_ratio_rate1h).
+              runbook_url: docs/runbooks/api-availability-burn.md
+
+  - name: probe traffic never counts toward availability
+    interval: 1m
+    input_series:
+      - series: 'asic_api_requests_total{method="GET", route="/readyz", status_class="5xx"}'
+        values: "0+100x90"
+      - series: 'asic_api_requests_total{method="GET", route="/api/v1/incidents", status_class="2xx"}'
+        values: "0+10x90"
+    alert_rule_test:
+      - eval_time: 70m
+        alertname: AsicApiAvailabilityFastBurn
+        exp_alerts: []
+
+  - name: dead-lettered run pages immediately
+    interval: 1m
+    input_series:
+      - series: 'asic_workflow_runs_finished_total{status="dead_lettered"}'
+        values: "0 0 0 1 1 1 1 1 1 1"
+      - series: 'asic_workflow_runs_finished_total{status="completed"}'
+        values: "0+1x9"
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: AsicWorkflowRunDeadLettered
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: AsicWorkflowRunDeadLettered
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              invariant: run-recoverability
+            exp_annotations:
+              summary: A workflow run was dead-lettered and needs manual inspection
+              description: Dead-lettered runs could not checkpoint or reached an inconsistent state.
+              runbook_url: docs/runbooks/workflow-run-dead-lettered.md
+
+  - name: database degraded pages after two minutes
+    interval: 1m
+    input_series:
+      - series: 'asic_dependency_up{dependency="database"}'
+        values: "1 1 0.5 0.5 0.5 0.5 0.5"
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: AsicDatabaseNotReady
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: AsicDatabaseNotReady
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              slo: readiness
+            exp_annotations:
+              summary: The database is down or at an unexpected schema revision
+              description: Readiness reports the database degraded (schema revision mismatch).
+              runbook_url: docs/runbooks/database-not-ready.md
+
+  - name: unknown tool outcome pages per tool
+    interval: 1m
+    input_series:
+      - series: 'asic_tool_invocations_total{tool="k8s.deployment.rollback", outcome="unknown"}'
+        values: "0 0 1 1 1"
+      - series: 'asic_tool_invocations_total{tool="metrics.query", outcome="succeeded"}'
+        values: "0+5x4"
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: AsicToolUnknownOutcome
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              invariant: no-double-application
+              tool: k8s.deployment.rollback
+            exp_annotations:
+              summary: "A tool call ended with an unknown outcome (k8s.deployment.rollback)"
+              description: The effect may or may not have been applied; it must be reconciled, never retried blindly.
+              runbook_url: docs/runbooks/tool-unknown-outcome.md
+
+  - name: workflow failure alert needs volume
+    interval: 1m
+    input_series:
+      - series: 'asic_workflow_runs_finished_total{status="failed"}'
+        values: "0 0 0 0 0 0 0 0 0 1"
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: AsicWorkflowRunsFailing
+        exp_alerts: []
+
+  - name: evaluation gate not passing opens a ticket
+    interval: 1m
+    input_series:
+      - series: 'asic_evaluation_suite_runs_total{suite="golden", mode="simulator", gate_status="failed"}'
+        values: "0 1 1 1"
+      - series: 'asic_evaluation_suite_runs_total{suite="golden", mode="replay", gate_status="passed"}'
+        values: "0 1 2 3"
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: AsicEvaluationGateNotPassing
+        exp_alerts:
+          - exp_labels:
+              severity: ticket
+              invariant: evaluation-gate
+              suite: golden
+              mode: simulator
+              gate_status: failed
+            exp_annotations:
+              summary: "Evaluation suite golden (simulator) failed"
+              description: A behaviour change failed or could not be evaluated; it must not be released.
+              runbook_url: docs/runbooks/evaluation-gate-not-passing.md

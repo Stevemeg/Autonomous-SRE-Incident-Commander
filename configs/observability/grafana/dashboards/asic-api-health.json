@@ -1,0 +1,505 @@
+{
+  "uid": "asic-api-health",
+  "title": "ASIC / API health and SLOs",
+  "description": "Availability and latency SLIs against INITIAL ENGINEERING TARGET objectives, readiness and dependency state.",
+  "tags": [
+    "asic"
+  ],
+  "timezone": "utc",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": false,
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "refresh": "1m",
+  "templating": {
+    "list": []
+  },
+  "annotations": {
+    "list": []
+  },
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Database dependency",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "asic-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 0.5
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "asic-prometheus"
+          },
+          "expr": "min(asic_dependency_up{dependency=\"database\"})"
+        }
+      ],
+      "id": 1,
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 6,
+        "h": 4
+      }
+    },
+    {
+      "type": "stat",
+      "title": "5xx ratio (1h)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "asic-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "asic-prometheus"
+          },
+          "expr": "asic:slo_api_availability:error_ratio_rate1h"
+        }
+      ],
+      "id": 2,
+      "gridPos": {
+        "x": 6,
+        "y": 0,
+        "w": 6,
+        "h": 4
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Requests slower than 2.5 s (1h)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "asic-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "asic-prometheus"
+          },
+          "expr": "asic:slo_api_latency:slow_ratio_rate1h"
+        }
+      ],
+      "id": 3,
+      "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 6,
+        "h": 4
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Scrape up",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "asic-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "asic-prometheus"
+          },
+          "expr": "min(up{job=\"asic-api\"})"
+        }
+      ],
+      "id": 4,
+      "gridPos": {
+        "x": 18,
+        "y": 0,
+        "w": 6,
+        "h": 4
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Requests by route and status class",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "asic-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "custom": {
+            "stacking": {
+              "mode": "none"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "asic-prometheus"
+          },
+          "expr": "sum by (route, status_class) (rate(asic_api_requests_total{route!~\"/livez|/healthz|/readyz|/metrics\"}[$__rate_interval]))",
+          "legendFormat": "{{route}} {{status_class}}"
+        }
+      ],
+      "id": 5,
+      "gridPos": {
+        "x": 0,
+        "y": 4,
+        "w": 12,
+        "h": 8
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Request duration p95 by route (s)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "asic-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "stacking": {
+              "mode": "none"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "asic-prometheus"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le, route) (rate(asic_api_request_duration_seconds_bucket{route!~\"/livez|/healthz|/readyz|/metrics\"}[$__rate_interval])))",
+          "legendFormat": "{{route}}"
+        }
+      ],
+      "id": 6,
+      "gridPos": {
+        "x": 12,
+        "y": 4,
+        "w": 12,
+        "h": 8
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Availability error ratio vs budget burn thresholds",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "asic-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "custom": {
+            "stacking": {
+              "mode": "none"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "asic-prometheus"
+          },
+          "expr": "asic:slo_api_availability:error_ratio_rate1h",
+          "legendFormat": "1h"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "asic-prometheus"
+          },
+          "expr": "asic:slo_api_availability:error_ratio_rate6h",
+          "legendFormat": "6h"
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "asic-prometheus"
+          },
+          "expr": "vector(14.4 * 0.005)",
+          "legendFormat": "fast-burn threshold"
+        },
+        {
+          "refId": "D",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "asic-prometheus"
+          },
+          "expr": "vector(6 * 0.005)",
+          "legendFormat": "slow-burn threshold"
+        }
+      ],
+      "id": 7,
+      "gridPos": {
+        "x": 0,
+        "y": 12,
+        "w": 12,
+        "h": 8
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Readiness checks",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "asic-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "stacking": {
+              "mode": "none"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "asic-prometheus"
+          },
+          "expr": "sum by (dependency, outcome) (increase(asic_readiness_checks_total[$__rate_interval]))",
+          "legendFormat": "{{dependency}} {{outcome}}"
+        }
+      ],
+      "id": 8,
+      "gridPos": {
+        "x": 12,
+        "y": 12,
+        "w": 12,
+        "h": 8
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Ingestion stages",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "asic-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "stacking": {
+              "mode": "none"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "asic-prometheus"
+          },
+          "expr": "sum by (stage, outcome) (increase(asic_ingestion_stages_total[$__rate_interval]))",
+          "legendFormat": "{{stage}} {{outcome}}"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "asic-prometheus"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le, stage) (rate(asic_ingestion_duration_seconds_bucket[$__rate_interval])))",
+          "legendFormat": "p95 {{stage}}"
+        }
+      ],
+      "id": 9,
+      "gridPos": {
+        "x": 0,
+        "y": 20,
+        "w": 12,
+        "h": 8
+      }
+    },
+    {
+      "type": "logs",
+      "title": "Server errors (logs)",
+      "datasource": {
+        "type": "loki",
+        "uid": "asic-loki"
+      },
+      "options": {
+        "showTime": true,
+        "wrapLogMessage": true
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "asic-loki"
+          },
+          "expr": "{service_name=\"asic-api\"} | json | event=\"api.request\" | status >= 500"
+        }
+      ],
+      "id": 10,
+      "gridPos": {
+        "x": 0,
+        "y": 28,
+        "w": 24,
+        "h": 8
+      }
+    }
+  ]
+}

@@ -15,6 +15,12 @@ span ids as the run it reproduces, and OpenTelemetry ids are random by construct
 are derived from the trace and an ordinal, so a replay yields identical identifiers; the
 OTel span carries ours as an attribute so the two views still join.
 
+**The OpenTelemetry trace id is ours too.** Root spans are parented on a remote span
+context carrying the derived trace id, so the trace an operator opens in the tracing backend
+has the same id as the ``execution_trace`` row, which in turn names the incident, the
+workflow run and - under the harness - the evaluation run. OpenTelemetry span ids remain
+SDK-generated; the ``asic.span_id`` attribute joins them to the ``trace_span`` rows.
+
 **Spans are buffered and flushed at the node boundary.** The kernel commits once per node,
 so buffering means a span is written in the same transaction as the durable effects it
 describes. A span written in its own transaction could survive a rolled-back node and
@@ -35,13 +41,20 @@ from datetime import datetime
 from typing import Any
 
 from opentelemetry import trace as otel_trace
-from opentelemetry.trace import Span, Status, StatusCode
+from opentelemetry.trace import (
+    NonRecordingSpan,
+    Span,
+    SpanContext,
+    Status,
+    StatusCode,
+    TraceFlags,
+)
 from sqlalchemy.orm import Session
 
 from asic.db.models.evaluation import TraceSpan
 from asic.domain.clock import Clock
 from asic.domain.enums import NodeId, SpanStatus, TerminationReason, TraceSpanKind
-from asic.observability.redaction import redact_mapping
+from asic.observability.redaction import redact_mapping, redact_value
 
 #: Instrumentation scope name. Stable, because dashboards and sampling rules key on it.
 INSTRUMENTATION_NAME = "asic.orchestration"
@@ -220,10 +233,17 @@ class TraceRecorder:
             node_version=node_version,
             input_refs=redact_mapping(dict(input_refs or {})),
         )
+        parent = self.current
         self._stack.append(handle)
-        otel_span = self._otel_tracer.start_span(name)
+        otel_span = self._otel_tracer.start_span(
+            name,
+            context=otel_trace.set_span_in_context(
+                parent._otel if parent is not None and parent._otel is not None else self._root()
+            ),
+        )
         handle._otel = otel_span
         otel_span.set_attribute("asic.tenant_id", str(self._tenant_id))
+        otel_span.set_attribute("asic.execution_trace_id", str(self._execution_trace_id))
         otel_span.set_attribute("asic.span_id", handle.span_id)
         otel_span.set_attribute("asic.span_kind", kind.value)
         if node_id is not None:
@@ -231,7 +251,10 @@ class TraceRecorder:
         if node_version is not None:
             otel_span.set_attribute("asic.node_version", node_version)
         try:
-            yield handle
+            with otel_trace.use_span(
+                otel_span, end_on_exit=False, record_exception=False, set_status_on_exception=False
+            ):
+                yield handle
         except BaseException as exc:
             handle.fail(f"{type(exc).__name__}: {exc}")
             raise
@@ -245,9 +268,24 @@ class TraceRecorder:
             self._stack.pop()
             self._buffer.append(handle)
 
+    def _root(self) -> Span:
+        """A remote parent carrying the derived trace id; never exported itself."""
+        return NonRecordingSpan(
+            SpanContext(
+                trace_id=int(self._trace_id, 16),
+                # Any non-zero id: the parent is synthetic and is not a recorded span.
+                span_id=int(self._trace_id[16:32], 16) or 1,
+                is_remote=True,
+                trace_flags=TraceFlags(TraceFlags.SAMPLED),
+            )
+        )
+
     def _finish_otel(self, handle: SpanHandle, otel_span: Span) -> None:
         if handle.status is SpanStatus.ERROR:
-            otel_span.set_status(Status(StatusCode.ERROR, handle.failure_reason or "failed"))
+            # Failure reasons can quote untrusted content (a tool's error body); the exported
+            # description is bounded and passes the same redaction as every other attribute.
+            reason = str(redact_value((handle.failure_reason or "failed")[:256]))
+            otel_span.set_status(Status(StatusCode.ERROR, reason))
         else:
             otel_span.set_status(Status(StatusCode.OK))
         if handle.termination_reason is not None:

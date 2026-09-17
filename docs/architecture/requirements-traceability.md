@@ -24,6 +24,23 @@ terminal dispatch, read-only trigger deduplication,
 pre-drive crash recovery, trace redaction and migration clean/accepted-head/round-trip/drift.
 No production scale or performance result is implied.
 
+## Phase 12 implementation evidence
+
+[`observability.md` §10](./observability.md#10-phase-12-implementation-status),
+[SLOs](../observability/SLOS.md), [ADR-0029](../adr/0029-bounded-telemetry-from-committed-records.md),
+`src/asic/observability`, `configs/observability` and `tests/observability`. Evidence is
+**UNIT + INTEGRATION + SIMULATOR + LOCAL SERVICE** (local OTLP receiver, `promtool`,
+`otelcol-contrib`); nothing was deployed and no SLO value was measured.
+
+| Requirement | Implemented evidence and limits |
+|---|---|
+| FR-OBS-01 | Exported span kinds: `workflow.phase`, `node.execute` (including the policy gate, approval, executor and verifier nodes), `planner.step`, `tool.invoke`, `integration.call`, plus `api.request`, `ingestion.*`, `knowledge.*` and `evaluation.*` spans. Not emitted as distinct kinds: `incident`, `correlation`, `llm.call` (model calls are attributes of the calling span), `retrieval.query` (covered by `knowledge.*`), `db.operation`, `policy.evaluate`, `approval.wait`, `remediation.execute`, `verification.check`, `evaluation.score` |
+| FR-OBS-02 | Seven dashboards and SLO/SLI rules over catalogued metrics; every query checked against the catalogue. Tenant-health dashboard intentionally not built (no tenant labels) |
+| FR-OBS-03 | Exported trace ids equal persisted trace ids; routing reproduction is the Phase 11 strict replay |
+| FR-OBS-04 | Trace id joins execution trace, workflow run, incident and evaluation result (span attribute, report field and API) |
+| FR-OBS-05 | Redaction at emission for spans and logs; tests assert no secret-shaped value, prompt body or injected content in exported spans, and no identifier-shaped metric label value |
+| NFR-OBS-06 | Observable (metrics, logs, traces), replayable and evaluable (Phase 11), interruptible and recoverable (dead-letter and readiness alerts); availability of a deployment is not demonstrated |
+
 ## Phase 11 implementation evidence
 
 [`EVALUATION_ARCHITECTURE.md` §11](../evaluation/EVALUATION_ARCHITECTURE.md#11-phase-11-implementation-status),
@@ -178,7 +195,7 @@ validated, and the acceptance criterion.
 > | Tool authorization (FR-REM-06, NFR-SEC-01..02) | Registry, capability resolution, the broker chokepoint, refusals audited on every path | Anything above risk tier `RO`, which has no policy gate yet |
 > | Evidence provenance and citation (FR-EVD-02, FR-RCA-02..03) | Broker-assigned provenance, citation integrity enforced before ranking, a deterministic confidence ceiling | Retrieval quality, reranking, knowledge ingestion |
 > | Durability (NFR-REL-01..03, NFR-REL-07) | Per-node transactions, checkpointing, resume with reconciliation, leasing, degradation on partial failure | Unknown-outcome reconciliation for writes; approval waits |
-> | Observability (FR-OBS-01..04) | One trace model, spans persisted with the work they describe, correlation identifiers, redaction at emission | Exporters, dashboards, SLOs — Phase 12 |
+> | Observability (FR-OBS-01..04) | One trace model, spans persisted with the work they describe, correlation identifiers, redaction at emission | Exporters, dashboards, SLOs — added in Phase 12 (see its evidence section) |
 > | Prompt-injection resistance (NFR-SEC-07) | Structural: the menu precedes the content, scope is resolved not supplied, fenced untrusted regions | Nothing further is claimed; detection is a signal, not the defence |
 >
 > **The behaviour a row describes must exist before that row is called implemented.** No

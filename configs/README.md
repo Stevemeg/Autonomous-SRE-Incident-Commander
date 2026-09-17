@@ -1,8 +1,8 @@
 # `configs/` — Configuration
 
-**This directory is intentionally empty.**
-
-No configuration exists yet because no runnable component exists yet.
+**Phase 12:** [`observability/`](./observability/) holds reference Prometheus, Grafana and
+OpenTelemetry Collector configuration - validated (`promtool check config`, `promtool test
+rules`, `otelcol-contrib validate`) but not deployed. Deployment wiring is Phase 14.
 
 ## What belongs here
 

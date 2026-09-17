@@ -1,0 +1,32 @@
+# Grafana datasource provisioning. URLs are local defaults; deployment values are Phase 14.
+# The dashboards reference these fixed uids.
+apiVersion: 1
+datasources:
+  - name: ASIC Prometheus
+    uid: asic-prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+  - name: ASIC Loki
+    uid: asic-loki
+    type: loki
+    access: proxy
+    url: http://loki:3100
+    jsonData:
+      # Log lines carry trace_id; this turns it into a link to the trace in Tempo, which uses
+      # the same id as the execution_trace row (asic.observability.tracing).
+      derivedFields:
+        - name: trace_id
+          matcherRegex: '"trace_id":"([0-9a-f]{32})"'
+          datasourceUid: asic-tempo
+          url: "$${__value.raw}"
+  - name: ASIC Tempo
+    uid: asic-tempo
+    type: tempo
+    access: proxy
+    url: http://tempo:3200
+    jsonData:
+      tracesToLogsV2:
+        datasourceUid: asic-loki
+        filterByTraceID: true

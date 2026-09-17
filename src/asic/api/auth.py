@@ -27,6 +27,10 @@ class ApiSettings:
     jwt_issuer: str = "asic-idp"
     jwt_audience: str = "asic-api"
     rate_limit_per_minute: int = 120
+    #: Serve this process's Prometheus exposition at ``/metrics``. Off unless enabled: the
+    #: endpoint is unauthenticated and belongs on an internal scrape network. Metric labels
+    #: carry no tenant or incident identifiers (``asic.observability.catalogue``).
+    metrics_enabled: bool = False
 
     @classmethod
     def from_environment(cls) -> ApiSettings:
@@ -37,6 +41,8 @@ class ApiSettings:
             jwt_secret=secret,
             jwt_issuer=os.environ.get("ASIC_JWT_ISSUER", "asic-idp"),
             jwt_audience=os.environ.get("ASIC_JWT_AUDIENCE", "asic-api"),
+            metrics_enabled=os.environ.get("ASIC_METRICS_ENABLED", "").strip().lower()
+            in ("1", "true", "yes"),
         )
 
 

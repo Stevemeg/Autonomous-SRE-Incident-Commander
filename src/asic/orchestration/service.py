@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
 import sys
 import uuid
@@ -60,6 +61,8 @@ from asic.llm.port import ModelProvider
 from asic.llm.prompts import PROMPT_SET_VERSION
 from asic.notifications.service import NotificationEvent, NotificationService
 from asic.observability import metrics
+from asic.observability.logging import configure_logging, log_event
+from asic.observability.setup import TelemetrySettings, configure_telemetry
 from asic.orchestration.kernel import InvestigationKernel, RunOutcome
 from asic.simulators.provider import SimulatorProvider
 from asic.simulators.scenarios import PRIMARY_SCENARIO_ID, Scenario, scenario
@@ -67,6 +70,8 @@ from asic.tools.capability import CapabilityResolver
 from asic.tools.catalogue import CATALOGUE_VERSION
 from asic.tools.provider import ToolProvider
 from asic.tools.registry import ToolRegistry
+
+_logger = logging.getLogger("asic.orchestration.service")
 
 
 @dataclass(frozen=True, slots=True)
@@ -160,8 +165,17 @@ class InvestigationService:
                     execution_trace_id=outcome.execution_trace_id,
                 )
             )
-        except Exception:  # delivery infrastructure failure is recorded, never propagated
+        except Exception as exc:  # delivery infrastructure failure is recorded, never propagated
             metrics.notification_failures_total.add(1, {"event_type": event_type})
+            log_event(
+                _logger,
+                "notification.failed",
+                level=logging.ERROR,
+                error=exc,
+                event_type=event_type,
+                tenant_id=str(tenant_id),
+                incident_id=str(outcome.incident_id),
+            )
 
 
 _ANNOUNCED_STATUSES: dict[IncidentStatus, str] = {
@@ -327,6 +341,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     if not args.admin_database_url:
         parser.error(f"no administrative URL: pass --admin-database-url or set {MIGRATION_URL_ENV}")
 
+    configure_logging(service="asic-orchestrator", stream=sys.stderr)
+    configure_telemetry(TelemetrySettings.from_environment(default_service="asic-orchestrator"))
     scenario_obj = scenario(args.scenario)
     clock = FrozenClock(start=datetime.now(UTC))
     engine = create_app_engine(args.database_url)

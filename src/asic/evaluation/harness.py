@@ -21,6 +21,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, Final
 
 import sqlalchemy as sa
+from opentelemetry import trace as otel_trace
 from sqlalchemy.orm import Session
 
 from asic import __version__ as code_version
@@ -32,6 +33,7 @@ from asic.db.models import (
     EvaluationScenario,
     EvaluationSuiteRun,
     Evidence,
+    ExecutionTrace,
     Hypothesis,
     Incident,
     RemediationAction,
@@ -119,6 +121,8 @@ from asic.tools.provider import ToolProvider
 from asic.tools.registry import ToolRegistry
 from asic.tools.remediation_catalogue import REMEDIATION_CATALOGUE_VERSION
 
+_tracer = otel_trace.get_tracer("asic.evaluation")
+
 #: Fixed logical epoch. Scenario N runs at ``BASE_CLOCK + N days`` so windows never overlap.
 BASE_CLOCK: Final[datetime] = datetime(2026, 9, 1, 10, 0, tzinfo=UTC)
 REMEDIATION_POLICY_VERSION: Final[str] = "2026.09.14-1"
@@ -150,6 +154,8 @@ class ScenarioOutcome:
     panel: PanelResult
     wall_clock_ms: int
     workflow_run_id: uuid.UUID | None = None
+    #: The execution trace of the evaluated run: the id a tracing backend shows for it.
+    trace_id: str | None = None
     signature: str | None = None
     fixture: ReplayFixture | None = None
     error: str | None = None
@@ -176,6 +182,7 @@ class ScenarioOutcome:
                 "spread": self.panel.spread,
             },
             "signature": self.signature,
+            "trace_id": self.trace_id,
             "error": self.error,
         }
 
@@ -204,6 +211,21 @@ class EvaluationHarness:
     # ------------------------------------------------------------------------- suite
 
     def run(self, config: HarnessConfig) -> SuiteOutcome:
+        with _tracer.start_as_current_span(
+            "evaluation.suite",
+            attributes={
+                "asic.evaluation.suite": config.suite,
+                "asic.evaluation.mode": config.mode.value,
+                "asic.evaluation.evaluator_version": EVALUATOR_VERSION,
+            },
+            record_exception=False,
+        ) as span:
+            outcome = self._run(config)
+            span.set_attribute("asic.evaluation.suite_run_id", str(outcome.suite_run_id))
+            span.set_attribute("asic.evaluation.gate_status", outcome.status)
+            return outcome
+
+    def _run(self, config: HarnessConfig) -> SuiteOutcome:
         scenarios = select(config.keys, suite=config.suite)
         started = datetime.now(UTC)
         tenant_id = ensure_tenant(self._admin, config.tenant_slug)
@@ -285,6 +307,59 @@ class EvaluationHarness:
         mode: ExecutionMode,
         fixture: ReplayFixture | None,
         refusal: str | None = None,
+    ) -> ScenarioOutcome:
+        with _tracer.start_as_current_span(
+            "evaluation.scenario",
+            attributes={
+                "asic.evaluation.scenario": golden.key,
+                "asic.evaluation.scenario_version": golden.version,
+                "asic.evaluation.kind": golden.kind.value,
+                "asic.evaluation.mode": mode.value,
+            },
+            record_exception=False,
+        ) as span:
+            outcome = self._run_scenario_body(
+                golden,
+                tenant_id=tenant_id,
+                behaviour_id=behaviour_id,
+                token=token,
+                ordinal=ordinal,
+                mode=mode,
+                fixture=fixture,
+                refusal=refusal,
+            )
+            if outcome.workflow_run_id is not None:
+                outcome.trace_id = self._trace_of(tenant_id, outcome.workflow_run_id)
+            span.set_attribute("asic.evaluation.verdict", outcome.verdict.value)
+            if outcome.trace_id is not None:
+                # The link from this evaluation to the product trace it scored.
+                span.set_attribute("asic.evaluated_trace_id", outcome.trace_id)
+            return outcome
+
+    def _trace_of(self, tenant_id: uuid.UUID, workflow_run_id: uuid.UUID) -> str | None:
+        with self._app() as session:
+            bind_tenant(session, tenant_id)
+            return session.scalar(
+                sa.select(ExecutionTrace.trace_id)
+                .where(
+                    ExecutionTrace.tenant_id == tenant_id,
+                    ExecutionTrace.workflow_run_id == workflow_run_id,
+                )
+                .order_by(ExecutionTrace.started_at, ExecutionTrace.id)
+                .limit(1)
+            )
+
+    def _run_scenario_body(
+        self,
+        golden: GoldenScenario,
+        *,
+        tenant_id: uuid.UUID,
+        behaviour_id: uuid.UUID,
+        token: str,
+        ordinal: int,
+        mode: ExecutionMode,
+        fixture: ReplayFixture | None,
+        refusal: str | None,
     ) -> ScenarioOutcome:
         began = time.perf_counter()
         scenario_hash = scenario_digest(golden)

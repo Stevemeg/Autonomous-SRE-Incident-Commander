@@ -11,10 +11,12 @@ re-reading every durable reference rather than trusting what was true when it su
 
 from __future__ import annotations
 
+import logging
 import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from time import perf_counter
 from typing import Any, Final
 
 import sqlalchemy as sa
@@ -37,7 +39,9 @@ from asic.domain.enums import HypothesisStatus, IncidentStatus, WorkflowRunStatu
 from asic.domain.errors import DomainError, LeaseNotHeld
 from asic.llm.accounting import DurableModelBudget
 from asic.llm.port import ModelProvider
+from asic.observability import metrics
 from asic.observability.audit import AuditWriter
+from asic.observability.logging import log_event
 from asic.observability.tracing import TraceRecorder, derive_span_id, derive_trace_id
 from asic.orchestration.context import (
     DEFAULT_LEASE_OWNER_PREFIX,
@@ -51,6 +55,8 @@ from asic.orchestration.remediation.graph import RECURSION_LIMIT, build_graph
 from asic.tools.broker import ToolBroker
 from asic.tools.capability import CapabilityResolver, load_incident_scope
 from asic.tools.provider import ToolProvider
+
+_logger = logging.getLogger("asic.orchestration.remediation.kernel")
 
 LEASE_DURATION: Final[timedelta] = timedelta(minutes=15)
 
@@ -473,12 +479,17 @@ class RemediationKernel:
         current = dict(state)
         try:
             uow.begin()
+            step_started = perf_counter()
             for chunk in graph.stream(
                 state, stream_mode="updates", config={"recursion_limit": RECURSION_LIMIT}
             ):
                 for node_name, update in chunk.items():
                     if not isinstance(update, dict):
                         continue
+                    metrics.node_duration_seconds.record(
+                        perf_counter() - step_started, {"node": str(node_name)}
+                    )
+                    step_started = perf_counter()
                     executed.append(str(node_name))
                     current = {**current, **update}
                     tracer.flush(uow.session)
@@ -521,6 +532,17 @@ class RemediationKernel:
             )
 
         incident_status = self._finalise(context, current, tracer)
+        log_event(
+            _logger,
+            "remediation.run.finished",
+            tenant_id=str(context.tenant_id),
+            incident_id=str(context.incident_id),
+            workflow_run_id=str(context.workflow_run_id),
+            trace_id=tracer.trace_id,
+            terminated=bool(current.get("terminated")),
+            incident_status=getattr(incident_status, "value", incident_status),
+            nodes_executed=len(executed),
+        )
         return RemediationOutcome(
             workflow_run_id=context.workflow_run_id,
             incident_id=context.incident_id,

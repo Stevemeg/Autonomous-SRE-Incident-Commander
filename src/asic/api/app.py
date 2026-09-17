@@ -5,16 +5,19 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import logging
 import uuid
-from collections.abc import Iterator
+from collections.abc import Iterator, MutableMapping
 from contextlib import asynccontextmanager
 from datetime import datetime
+from time import perf_counter
 from typing import Annotated, Any, cast
 
 import sqlalchemy as sa
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
+from opentelemetry import metrics as otel_metrics
 from opentelemetry import trace
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session, sessionmaker
@@ -71,7 +74,21 @@ from asic.domain.idempotency import incident_event_key
 from asic.evaluation.versioning import digest
 from asic.ingestion.contracts import ConnectorContext, IngestionRejected
 from asic.ingestion.service import IngestionService
+from asic.observability.health import check_database, evaluate_readiness
+from asic.observability.logging import log_event
+from asic.observability.setup import render_prometheus
 from asic.remediation.approval_service import decide
+
+_logger = logging.getLogger("asic.api")
+_meter = otel_metrics.get_meter("asic.api")
+api_requests = _meter.create_counter(
+    "asic.api.requests", description="API requests, by method, route template and status class."
+)
+api_request_duration = _meter.create_histogram(
+    "asic.api.request.duration",
+    unit="s",
+    description="API request duration, by method and route template.",
+)
 
 INCIDENT_READ = "incident.read"
 INCIDENT_CONTROL = "incident.control"
@@ -887,8 +904,19 @@ def list_evaluation_runs(
     cursor: str | None = None,
 ) -> dict[str, Any]:
     require_tenant_wide(principal, EVALUATION_READ)
+    evaluated_trace = (
+        sa.select(ExecutionTrace.trace_id)
+        .where(
+            ExecutionTrace.tenant_id == EvaluationRun.tenant_id,
+            ExecutionTrace.workflow_run_id == EvaluationRun.workflow_run_id,
+        )
+        .order_by(ExecutionTrace.started_at, ExecutionTrace.id)
+        .limit(1)
+        .correlate(EvaluationRun)
+        .scalar_subquery()
+    )
     statement = (
-        sa.select(EvaluationRun, EvaluationScenario.key)
+        sa.select(EvaluationRun, EvaluationScenario.key, evaluated_trace)
         .join(
             EvaluationScenario,
             sa.and_(
@@ -918,8 +946,10 @@ def list_evaluation_runs(
                 failure_classes=run.failure_classes,
                 metrics=run.metrics,
                 workflow_run_id=run.workflow_run_id,
+                # Joins this result to the product trace it scored.
+                trace_id=trace_id,
             )
-            for run, key in rows
+            for run, key, trace_id in rows
         ],
         limit,
     )
@@ -1101,7 +1131,7 @@ def create_app(
         if factory is None:
             resolved_factory.kw["bind"].dispose()
 
-    app = FastAPI(title="Autonomous SRE Incident Commander", version="0.11.0", lifespan=lifespan)
+    app = FastAPI(title="Autonomous SRE Incident Commander", version="0.12.0", lifespan=lifespan)
     app.state.api_settings = resolved_settings
     app.state.session_factory = resolved_factory
     app.state.rate_limiter = RateLimiter(resolved_settings.rate_limit_per_minute)
@@ -1132,25 +1162,93 @@ def create_app(
                 media_type="application/json",
             )
         tracer = trace.get_tracer("asic.api")
+        started = perf_counter()
+        status = 500
+        method = _method_label(request.method)
         with tracer.start_as_current_span("api.request") as span:
-            span.set_attribute("http.request.method", request.method)
-            span.set_attribute("http.request.path", request.url.path)
+            span.set_attribute("http.request.method", method)
             span.set_attribute("asic.correlation_id", correlation_id)
-            response: Response = await call_next(request)
-            span.set_attribute("http.response.status_code", response.status_code)
-            response.headers["X-Correlation-ID"] = correlation_id
-            return response
+            try:
+                response: Response = await call_next(request)
+                status = response.status_code
+                response.headers["X-Correlation-ID"] = correlation_id
+                return response
+            finally:
+                # The route *template* (``/api/v1/incidents/{incident_id}``), never the
+                # concrete path: identifiers stay out of span names and metric labels.
+                route = _route_template(request.scope)
+                elapsed = perf_counter() - started
+                span.set_attribute("http.route", route)
+                span.set_attribute("http.response.status_code", status)
+                labels = {"method": method, "route": route}
+                api_requests.add(1, {**labels, "status_class": f"{status // 100}xx"})
+                api_request_duration.record(elapsed, labels)
+                if route not in _PROBE_ROUTES:
+                    log_event(
+                        _logger,
+                        "api.request",
+                        level=logging.WARNING if status >= 500 else logging.INFO,
+                        method=method,
+                        route=route,
+                        status=status,
+                        duration_ms=round(elapsed * 1000, 3),
+                        correlation_id=correlation_id,
+                    )
 
     root = APIRouter(prefix="/api/v1")
     for router in (ingestion, incidents, approvals, evaluation, admin):
         root.include_router(router)
     app.include_router(root)
 
+    @app.get("/livez", include_in_schema=False)
     @app.get("/healthz", include_in_schema=False)
-    def healthz() -> dict[str, str]:
+    def livez() -> dict[str, str]:
+        # Liveness touches nothing external (asic.observability.health).
         return {"status": "ok"}
 
+    @app.get("/readyz", include_in_schema=False)
+    def readyz() -> Response:
+        readiness = evaluate_readiness([check_database(resolved_factory)])
+        return Response(
+            content=json.dumps(readiness.as_dict()),
+            status_code=200 if readiness.ready else 503,
+            media_type="application/json",
+        )
+
+    if resolved_settings.metrics_enabled:
+
+        @app.get("/metrics", include_in_schema=False)
+        def prometheus_metrics() -> Response:
+            body, content_type = render_prometheus()
+            return Response(content=body, media_type=content_type)
+
     return app
+
+
+_PROBE_ROUTES = frozenset({"/livez", "/healthz", "/readyz", "/metrics"})
+
+#: The request method is caller-supplied: HTTP permits any token, so an unknown method is
+#: reported as ``OTHER`` rather than becoming a new label value per request.
+_METHODS = frozenset({"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"})
+
+
+def _method_label(method: str) -> str:
+    return method if method in _METHODS else "OTHER"
+
+
+def _route_template(scope: MutableMapping[str, Any]) -> str:
+    """The matched route's full template, e.g. ``/api/v1/incidents/{incident_id}``.
+
+    Rebuilt from the concrete path by replacing whole path-parameter segments with their
+    names: nested routers expose only their own relative path. Only a *matched* route has a
+    template, so every remaining segment is static text from a route definition, never a
+    caller-supplied value. Anything unmatched is reported as ``unmatched``.
+    """
+    if scope.get("route") is None:
+        return "unmatched"
+    names = {str(value): name for name, value in (scope.get("path_params") or {}).items()}
+    path = str(scope.get("path", ""))
+    return "/".join(f"{{{names[part]}}}" if part in names else part for part in path.split("/"))
 
 
 __all__ = ["ApiSettings", "create_app"]

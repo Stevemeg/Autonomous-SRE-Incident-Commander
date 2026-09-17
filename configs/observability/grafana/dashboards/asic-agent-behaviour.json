@@ -1,0 +1,439 @@
+{
+  "uid": "asic-agent-behaviour",
+  "title": "ASIC / Agent behaviour",
+  "description": "Planning, termination mix, budgets, schema violations and reflection.",
+  "tags": [
+    "asic"
+  ],
+  "timezone": "utc",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": false,
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "refresh": "1m",
+  "templating": {
+    "list": []
+  },
+  "annotations": {
+    "list": []
+  },
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Node duration p95 (s)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "asic-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "stacking": {
+              "mode": "none"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "asic-prometheus"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le, node) (rate(asic_node_duration_seconds_bucket[$__rate_interval])))",
+          "legendFormat": "{{node}}"
+        }
+      ],
+      "id": 1,
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Planning iterations per run (p50 / p95)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "asic-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "stacking": {
+              "mode": "none"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "asic-prometheus"
+          },
+          "expr": "histogram_quantile(0.5, sum by (le) (rate(asic_investigation_iterations_bucket[$__rate_interval])))",
+          "legendFormat": "p50"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "asic-prometheus"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(asic_investigation_iterations_bucket[$__rate_interval])))",
+          "legendFormat": "p95"
+        }
+      ],
+      "id": 2,
+      "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Runs terminated by reason",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "asic-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "stacking": {
+              "mode": "normal"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "asic-prometheus"
+          },
+          "expr": "sum by (reason) (increase(asic_workflow_terminated_total[$__rate_interval]))",
+          "legendFormat": "{{reason}}"
+        }
+      ],
+      "id": 3,
+      "gridPos": {
+        "x": 0,
+        "y": 8,
+        "w": 12,
+        "h": 8
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Budget exhaustions",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "asic-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "stacking": {
+              "mode": "none"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "asic-prometheus"
+          },
+          "expr": "sum by (budget_kind) (increase(asic_budget_exhaustions_total[$__rate_interval]))",
+          "legendFormat": "{{budget_kind}}"
+        }
+      ],
+      "id": 4,
+      "gridPos": {
+        "x": 12,
+        "y": 8,
+        "w": 12,
+        "h": 8
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Schema violations",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "asic-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "stacking": {
+              "mode": "none"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "asic-prometheus"
+          },
+          "expr": "sum by (node, tool) (increase(asic_schema_violations_total[$__rate_interval]))",
+          "legendFormat": "{{node}}{{tool}}"
+        }
+      ],
+      "id": 5,
+      "gridPos": {
+        "x": 0,
+        "y": 16,
+        "w": 12,
+        "h": 8
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Node failures",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "asic-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "stacking": {
+              "mode": "none"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "asic-prometheus"
+          },
+          "expr": "sum by (node, reason) (increase(asic_node_failures_total[$__rate_interval]))",
+          "legendFormat": "{{node}} {{reason}}"
+        }
+      ],
+      "id": 6,
+      "gridPos": {
+        "x": 12,
+        "y": 16,
+        "w": 12,
+        "h": 8
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Reflection decisions",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "asic-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "stacking": {
+              "mode": "none"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "asic-prometheus"
+          },
+          "expr": "sum by (action) (increase(asic_reflection_decisions_total[$__rate_interval]))",
+          "legendFormat": "{{action}}"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "asic-prometheus"
+          },
+          "expr": "sum(increase(asic_hypothesis_revisions_total[$__rate_interval]))",
+          "legendFormat": "revisions"
+        }
+      ],
+      "id": 7,
+      "gridPos": {
+        "x": 0,
+        "y": 24,
+        "w": 12,
+        "h": 8
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Checkpoints and resumes",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "asic-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "stacking": {
+              "mode": "none"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "asic-prometheus"
+          },
+          "expr": "sum by (reason) (increase(asic_workflow_checkpoints_total[$__rate_interval]))",
+          "legendFormat": "checkpoint {{reason}}"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "asic-prometheus"
+          },
+          "expr": "sum by (diverged) (increase(asic_workflow_resumes_total[$__rate_interval]))",
+          "legendFormat": "resume diverged={{diverged}}"
+        }
+      ],
+      "id": 8,
+      "gridPos": {
+        "x": 12,
+        "y": 24,
+        "w": 12,
+        "h": 8
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Injection flags by source",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "asic-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "stacking": {
+              "mode": "none"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "asic-prometheus"
+          },
+          "expr": "sum by (source, pattern) (increase(asic_security_injection_flags_total[$__rate_interval]))",
+          "legendFormat": "{{source}} {{pattern}}"
+        }
+      ],
+      "id": 9,
+      "gridPos": {
+        "x": 0,
+        "y": 32,
+        "w": 12,
+        "h": 8
+      }
+    }
+  ]
+}

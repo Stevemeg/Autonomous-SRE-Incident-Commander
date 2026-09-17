@@ -25,9 +25,10 @@ approval, verifies outcomes, and preserves operational memory.
 >
 > | | |
 > |---|---|
-> | **Completed** | Phase 0 bootstrap · Phase 1 requirements · Phase 2 architecture · Phase 3 persistence · Phase 4 orchestration · Phase 5 telemetry ingestion and correlation · Phase 6 operational knowledge, RAG and governed memory · Phase 7 bounded investigation · Phase 8 bounded remediation · Phase 9 authenticated API, RBAC and dashboard · Phase 10 external integrations · **Phase 11 evaluation, replay and regression harness** |
-> | **In progress** | Phase 12 observability and SLO instrumentation |
+> | **Completed** | Phase 0 bootstrap · Phase 1 requirements · Phase 2 architecture · Phase 3 persistence · Phase 4 orchestration · Phase 5 telemetry ingestion and correlation · Phase 6 operational knowledge, RAG and governed memory · Phase 7 bounded investigation · Phase 8 bounded remediation · Phase 9 authenticated API, RBAC and dashboard · Phase 10 external integrations · Phase 11 evaluation, replay and regression harness · **Phase 12 observability and SLO instrumentation** |
+> | **In progress** | Nothing — Phase 12 is complete |
 > | **Next** | Phase 13 |
+> | **Observability** | OpenTelemetry traces sharing the persisted trace id, catalogued bounded-label metrics counted from committed records, redacted JSON logs, `/livez` and `/readyz`, seven Grafana dashboards, SLO burn-rate alerts with runbooks. Objectives are **INITIAL ENGINEERING TARGETs**; configurations are validated with `promtool` and `otelcol-contrib`, **not deployed** ([SLOs](docs/observability/SLOS.md)) |
 > | **Evaluation** | Versioned 18-scenario golden corpus, strict replay at the provider seams, regression comparison and an executable gate. Results are **simulator/replay runs with a scripted model provider only** — they validate the pipeline and safety invariants, not reasoning quality; LLM judges are not measured ([evaluation harness](docs/evaluation/EVALUATION_ARCHITECTURE.md#11-phase-11-implementation-status)) |
 > | **External integrations** | Native Prometheus, Loki, Kubernetes, Slack, Teams, PagerDuty, Jira and Grafana adapters behind the broker, validated against **local deterministic servers only** — no live vendor system has been exercised ([integrations](docs/architecture/integrations.md)) |
 >

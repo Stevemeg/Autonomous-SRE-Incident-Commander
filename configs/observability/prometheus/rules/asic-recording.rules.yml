@@ -1,0 +1,63 @@
+# SLO recording rules. Every objective here is an INITIAL ENGINEERING TARGET, not a measured
+# baseline: see docs/observability/SLOS.md. Probe and scrape routes are excluded from API SLIs.
+groups:
+  - name: asic-slo-api-availability
+    rules:
+      - record: asic:slo_api_availability:error_ratio_rate5m
+        expr: |
+          sum(rate(asic_api_requests_total{status_class="5xx", route!~"/livez|/healthz|/readyz|/metrics"}[5m]))
+          /
+          clamp_min(sum(rate(asic_api_requests_total{route!~"/livez|/healthz|/readyz|/metrics"}[5m])), 1e-9)
+      - record: asic:slo_api_availability:error_ratio_rate30m
+        expr: |
+          sum(rate(asic_api_requests_total{status_class="5xx", route!~"/livez|/healthz|/readyz|/metrics"}[30m]))
+          /
+          clamp_min(sum(rate(asic_api_requests_total{route!~"/livez|/healthz|/readyz|/metrics"}[30m])), 1e-9)
+      - record: asic:slo_api_availability:error_ratio_rate1h
+        expr: |
+          sum(rate(asic_api_requests_total{status_class="5xx", route!~"/livez|/healthz|/readyz|/metrics"}[1h]))
+          /
+          clamp_min(sum(rate(asic_api_requests_total{route!~"/livez|/healthz|/readyz|/metrics"}[1h])), 1e-9)
+      - record: asic:slo_api_availability:error_ratio_rate6h
+        expr: |
+          sum(rate(asic_api_requests_total{status_class="5xx", route!~"/livez|/healthz|/readyz|/metrics"}[6h]))
+          /
+          clamp_min(sum(rate(asic_api_requests_total{route!~"/livez|/healthz|/readyz|/metrics"}[6h])), 1e-9)
+
+  - name: asic-slo-api-latency
+    rules:
+      - record: asic:slo_api_latency:slow_ratio_rate5m
+        expr: |
+          1 - (
+            sum(rate(asic_api_request_duration_seconds_bucket{le="2.5", route!~"/livez|/healthz|/readyz|/metrics"}[5m]))
+            /
+            clamp_min(sum(rate(asic_api_request_duration_seconds_count{route!~"/livez|/healthz|/readyz|/metrics"}[5m])), 1e-9)
+          )
+      - record: asic:slo_api_latency:slow_ratio_rate1h
+        expr: |
+          1 - (
+            sum(rate(asic_api_request_duration_seconds_bucket{le="2.5", route!~"/livez|/healthz|/readyz|/metrics"}[1h]))
+            /
+            clamp_min(sum(rate(asic_api_request_duration_seconds_count{route!~"/livez|/healthz|/readyz|/metrics"}[1h])), 1e-9)
+          )
+
+  - name: asic-slo-workflow-completion
+    rules:
+      - record: asic:slo_workflow_completion:failure_ratio_rate1h
+        expr: |
+          sum(rate(asic_workflow_runs_finished_total{status=~"failed|dead_lettered"}[1h]))
+          /
+          clamp_min(sum(rate(asic_workflow_runs_finished_total[1h])), 1e-9)
+      - record: asic:slo_workflow_completion:failure_ratio_rate6h
+        expr: |
+          sum(rate(asic_workflow_runs_finished_total{status=~"failed|dead_lettered"}[6h]))
+          /
+          clamp_min(sum(rate(asic_workflow_runs_finished_total[6h])), 1e-9)
+
+  - name: asic-slo-integration-calls
+    rules:
+      - record: asic:slo_integration_calls:failure_ratio_rate1h
+        expr: |
+          sum by (integration) (rate(asic_integration_calls_total{outcome=~"failed_clean|failed_partial|unknown"}[1h]))
+          /
+          clamp_min(sum by (integration) (rate(asic_integration_calls_total[1h])), 1e-9)

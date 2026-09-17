@@ -33,6 +33,7 @@ plausible-looking payload in place of one that did not arrive.
 
 from __future__ import annotations
 
+import logging
 import time
 import uuid
 from collections.abc import Callable, Mapping, Sequence
@@ -82,6 +83,7 @@ from asic.domain.idempotency import tool_execution_key
 from asic.domain.untrusted import scan_structure
 from asic.observability import metrics
 from asic.observability.audit import AuditWriter
+from asic.observability.logging import log_event
 from asic.observability.redaction import redact_arguments, redact_mapping
 from asic.observability.tracing import SpanHandle, TraceRecorder
 from asic.remediation.authorization import require_write_authority
@@ -101,6 +103,8 @@ from asic.tools.provider import (
     InvocationContext,
     ToolProvider,
 )
+
+_logger = logging.getLogger("asic.tools.broker")
 
 #: Longest a broker waits on a vendor ``Retry-After`` before retrying a read.
 MAX_RETRY_AFTER_SECONDS = 5.0
@@ -766,6 +770,23 @@ class ToolBroker:
         )
 
         metrics.tool_invocations_total.add(1, {"tool": descriptor.name, "outcome": outcome.value})
+        log_event(
+            _logger,
+            "tool.executed",
+            level=logging.INFO if failure is None else logging.WARNING,
+            tool=descriptor.name,
+            capability=descriptor.capability,
+            outcome=outcome.value,
+            failure_class=(
+                failure.failure_class.value
+                if failure is not None and failure.failure_class is not None
+                else None
+            ),
+            node=request.node_id.value,
+            incident_id=str(request.incident_id),
+            correlation_id=str(request.correlation_id),
+            duration_ms=duration_ms,
+        )
         if connector is not None:
             metrics.integration_calls_total.add(
                 1,
@@ -928,6 +949,17 @@ class ToolBroker:
 
     @staticmethod
     def _refused(request: CapabilityRequest, failure: BrokerFailure) -> ToolResult:
+        log_event(
+            _logger,
+            "tool.refused",
+            level=logging.WARNING,
+            stage=failure.stage.value,
+            error_type=failure.error_type,
+            capability=request.capability,
+            node=request.node_id.value,
+            incident_id=str(request.incident_id),
+            correlation_id=str(request.correlation_id),
+        )
         return ToolResult(
             request=request,
             tool_name="",

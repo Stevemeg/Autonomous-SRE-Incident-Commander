@@ -3,7 +3,7 @@
 This directory holds every non-code artifact required by the master specification
 (section 16, "REQUIRED ARCHITECTURE/DOCUMENTATION").
 
-> **Current project stage: Phase 11 complete - evaluation, replay and regression harness.** Bounded,
+> **Current project stage: Phase 12 complete - observability and SLO instrumentation.** Bounded,
 > tenant-aware investigation and safety-gated remediation run through one capability broker.
 > Phase 10 adds native Prometheus, Loki, Kubernetes, Slack, Microsoft Teams, PagerDuty, Jira
 > and Grafana adapters behind that broker, with server-side connector authority, credential
@@ -12,7 +12,8 @@ This directory holds every non-code artifact required by the master specificatio
 > deterministic HTTP servers only**; no live vendor system has been exercised. Phase 11 adds a
 > versioned golden corpus, strict replay, regression comparison and an executable gate; its
 > results are simulator/replay runs with a scripted model provider, not reasoning
-> measurements. Observability completion (Phase 12) is not yet built. No metric
+> measurements. Phase 12 adds bounded, committed-record telemetry, readiness, dashboards and
+> SLO alerts whose objectives are initial engineering targets, not measurements. No metric
 > anywhere in this directory is a measurement beyond what is explicitly labelled as measured
 > on a stated corpus.
 
@@ -36,6 +37,8 @@ area and points to the document that owns the detail.
 | [`adr/`](./adr/) | Architecture Decision Records | See the ADR index for current status |
 | [`security/`](./security/) | Threat model (§L) and the active repository security checklist | **Authored** |
 | [`evaluation/`](./evaluation/) | Evaluation harness architecture (§I) and Phase 11 implementation status | **Implemented (simulator/replay) and tested** |
+| [`observability/SLOS.md`](./observability/SLOS.md) | SLOs, error budgets, burn-rate and invariant alerts | **Implemented as rules; targets not measured** |
+| [`runbooks/`](./runbooks/README.md) | One runbook per alert | **Authored and linked from every alert** |
 
 ## Reading order for a new reviewer
 

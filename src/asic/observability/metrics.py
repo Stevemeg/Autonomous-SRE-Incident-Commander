@@ -1,23 +1,19 @@
-"""OpenTelemetry metric instruments for the orchestration kernel.
+"""OpenTelemetry metric instruments for the orchestration kernel, nodes and broker.
 
-A subset of the catalogue in ``docs/architecture/observability.md`` section 4: the
-instruments the read-only kernel can honestly populate today. Metrics for remediation,
-approval, verification and evaluation are deliberately absent rather than present and permanently
-zero - an instrument reporting zero for something that never ran is worse than no
-instrument, because a dashboard cannot tell the two apart.
+Every instrument here is listed in :mod:`asic.observability.catalogue`, which fixes the only
+labels it may carry. Labels are closed vocabularies - node, tool, outcome, reason code -
+never tenant, incident, run or user identifiers: those would grow series count with
+traffic and disclose tenancy through the metrics endpoint. Lifecycle facts (incidents,
+approvals, verifications, model usage, evaluation) are counted from committed records in
+:mod:`asic.observability.lifecycle`, not here.
 
-Every instrument is dimensioned by ``tenant_id``, ``environment`` and
-``behaviour_version``, so a regression can be attributed to a version rather than merely
-observed.
-
-No exporter is configured here. Wiring an exporter is deployment configuration and belongs
-to Phase 12; with no provider configured the SDK's no-op meter absorbs the calls, which
-keeps the instrumentation honest - it is emitted whether or not anyone is collecting.
+Exporters are wired by :func:`asic.observability.setup.configure_telemetry`. Without it the
+API's proxy meter absorbs the calls, so instrumentation is emitted whether or not anyone is
+collecting.
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from typing import Final
 
 from opentelemetry import metrics as otel_metrics
@@ -29,7 +25,10 @@ _meter = otel_metrics.get_meter(METER_NAME)
 node_duration_seconds = _meter.create_histogram(
     "asic.node.duration",
     unit="s",
-    description="Wall-clock duration of one node execution.",
+    description=(
+        "Wall-clock seconds from the previous node boundary to this node's update, measured "
+        "by the kernel (includes the node's model and tool calls, excludes the checkpoint)."
+    ),
 )
 node_failures_total = _meter.create_counter(
     "asic.node.failures",
@@ -37,7 +36,7 @@ node_failures_total = _meter.create_counter(
 )
 schema_violations_total = _meter.create_counter(
     "asic.schema.violations",
-    description="Structured outputs rejected by validation, by node.",
+    description="Structured outputs rejected by validation, by node or tool.",
 )
 tool_invocations_total = _meter.create_counter(
     "asic.tool.invocations",
@@ -86,10 +85,6 @@ llm_calls_total = _meter.create_counter(
     "asic.llm.calls",
     description="Model calls, by provider, model and outcome.",
 )
-llm_tokens_total = _meter.create_counter(
-    "asic.llm.tokens",
-    description="Model tokens, by direction.",
-)
 checkpoints_total = _meter.create_counter(
     "asic.workflow.checkpoints",
     description="Checkpoints written, by reason.",
@@ -116,20 +111,8 @@ hypothesis_revisions_total = _meter.create_counter(
 )
 
 
-def base_attributes(
-    *, tenant_id: str, environment: str, behaviour_version: str
-) -> Mapping[str, str]:
-    """The dimensions every instrument carries."""
-    return {
-        "tenant_id": tenant_id,
-        "environment": environment,
-        "behaviour_version": behaviour_version,
-    }
-
-
 __all__ = [
     "METER_NAME",
-    "base_attributes",
     "budget_exhaustions_total",
     "checkpoints_total",
     "hypothesis_revisions_total",
@@ -137,7 +120,6 @@ __all__ = [
     "integration_calls_total",
     "investigation_iterations",
     "llm_calls_total",
-    "llm_tokens_total",
     "node_duration_seconds",
     "node_failures_total",
     "notification_failures_total",
