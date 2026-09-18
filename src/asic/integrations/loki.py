@@ -70,6 +70,20 @@ def build_query(
     return query
 
 
+def _instant(nanoseconds: int) -> str:
+    """Render a Loki nanosecond timestamp, or refuse it as malformed.
+
+    The value is a vendor-supplied integer of unbounded magnitude: ``fromtimestamp`` raises
+    ``OverflowError`` past the platform's ``time_t``, ``OSError`` for values the C library
+    rejects outright, and ``ValueError`` outside the representable year range. All three
+    are properties of the response, so all three are malformed data rather than faults.
+    """
+    try:
+        return datetime.fromtimestamp(nanoseconds / 1_000_000_000, UTC).isoformat()
+    except (OverflowError, OSError, ValueError) as exc:
+        raise malformed("loki timestamp is outside the representable range") from exc
+
+
 class LokiAdapter:
     kind = IntegrationKind.LOKI
 
@@ -152,7 +166,7 @@ class LokiAdapter:
         for stamp, level, text in selected:
             clean = display_text(text, limit=MAX_LINE_CHARS)
             truncated = truncated or len(clean) < len(text.strip())
-            moment = datetime.fromtimestamp(stamp / 1_000_000_000, UTC).isoformat()
+            moment = _instant(stamp)
             lines.append(f"{moment} {level:<5} {service} {clean}")
         return {
             "lines": lines,

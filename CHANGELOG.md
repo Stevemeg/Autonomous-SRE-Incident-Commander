@@ -22,6 +22,59 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed — Phases 10-12 audit corrections
+
+Five defects an independent audit of Phases 10-12 reproduced - four blocking, plus an alert
+that fired on a healthy system. Each entry states the invariant that failed, not only the
+change.
+
+- **An applied Kubernetes write could be recorded as a clean failure (F-01, high).** The
+  executor's status transition lived in the node's own transaction, so a crash between the
+  adapter's response and the node-boundary commit erased it along with the receipt; the
+  resumed pass then read the deployment it had itself rolled back as *precondition drift*
+  and recorded `failed_clean` with the incident sent back to investigation. Execution intent
+  is now committed before dispatch, in its own transaction, and recovery classifies an
+  interrupted action from durable evidence alone (`asic.remediation.dispatch_recovery`):
+  no effect claim means nothing was sent; a claim without a conclusive receipt is reconciled
+  by an independent read and escalated as a partial effect when it cannot be confirmed; a
+  receipt replays the broker's own classification. Precondition drift is evaluated only
+  after that. An applied effect is never recorded as clean, and never dispatched twice.
+- **Adapter exceptions could escape the broker unclassified (F-02, medium).** A vendor body
+  nested past the parser's recursion limit, or a Loki timestamp outside the representable
+  range, raised `RecursionError`/`OverflowError`/`OSError` through the broker: no execution
+  receipt, no audit record, a dead-lettered run - and, for an effectful call, an effect that
+  may already have been applied. Those failures are now classified in the adapters, and the
+  broker carries a final defensive boundary for anything unanticipated: `failed_clean` for a
+  read, `unknown` for anything effectful, recording the exception type and never the vendor
+  payload. Cancellation, process exit and keyboard interrupt still propagate.
+- **A diverging replay could still pass (F-03, medium).** Strict replay raised on
+  divergence, but the broker turns a tool failure into a degraded result, so a fixture with
+  its first recording removed replayed to `passed` when the scenario's other expectations
+  survived. Divergences are now counted at both replay seams and scored as a zero-tolerance
+  invariant, joined by a recorded interaction signature that must match what the run
+  actually consumed. A divergent replay fails the run, the suite report and the gate exit
+  code.
+- **Lifecycle metrics missed Core SQL transitions (F-04, medium).** Workflow-run and
+  remediation-action statuses are written with Core `UPDATE` statements, which the
+  unit-of-work listeners never see, so `asic_workflow_runs_finished_total` stayed empty
+  while runs completed and dead-lettered - and the alerts on dead-lettered and failing runs
+  could never fire. Those call sites now go through `lifecycle.core_update`, which reports
+  what the statement actually changed through `RETURNING` and feeds the same
+  commit-gated collection: rolled-back work and rolled-back savepoints still count nothing,
+  and a transition written by both paths counts once.
+- **The latency burn alert fired on an idle API (F-05).** With no traffic the recorded
+  slow-request ratio evaluated to `1 - 0/1e-9 = 1`, a permanent full burn. The ratio is now
+  recorded only for windows that served requests, with `promtool` cases for idle, all-fast,
+  just-below-threshold, sustained-violation, recovery and absent series.
+
+Tests added with the fixes: a crash-recovery matrix against the local Kubernetes test
+service that *actually changes* when a PATCH reaches it (simulator state does not, which is
+why the original tests could not see F-01), malformed and parser-breaking vendor responses
+for reads and effectful writes, twelve replay mutations per scenario exercised through the
+harness and the gate rather than the replay provider alone, Core/ORM lifecycle counting
+across commit, rollback and savepoints, and non-vacuity controls that reintroduce each
+defect when the guard is removed.
+
 ### Added — Phase 12 observability and SLO instrumentation
 
 - A metric catalogue (`asic.observability.catalogue`) fixing every instrument's unit, buckets
@@ -62,9 +115,10 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   scenario has a digest over its definition and fixtures; changing one without a version bump
   errors the run.
 - Recording and strict replay at the tool- and model-provider seams, with digest-verified
-  fixtures; a divergent or incompletely consumed replay fails rather than fabricating a
-  reproduction. Verified identical observation signatures across simulator and replay runs,
-  including after a process restart.
+  fixtures; an incompletely consumed replay fails rather than fabricating a reproduction.
+  Verified identical observation signatures across simulator and replay runs, including after
+  a process restart. (Divergence itself was raised at the seam but not scored: an independent
+  audit showed a replay could still pass. Corrected below.)
 - Deterministic evaluators reading the durable records under RLS: zero-tolerance invariants
   (cross-tenant execution, citations resolve, no unauthorised infrastructure mutation,
   external records only from S2, budgets, trusted verification lineage) plus per-scenario

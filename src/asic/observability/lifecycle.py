@@ -12,11 +12,22 @@ label comes from a closed enumeration on the row; no identifier is ever read int
 
 The listeners are registered on :class:`sqlalchemy.orm.Session` itself, so every write path
 - kernels, API, ingestion, harness - is covered without instrumenting each one.
+
+**Two ways a row changes, one place that counts it.** The listeners above see the unit of
+work: objects added and attributes mutated. They cannot see a Core ``UPDATE`` statement,
+which changes rows in the database without the ORM ever loading them - and the workflow and
+remediation-action lifecycles are written exactly that way, because a status transition
+there is a statement about a row, not about an in-memory object. Those call sites go
+through :func:`core_update`, which executes the statement with ``RETURNING`` and turns what
+the database actually changed into the same pending facts, in the same transaction-keyed
+store, emitted by the same commit rule. Counting when the statement is *issued* would
+reintroduce precisely the rolled-back-work bug this module exists to prevent.
 """
 
 from __future__ import annotations
 
 import threading
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any, Final
 
@@ -24,6 +35,7 @@ import sqlalchemy as sa
 from opentelemetry import metrics as otel_metrics
 from sqlalchemy import event
 from sqlalchemy.orm import Session, SessionTransaction
+from sqlalchemy.sql.dml import Update
 
 from asic.db.models import (
     Approval,
@@ -110,6 +122,9 @@ _FINISHED: Final[frozenset[WorkflowRunStatus]] = frozenset(
 )
 _KEY: Final[str] = "asic.lifecycle.facts"
 _OUTCOME: Final[str] = "asic.lifecycle.outcome"
+#: Transitions already recorded in a (sub)transaction, so re-issuing the same statement -
+#: or an ORM flush that writes the same row - counts the transition once.
+_SEEN: Final[str] = "asic.lifecycle.seen"
 
 
 @dataclass(frozen=True, slots=True)
@@ -231,12 +246,86 @@ def _model_usage(span: TraceSpan) -> list[_Fact]:
     return facts
 
 
+# ------------------------------------------------------------------------- core updates
+
+
+@dataclass(frozen=True, slots=True)
+class _CoreSpec:
+    """How to read a Core ``UPDATE`` on one table back into lifecycle facts."""
+
+    columns: tuple[Any, ...]
+    facts: Callable[[Any], list[_Fact]]
+
+
+def _workflow_run_facts(row: Any) -> list[_Fact]:
+    if row.status in _FINISHED:
+        return [_Fact(workflow_runs_finished, 1, {"status": _enum(row.status)})]
+    return []
+
+
+def _remediation_action_facts(row: Any) -> list[_Fact]:
+    return [
+        _Fact(
+            action_transitions,
+            1,
+            {"status": _enum(row.status), "risk_tier": _enum(row.risk_tier)},
+        )
+    ]
+
+
+_CORE_WATCHED: Final[dict[str, _CoreSpec]] = {
+    WorkflowRun.__tablename__: _CoreSpec(
+        columns=(WorkflowRun.id, WorkflowRun.status), facts=_workflow_run_facts
+    ),
+    RemediationAction.__tablename__: _CoreSpec(
+        columns=(RemediationAction.id, RemediationAction.status, RemediationAction.risk_tier),
+        facts=_remediation_action_facts,
+    ),
+}
+
+
+def core_update(session: Session, statement: Update) -> Sequence[Any]:
+    """Execute a lifecycle-bearing Core ``UPDATE`` and collect facts from the rows it changed.
+
+    ``RETURNING`` is what makes this honest: the facts describe the rows the database
+    actually updated, so a statement whose ``WHERE`` matched nothing counts nothing, and a
+    status the row already held counts once rather than twice (the same transition from the
+    same row is recorded once per transaction).
+
+    Raises:
+        KeyError: if used on a table with no lifecycle meaning - the caller should use
+            ``session.execute`` directly rather than imply a metric that does not exist.
+    """
+    table = getattr(statement.table, "name", "")
+    spec = _CORE_WATCHED[table]
+    rows = session.execute(statement.returning(*spec.columns)).all()
+    transaction = _current(session)
+    if transaction is None:
+        return rows
+    seen = _seen(session).setdefault(id(transaction), set())
+    collected: list[_Fact] = []
+    for row in rows:
+        key = (table, str(row[0]), _enum(row.status))
+        if any(key in recorded for recorded in _seen(session).values()):
+            continue
+        seen.add(key)
+        collected.extend(spec.facts(row))
+    if collected:
+        _store(session).setdefault(id(transaction), []).extend(collected)
+    return rows
+
+
 # ------------------------------------------------------------------ transaction plumbing
 
 
 def _store(session: Session) -> dict[int, list[_Fact]]:
     store: dict[int, list[_Fact]] = session.info.setdefault(_KEY, {})
     return store
+
+
+def _seen(session: Session) -> dict[int, set[tuple[str, str, str]]]:
+    seen: dict[int, set[tuple[str, str, str]]] = session.info.setdefault(_SEEN, {})
+    return seen
 
 
 def _current(session: Session) -> SessionTransaction | None:
@@ -248,12 +337,25 @@ def _after_flush(session: Session, _context: Any) -> None:
     if transaction is None:
         return
     collected: list[_Fact] = []
+    seen = _seen(session).setdefault(id(transaction), set())
     for obj in session.new:
         collected.extend(facts_for_new(obj))
+        _note_transition(obj, seen)
     for obj in session.dirty:
         collected.extend(facts_for_dirty(obj))
+        _note_transition(obj, seen)
     if collected:
         _store(session).setdefault(id(transaction), []).extend(collected)
+
+
+def _note_transition(obj: Any, seen: set[tuple[str, str, str]]) -> None:
+    """Remember an ORM-written transition so a Core statement writing it counts it once.
+
+    The two paths describe the same row reaching the same status; whichever observes it
+    first is the one that counts it.
+    """
+    if isinstance(obj, (WorkflowRun, RemediationAction)):
+        seen.add((type(obj).__tablename__, str(obj.id), _enum(obj.status)))
 
 
 def _after_commit(session: Session) -> None:
@@ -271,11 +373,17 @@ def _after_transaction_end(session: Session, transaction: SessionTransaction) ->
     outcome = session.info.pop(_OUTCOME, "rollback")
     store = session.info.get(_KEY)
     facts = store.pop(id(transaction), []) if store else []
-    if outcome != "commit" or not facts:
+    seen = _seen(session).pop(id(transaction), set())
+    if outcome != "commit":
+        # Rolled back: the transitions never happened, so they are neither counted nor
+        # remembered as counted - a retry in the enclosing transaction must count.
         return
     parent = transaction.parent
     if parent is not None:
-        _store(session).setdefault(id(parent), []).extend(facts)
+        if seen:
+            _seen(session).setdefault(id(parent), set()).update(seen)
+        if facts:
+            _store(session).setdefault(id(parent), []).extend(facts)
         return
     for fact in facts:
         fact.emit()
@@ -298,4 +406,4 @@ def install() -> None:
         _installed = True
 
 
-__all__ = ["facts_for_dirty", "facts_for_new", "install"]
+__all__ = ["core_update", "facts_for_dirty", "facts_for_new", "install"]

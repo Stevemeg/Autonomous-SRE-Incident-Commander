@@ -10,6 +10,7 @@ dependency bundle itself is new, because its ``objective`` is a
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 
@@ -48,6 +49,11 @@ class RemediationDependencies:
     audit: AuditWriter
     clock: Clock
     run_started_at: datetime
+    #: Opens a session *outside* this node's unit of work. Used only where a fact must
+    #: survive a crash that rolls the node's transaction back - the pre-dispatch execution
+    #: intent (:mod:`asic.remediation.dispatch_recovery`), on the same principle as the
+    #: broker's effect claim and the durable model-budget ledger.
+    session_factory: Callable[[], Session]
     budget_policy: BudgetPolicy = field(default_factory=BudgetPolicy)
     model_budget: DurableModelBudget | None = None
 

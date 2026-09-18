@@ -26,20 +26,33 @@ groups:
 
   - name: asic-slo-api-latency
     rules:
+      # No traffic is not 100% slow. A ratio of "requests slower than the objective" is
+      # undefined without requests, and clamping the denominator instead of dropping the
+      # sample made an idle API report a full burn - and page for it. The `and on ()` keeps
+      # the ratio only while requests are actually being served, so an idle window records
+      # nothing and the burn alert has nothing to fire on.
       - record: asic:slo_api_latency:slow_ratio_rate5m
         expr: |
-          1 - (
-            sum(rate(asic_api_request_duration_seconds_bucket{le="2.5", route!~"/livez|/healthz|/readyz|/metrics"}[5m]))
-            /
-            clamp_min(sum(rate(asic_api_request_duration_seconds_count{route!~"/livez|/healthz|/readyz|/metrics"}[5m])), 1e-9)
+          (
+            1 - (
+              sum(rate(asic_api_request_duration_seconds_bucket{le="2.5", route!~"/livez|/healthz|/readyz|/metrics"}[5m]))
+              /
+              sum(rate(asic_api_request_duration_seconds_count{route!~"/livez|/healthz|/readyz|/metrics"}[5m]))
+            )
           )
+          and on ()
+          (sum(rate(asic_api_request_duration_seconds_count{route!~"/livez|/healthz|/readyz|/metrics"}[5m])) > 0)
       - record: asic:slo_api_latency:slow_ratio_rate1h
         expr: |
-          1 - (
-            sum(rate(asic_api_request_duration_seconds_bucket{le="2.5", route!~"/livez|/healthz|/readyz|/metrics"}[1h]))
-            /
-            clamp_min(sum(rate(asic_api_request_duration_seconds_count{route!~"/livez|/healthz|/readyz|/metrics"}[1h])), 1e-9)
+          (
+            1 - (
+              sum(rate(asic_api_request_duration_seconds_bucket{le="2.5", route!~"/livez|/healthz|/readyz|/metrics"}[1h]))
+              /
+              sum(rate(asic_api_request_duration_seconds_count{route!~"/livez|/healthz|/readyz|/metrics"}[1h]))
+            )
           )
+          and on ()
+          (sum(rate(asic_api_request_duration_seconds_count{route!~"/livez|/healthz|/readyz|/metrics"}[1h])) > 0)
 
   - name: asic-slo-workflow-completion
     rules:

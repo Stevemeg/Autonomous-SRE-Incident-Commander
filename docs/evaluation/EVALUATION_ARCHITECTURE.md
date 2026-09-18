@@ -454,7 +454,7 @@ Code: `src/asic/evaluation/`. Migration: `0017_evaluation_harness`. Tests:
 |---|---|---|
 | Versioned corpus (§3) | 18 scenarios (`EV-INV-001…010`, `EV-COR-001`, `EV-REM-001…004`, `EV-SEC-001…003`) covering 23 declared categories; each has a key, a version and a SHA-256 digest over its definition **and** the simulator fixtures it runs on | UNIT |
 | Golden / adversarial classes (§3.2) | Both used; prompt injection and fabricated citations are adversarial | SIMULATOR |
-| Replay (§2) | Recording and replay at the tool-provider and model-provider seams, strict in order and identity; fixtures stored with a digest and a format version, refused if either does not match | REPLAY |
+| Replay (§2) | Recording and replay at the tool-provider and model-provider seams, strict in order and identity; fixtures stored with a digest and a format version, refused if either does not match. Divergence is counted at the seam and checked as a zero-tolerance invariant (`replay.no_divergence`), alongside `replay.fully_consumed` and `replay.interaction_signature`, so a diverging replay fails the run and the gate rather than relying on a downstream expectation to notice | REPLAY |
 | Deterministic checks (§4) | Zero-tolerance invariants on every run (cross-tenant execution, citations resolve, no unauthorised infrastructure mutation, external records only from the notification service, budgets, trusted verification lineage) plus per-scenario expectations | UNIT + SIMULATOR |
 | Judges (§5) | `LlmJudge` through the existing model-provider port; exact JSON schema, citations must name gathered evidence, panel status `not_measured` / `insufficient` / `agreed` / `contested` | UNIT (scripted judge model as test infrastructure) |
 | Metrics (§6) | Per run, with `None` where a metric does not apply; aggregated as a profile, never one number | SIMULATOR |
@@ -506,9 +506,9 @@ depended on random identifiers under a logical clock.
 
 ### 11.5 Known limitations
 
-- Tool-call *order* is enforced by strict replay, but the stored observation signature
-  compares tool calls as a multiset: rows written under one logical instant carry no sequence
-  number.
+- Tool-call *order* is enforced by strict replay and by the recorded interaction signature;
+  the stored *observation* signature still compares tool calls as a multiset, because rows
+  written under one logical instant carry no sequence number.
 - The gate is executable and machine-readable (exit `0` passed, `1` failed, `2` errored);
   it is not yet wired into CI (Phase 14).
 - A downgrade of migration `0017` is refused once any suite run exists, rather than

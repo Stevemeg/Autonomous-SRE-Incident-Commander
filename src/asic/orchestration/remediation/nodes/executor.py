@@ -40,8 +40,15 @@ from asic.domain.enums import (
     TraceSpanKind,
 )
 from asic.domain.idempotency import action_version_hash, incident_event_key
+from asic.observability import lifecycle
 from asic.orchestration.remediation.context import RemediationDependencies
 from asic.orchestration.remediation.nodes.verifier import trusted_baseline
+from asic.remediation.dispatch_recovery import (
+    DispatchEvidence,
+    DispatchState,
+    dispatch_evidence,
+    record_execution_intent,
+)
 from asic.remediation.observations import effect_observed, precondition_holds
 from asic.remediation.verification import profile_for_criteria
 from asic.tools.broker import CapabilityRequest
@@ -108,31 +115,14 @@ def remediation_executor_node(deps: RemediationDependencies) -> Any:
                 }
                 contract.validate_update(update)
                 return update
-            if action.status is RemediationActionStatus.EXECUTING:
-                # The status update that precedes dispatch (below) committed, but this run
-                # crashed - or is being resumed concurrently - before the outcome was
-                # recorded. SI-5 forbids a blind second dispatch: ask the target directly.
-                span.fail(
-                    "resuming after an interrupted execution; reconciling, not re-dispatching"
-                )
-                confirmed = _reconcile(deps, action, descriptor)
-                incident = deps.session.execute(
-                    sa.select(Incident).where(
-                        Incident.tenant_id == deps.context.tenant_id,
-                        Incident.id == deps.context.incident_id,
-                    )
-                ).scalar_one()
-                if confirmed:
-                    return _route_success(deps, contract, incident, action, action_ref)
-                return _fail_closed(
-                    deps,
-                    contract,
-                    action,
-                    reason="execution status was left 'executing' by an interrupted prior "
-                    "pass, and reconciliation could not confirm the effect took hold",
-                    target_status=IncidentStatus.ESCALATED,
-                    new_action_status=RemediationActionStatus.FAILED_PARTIAL,
-                    emit_compensation_event=True,
+            # Durable evidence of an interrupted prior pass, read before any precondition
+            # logic can mistake this action's own applied effect for external drift (SI-8).
+            evidence = dispatch_evidence(
+                deps.session, tenant_id=deps.context.tenant_id, action=action
+            )
+            if evidence.interrupted:
+                return _recover_interrupted(
+                    deps, contract, action, action_ref, descriptor, evidence, span
                 )
 
             recomputed = action_version_hash(
@@ -197,14 +187,31 @@ def remediation_executor_node(deps: RemediationDependencies) -> Any:
                     target_status=IncidentStatus.ESCALATED,
                 )
 
-            deps.session.execute(
-                sa.update(RemediationAction)
-                .where(
-                    RemediationAction.tenant_id == deps.context.tenant_id,
-                    RemediationAction.id == action.id,
+            # Execution intent, durable *before* the write and outside this node's
+            # transaction: a crash between the adapter's response and the node-boundary
+            # commit takes the receipt with it, and without this an interrupted dispatch
+            # would be indistinguishable from one that never began
+            # (failure-and-recovery.md §3.1). Refusing when the transition does not apply
+            # keeps "dispatched" and "durably intended to dispatch" the same set.
+            if not record_execution_intent(
+                deps.session_factory,
+                tenant_id=deps.context.tenant_id,
+                action_id=action.id,
+            ):
+                span.fail("execution intent could not be recorded durably before dispatch")
+                return _fail_closed(
+                    deps,
+                    contract,
+                    action,
+                    reason=(
+                        "execution intent could not be recorded durably before dispatch; "
+                        "refusing to send an effect that recovery could not classify"
+                    ),
+                    target_status=IncidentStatus.ESCALATED,
                 )
-                .values(status=RemediationActionStatus.EXECUTING)
-            )
+            # The intent committed in another transaction, so this session's copy of the row
+            # is stale; the broker re-reads the action and requires it to be `executing`.
+            deps.session.expire(action)
             incident = deps.session.execute(
                 sa.select(Incident).where(
                     Incident.tenant_id == deps.context.tenant_id,
@@ -295,6 +302,79 @@ def remediation_executor_node(deps: RemediationDependencies) -> Any:
 # ------------------------------------------------------------------------------ helpers
 
 
+def _recover_interrupted(
+    deps: RemediationDependencies,
+    contract: Any,
+    action: RemediationAction,
+    action_ref: RemediationActionRef,
+    descriptor: ToolDescriptor,
+    evidence: DispatchEvidence,
+    span: Any,
+) -> dict[str, Any]:
+    """Route an action whose dispatch a prior pass began, from durable evidence alone.
+
+    Never re-dispatches. The three branches are the three states durable evidence can
+    describe (:mod:`asic.remediation.dispatch_recovery`), and only the branch that can
+    prove no effect was attempted is allowed to end in ``failed_clean``.
+    """
+    span.fail(f"resuming an interrupted execution ({evidence.state.value}); not re-dispatching")
+    span.set_decision(
+        recovered=True,
+        dispatch_state=evidence.state.value,
+        receipt=evidence.receipt.value if evidence.receipt is not None else None,
+    )
+    incident = deps.session.execute(
+        sa.select(Incident).where(
+            Incident.tenant_id == deps.context.tenant_id,
+            Incident.id == deps.context.incident_id,
+        )
+    ).scalar_one()
+
+    if evidence.state is DispatchState.NO_EFFECT_ATTEMPTED:
+        # The intent committed but the broker never claimed an effect, and the claim is
+        # committed before any adapter can be invoked: nothing was sent.
+        return _fail_closed(
+            deps,
+            contract,
+            action,
+            reason=(
+                "a prior pass recorded execution intent but no effect was ever claimed, so "
+                "nothing reached the target; the action is not dispatched again"
+            ),
+            target_status=IncidentStatus.INVESTIGATING,
+            new_action_status=RemediationActionStatus.FAILED_CLEAN,
+        )
+
+    if evidence.receipt is ToolExecutionOutcome.SUCCEEDED:
+        return _route_success(deps, contract, incident, action, action_ref)
+    if evidence.receipt is ToolExecutionOutcome.FAILED_CLEAN:
+        return _fail_closed(
+            deps,
+            contract,
+            action,
+            reason="the recorded execution receipt reports that no effect was applied",
+            target_status=IncidentStatus.INVESTIGATING,
+            new_action_status=RemediationActionStatus.FAILED_CLEAN,
+        )
+
+    # A claim without a conclusive receipt, or a receipt that is itself unknown: the effect
+    # may have been applied. Ask the target, and escalate when it cannot be confirmed.
+    if _reconcile(deps, action, descriptor):
+        return _route_success(deps, contract, incident, action, action_ref)
+    return _fail_closed(
+        deps,
+        contract,
+        action,
+        reason=(
+            "an effect was claimed for this action but no conclusive receipt exists, and "
+            "reconciliation could not confirm whether the effect took hold"
+        ),
+        target_status=IncidentStatus.ESCALATED,
+        new_action_status=RemediationActionStatus.FAILED_PARTIAL,
+        emit_compensation_event=True,
+    )
+
+
 def _route_success(
     deps: RemediationDependencies,
     contract: Any,
@@ -302,7 +382,8 @@ def _route_success(
     action: RemediationAction,
     action_ref: RemediationActionRef,
 ) -> dict[str, Any]:
-    deps.session.execute(
+    lifecycle.core_update(
+        deps.session,
         sa.update(RemediationAction)
         .where(
             RemediationAction.tenant_id == deps.context.tenant_id,
@@ -311,7 +392,7 @@ def _route_success(
         .values(
             status=RemediationActionStatus.SUCCEEDED,
             executed_at=action.executed_at or deps.clock.now(),
-        )
+        ),
     )
     if incident.status is not IncidentStatus.VERIFYING:
         apply_transition(
@@ -429,12 +510,13 @@ def _fail_closed(
     new_action_status: RemediationActionStatus = RemediationActionStatus.FAILED_CLEAN,
     emit_compensation_event: bool = False,
 ) -> dict[str, Any]:
-    deps.session.execute(
+    lifecycle.core_update(
+        deps.session,
         sa.update(RemediationAction)
         .where(
             RemediationAction.tenant_id == deps.context.tenant_id, RemediationAction.id == action.id
         )
-        .values(status=new_action_status)
+        .values(status=new_action_status),
     )
     incident = deps.session.execute(
         sa.select(Incident).where(

@@ -66,7 +66,7 @@ from asic.domain.idempotency import incident_event_key
 from asic.domain.incident_state import allowed_targets, is_terminal
 from asic.llm.accounting import DurableModelBudget
 from asic.llm.port import ModelProvider
-from asic.observability import metrics
+from asic.observability import lifecycle, metrics
 from asic.observability.audit import AuditWriter
 from asic.observability.logging import log_event
 from asic.observability.tracing import TraceRecorder, derive_span_id, derive_trace_id
@@ -640,7 +640,8 @@ class InvestigationKernel:
         """Mark an interrupted run resumable, and release the lease."""
         uow = UnitOfWork(self._session_factory, tenant_id=context.tenant_id)
         with uow as session:
-            session.execute(
+            lifecycle.core_update(
+                session,
                 sa.update(WorkflowRun)
                 .where(
                     WorkflowRun.tenant_id == context.tenant_id,
@@ -650,7 +651,7 @@ class InvestigationKernel:
                     status=WorkflowRunStatus.SUSPENDED,
                     lease_owner=None,
                     lease_expires_at=None,
-                )
+                ),
             )
 
     def _mark_dead_letter(self, context: RunContext) -> None:
@@ -662,7 +663,8 @@ class InvestigationKernel:
         try:
             uow = UnitOfWork(self._session_factory, tenant_id=context.tenant_id)
             with uow as session:
-                session.execute(
+                lifecycle.core_update(
+                    session,
                     sa.update(WorkflowRun)
                     .where(
                         WorkflowRun.tenant_id == context.tenant_id,
@@ -672,7 +674,7 @@ class InvestigationKernel:
                         status=WorkflowRunStatus.DEAD_LETTERED,
                         lease_owner=None,
                         lease_expires_at=None,
-                    )
+                    ),
                 )
         except Exception:
             return
@@ -723,7 +725,8 @@ class InvestigationKernel:
                     )
 
             budget = _budget_of(state, self._budget_policy)
-            session.execute(
+            lifecycle.core_update(
+                session,
                 sa.update(WorkflowRun)
                 .where(
                     WorkflowRun.tenant_id == context.tenant_id,
@@ -740,7 +743,7 @@ class InvestigationKernel:
                     budget_consumed=budget.to_dict(),
                     lease_owner=None,
                     lease_expires_at=None,
-                )
+                ),
             )
             session.execute(
                 sa.update(ExecutionTrace)

@@ -23,6 +23,12 @@ All windows are rolling 30 days. Probe and scrape routes (`/livez`, `/healthz`, 
 | Integration calls | Non-failed calls per integration (`asic_integration_calls_total`) | 75% per hour before a ticket | 25% hourly failure ratio | INITIAL ENGINEERING TARGET |
 | Readiness | Database dependency up at the expected schema revision (`asic_dependency_up`) | Up; alert after 2 min | none | INITIAL ENGINEERING TARGET |
 
+A ratio needs a denominator. The latency SLI is recorded only for windows that actually
+served requests, so an idle API records no slow-request ratio and the latency burn alert has
+nothing to fire on: "no traffic" is not "everything is slow". The availability SLI keeps its
+clamped denominator, where an idle window yields a ratio of 0 — no errors, nothing to burn —
+and the workflow-completion alert additionally requires a minimum number of finished runs.
+
 The integration objective is deliberately loose: the external system's availability is not
 ours to promise, and an investigation degrades rather than fails when one evidence domain is
 missing. The alert exists to route a sustained outage to a human.

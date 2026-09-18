@@ -139,3 +139,90 @@ tests:
               summary: "Evaluation suite golden (simulator) failed"
               description: A behaviour change failed or could not be evaluated; it must not be released.
               runbook_url: docs/runbooks/evaluation-gate-not-passing.md
+
+  # Latency burn. An idle API is the case that used to page: with no requests the ratio was
+  # computed as 1 - 0/1e-9 = 1, a permanent 100% "slow" reading. These cases pin the whole
+  # shape of the rule - silent with no traffic, silent when fast, firing only on sustained
+  # slowness, and silent again once it recovers.
+  - name: latency burn stays silent on an idle api
+    interval: 1m
+    input_series:
+      - series: 'asic_api_request_duration_seconds_bucket{method="GET", route="/api/v1/incidents", le="2.5"}'
+        values: "100x150"
+      - series: 'asic_api_request_duration_seconds_bucket{method="GET", route="/api/v1/incidents", le="+Inf"}'
+        values: "100x150"
+      - series: 'asic_api_request_duration_seconds_count{method="GET", route="/api/v1/incidents"}'
+        values: "100x150"
+    alert_rule_test:
+      - eval_time: 120m
+        alertname: AsicApiLatencyBurn
+        exp_alerts: []
+
+  - name: latency burn stays silent when every request is fast
+    interval: 1m
+    input_series:
+      - series: 'asic_api_request_duration_seconds_bucket{method="GET", route="/api/v1/incidents", le="2.5"}'
+        values: "0+10x150"
+      - series: 'asic_api_request_duration_seconds_bucket{method="GET", route="/api/v1/incidents", le="+Inf"}'
+        values: "0+10x150"
+      - series: 'asic_api_request_duration_seconds_count{method="GET", route="/api/v1/incidents"}'
+        values: "0+10x150"
+    alert_rule_test:
+      # A single served request is enough to define the ratio, and it is 0.
+      - eval_time: 6m
+        alertname: AsicApiLatencyBurn
+        exp_alerts: []
+      - eval_time: 120m
+        alertname: AsicApiLatencyBurn
+        exp_alerts: []
+
+  - name: latency burn stays silent just below the burn threshold
+    interval: 1m
+    # 14% of requests slower than 2.5 s, just under 14.4x the 1% budget (14.4%).
+    input_series:
+      - series: 'asic_api_request_duration_seconds_bucket{method="GET", route="/api/v1/incidents", le="2.5"}'
+        values: "0+86x150"
+      - series: 'asic_api_request_duration_seconds_bucket{method="GET", route="/api/v1/incidents", le="+Inf"}'
+        values: "0+100x150"
+      - series: 'asic_api_request_duration_seconds_count{method="GET", route="/api/v1/incidents"}'
+        values: "0+100x150"
+    alert_rule_test:
+      - eval_time: 120m
+        alertname: AsicApiLatencyBurn
+        exp_alerts: []
+
+  - name: latency burn fires on sustained slowness and clears on recovery
+    interval: 1m
+    # 40% slow for the first two hours, then fast again.
+    input_series:
+      - series: 'asic_api_request_duration_seconds_bucket{method="GET", route="/api/v1/incidents", le="2.5"}'
+        values: "0+60x120 7200+100x180"
+      - series: 'asic_api_request_duration_seconds_bucket{method="GET", route="/api/v1/incidents", le="+Inf"}'
+        values: "0+100x120 12000+100x180"
+      - series: 'asic_api_request_duration_seconds_count{method="GET", route="/api/v1/incidents"}'
+        values: "0+100x120 12000+100x180"
+    alert_rule_test:
+      - eval_time: 60m
+        alertname: AsicApiLatencyBurn
+        exp_alerts:
+          - exp_labels:
+              severity: ticket
+              slo: api-latency
+            exp_annotations:
+              summary: Too many API requests are slower than 2.5 s
+              description: Slow-request ratio 40% over 1h exceeds 14.4x the 1% budget.
+              runbook_url: docs/runbooks/api-latency-burn.md
+      # An hour after recovery the long window no longer sees the slow traffic.
+      - eval_time: 200m
+        alertname: AsicApiLatencyBurn
+        exp_alerts: []
+
+  - name: latency burn has nothing to fire on when the series are absent
+    interval: 1m
+    input_series:
+      - series: 'up{job="asic-api"}'
+        values: "1x30"
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: AsicApiLatencyBurn
+        exp_alerts: []

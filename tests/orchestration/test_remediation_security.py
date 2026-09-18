@@ -27,11 +27,13 @@ from asic.domain.errors import DomainError
 from asic.domain.idempotency import action_version_hash
 from asic.llm.deterministic import DeterministicModelProvider
 from asic.orchestration.remediation.kernel import RemediationKernel
+from asic.orchestration.remediation.nodes import executor as executor_module
 from asic.orchestration.remediation.nodes.verifier import (
     _evaluate,
     trusted_baseline,
 )
 from asic.remediation.approval_service import decide
+from asic.remediation.dispatch_recovery import DispatchEvidence
 from asic.remediation.trust import baseline_provenance
 from asic.remediation.verification import profile_for
 from asic.simulators.provider import SimulatorProvider
@@ -63,6 +65,11 @@ def _prepared(
         factory, resolver, clock, fixture, scenario("SC-0001-checkout-latency-after-deploy")
     )
     return fixture, hypothesis_id
+
+
+def _blind_to_evidence(*_args: Any, **_kwargs: Any) -> DispatchEvidence:
+    """The executor as it behaved before durable dispatch evidence was consulted."""
+    return DispatchEvidence(intent_recorded=False, claimed=False, receipt=None)
 
 
 def _kernel(
@@ -256,9 +263,23 @@ def test_approval_rechecked_at_dispatch(
     ).scalar_one()
 
 
-@pytest.mark.parametrize("disable_claim", [False, True])
+@pytest.mark.parametrize(
+    ("disabled_guard", "expected_writes"),
+    [
+        # Both guards in place: one dispatch, recovery from durable evidence.
+        (None, 1),
+        # Recovery from durable evidence alone still stops a blind second dispatch...
+        ("claim", 1),
+        # ...and so does the broker's effect claim alone.
+        ("recovery", 1),
+        # Remove both and the unsafe behaviour returns: the effect is applied twice. This
+        # is the non-vacuity control for the two guards above.
+        ("both", 2),
+    ],
+)
 def test_crash_after_effect_claim_prevents_repeat(
-    disable_claim: bool,
+    disabled_guard: str | None,
+    expected_writes: int,
     monkeypatch: Any,
     owner_engine: Any,
     resolver: Any,
@@ -272,7 +293,7 @@ def test_crash_after_effect_claim_prevents_repeat(
         factory,
         resolver,
         clock,
-        f"crash-claim-{str(disable_claim).lower()}-{__import__('uuid').uuid4().hex[:8]}",
+        f"crash-claim-{disabled_guard or 'none'}-{__import__('uuid').uuid4().hex[:8]}",
     )
     tenant_id = fixture.tenant_id
     setup.close()
@@ -291,8 +312,10 @@ def test_crash_after_effect_claim_prevents_repeat(
         return result
 
     monkeypatch.setattr(ToolBroker, "_invoke_with_deadline", crash_once)
-    if disable_claim:
+    if disabled_guard in ("claim", "both"):
         monkeypatch.setattr(ToolBroker, "_claim_write", lambda *args: None)
+    if disabled_guard in ("recovery", "both"):
+        monkeypatch.setattr(executor_module, "dispatch_evidence", _blind_to_evidence)
     with pytest.raises(ProcessDeath):
         _run_remediation(
             factory,
@@ -311,8 +334,8 @@ def test_crash_after_effect_claim_prevents_repeat(
         tenant_id=tenant_id, workflow_run_id=action.workflow_run_id
     )
     check.close()
-    assert len(writes) == (2 if disable_claim else 1)
-    if not disable_claim:
+    assert len(writes) == expected_writes
+    if disabled_guard is None:
         assert resumed.terminated
         assert resumed.incident_status is IncidentStatus.ESCALATED
 

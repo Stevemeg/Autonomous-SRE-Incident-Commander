@@ -39,7 +39,7 @@ from asic.domain.enums import HypothesisStatus, IncidentStatus, WorkflowRunStatu
 from asic.domain.errors import DomainError, LeaseNotHeld
 from asic.llm.accounting import DurableModelBudget
 from asic.llm.port import ModelProvider
-from asic.observability import metrics
+from asic.observability import lifecycle, metrics
 from asic.observability.audit import AuditWriter
 from asic.observability.logging import log_event
 from asic.observability.tracing import TraceRecorder, derive_span_id, derive_trace_id
@@ -468,6 +468,7 @@ class RemediationKernel:
             audit=audit,
             clock=self._clock,
             run_started_at=run_started_at,
+            session_factory=self._session_factory,
             budget_policy=self._budget_policy,
             model_budget=DurableModelBudget(
                 self._session_factory, context.tenant_id, context.workflow_run_id
@@ -581,20 +582,24 @@ class RemediationKernel:
     def _suspend(self, context: RunContext) -> None:
         uow = UnitOfWork(self._session_factory, tenant_id=context.tenant_id)
         with uow as session:
-            session.execute(
+            lifecycle.core_update(
+                session,
                 sa.update(WorkflowRun)
                 .where(
                     WorkflowRun.tenant_id == context.tenant_id,
                     WorkflowRun.id == context.workflow_run_id,
                 )
-                .values(status=WorkflowRunStatus.SUSPENDED, lease_owner=None, lease_expires_at=None)
+                .values(
+                    status=WorkflowRunStatus.SUSPENDED, lease_owner=None, lease_expires_at=None
+                ),
             )
 
     def _mark_dead_letter(self, context: RunContext) -> None:
         try:
             uow = UnitOfWork(self._session_factory, tenant_id=context.tenant_id)
             with uow as session:
-                session.execute(
+                lifecycle.core_update(
+                    session,
                     sa.update(WorkflowRun)
                     .where(
                         WorkflowRun.tenant_id == context.tenant_id,
@@ -604,7 +609,7 @@ class RemediationKernel:
                         status=WorkflowRunStatus.DEAD_LETTERED,
                         lease_owner=None,
                         lease_expires_at=None,
-                    )
+                    ),
                 )
         except Exception:
             return
@@ -625,7 +630,8 @@ class RemediationKernel:
             incident = _load_incident(
                 session, tenant_id=context.tenant_id, incident_id=context.incident_id
             )
-            session.execute(
+            lifecycle.core_update(
+                session,
                 sa.update(WorkflowRun)
                 .where(
                     WorkflowRun.tenant_id == context.tenant_id,
@@ -636,7 +642,7 @@ class RemediationKernel:
                     completed_at=self._clock.now(),
                     lease_owner=None,
                     lease_expires_at=None,
-                )
+                ),
             )
             tracer.flush(session)
             session.flush()

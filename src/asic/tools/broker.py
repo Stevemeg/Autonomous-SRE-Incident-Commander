@@ -415,6 +415,7 @@ class ToolBroker:
                     if descriptor.effect_class is ToolEffectClass.EXTERNAL_RECORD
                     else str(request.remediation_action_id)
                 ),
+                remediation_action_id=request.remediation_action_id,
                 risk_tier=descriptor.risk_tier,
                 payload={
                     "effect_key": effect_key,
@@ -659,6 +660,51 @@ class ToolBroker:
                     message=str(exc),
                     operation_class=OperationClass.C5_SEMANTIC_FAILURE,
                     retryable=False,
+                )
+                break
+            except Exception as exc:
+                # The defensive boundary. An adapter processing an untrusted vendor response
+                # can raise something no typed contract anticipated - a recursion limit on a
+                # deeply nested body, an overflow converting a vendor timestamp - and such
+                # an exception escaping here would leave no execution receipt and no audit
+                # record for an effect that may already have been applied. It is classified
+                # here instead, conservatively, and the loop ends: a read is known-clean
+                # because a read has no effect, and anything effectful is *unknown*, never
+                # assumed clean. ``Exception`` and not ``BaseException``: cancellation,
+                # process exit and keyboard interrupt are not vendor failures and must keep
+                # unwinding.
+                effectful = descriptor.risk_tier is not RiskTier.RO
+                failure = BrokerFailure(
+                    stage=BrokerStage.ADAPTER_INVOCATION,
+                    error_type=type(exc).__name__,
+                    # The type, never the message: an unexpected exception can carry a
+                    # fragment of the vendor payload that raised it.
+                    message=(
+                        f"{descriptor.name} raised {type(exc).__name__} while processing the "
+                        "response; the outcome is "
+                        + ("unknown" if effectful else "no effect (read)")
+                    ),
+                    operation_class=(
+                        OperationClass.C4_UNKNOWN_OUTCOME
+                        if effectful
+                        else OperationClass.C6_DETERMINISTIC_REJECTION
+                    ),
+                    retryable=False,
+                    failure_class=(
+                        IntegrationFailureClass.UNKNOWN_OUTCOME
+                        if effectful
+                        else IntegrationFailureClass.MALFORMED_RESPONSE
+                    ),
+                    effect_not_applied=not effectful,
+                )
+                _logger.warning(
+                    "adapter raised an unclassified exception",
+                    exc_info=exc,
+                    extra={
+                        "event": "tool.unclassified_exception",
+                        "tool": descriptor.name,
+                        "effectful": effectful,
+                    },
                 )
                 break
 
@@ -973,6 +1019,34 @@ class ToolBroker:
         )
 
 
+def dispatch_claim_exists(
+    session: Session, *, tenant_id: uuid.UUID, remediation_action_id: uuid.UUID
+) -> bool:
+    """Whether a durable effect claim was committed for this action's write.
+
+    The claim is written by :meth:`ToolBroker._claim_write` in its own transaction, before
+    any adapter can receive the operation, so it survives a crash that takes the execution
+    receipt with it. Recovery reads it here to tell "no effect was attempted" apart from
+    "an effect may have been applied" - the distinction the whole unknown-outcome policy
+    rests on (SI-8, §5.2 of the safety policy).
+
+    Matched on the claim's own target fields rather than on a recomputed idempotency key:
+    the key depends on bound arguments, and recovery must work from the durable row alone.
+    """
+    claimed = session.execute(
+        sa.select(AuditRecord.id)
+        .where(
+            AuditRecord.tenant_id == tenant_id,
+            AuditRecord.event_type == AuditEventType.TOOL_AUTHORIZATION_EVALUATED,
+            AuditRecord.target_type == "remediation_action",
+            AuditRecord.target_id == str(remediation_action_id),
+            AuditRecord.payload_redacted["dispatch_claimed"].astext == "true",
+        )
+        .limit(1)
+    ).scalar_one_or_none()
+    return claimed is not None
+
+
 def stage_of(exc: DomainError) -> BrokerStage:
     """Which pipeline stage a refusal came from."""
     if isinstance(exc, RiskTierNotPermitted):
@@ -1075,4 +1149,5 @@ __all__ = [
     "CapabilityRequest",
     "ToolBroker",
     "ToolResult",
+    "dispatch_claim_exists",
 ]

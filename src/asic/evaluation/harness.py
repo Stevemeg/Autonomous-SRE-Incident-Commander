@@ -78,6 +78,7 @@ from asic.evaluation.replay import (
     ReplayModelProvider,
     ReplayRefused,
     ReplayToolProvider,
+    interaction_signature,
 )
 from asic.evaluation.versioning import EVALUATOR_VERSION, canonical, digest
 from asic.evaluation.world import (
@@ -416,15 +417,7 @@ class EvaluationHarness:
                 outcome.evaluation.metrics.update(scored.metrics)
                 outcome.signature = digest(summary(observation))
                 if mode is ExecutionMode.REPLAY:
-                    remaining = int(outcome.extra.get("replay_remaining", 0))
-                    # A replay that left recorded answers unused asked fewer questions than
-                    # the original run: that is a behaviour change, not a reproduction.
-                    outcome.evaluation.add(
-                        "replay.fully_consumed",
-                        remaining == 0,
-                        f"{remaining} recorded answer(s) never requested",
-                        EvaluationFailureClass.HARNESS,
-                    )
+                    _replay_checks(outcome, fixture)
                 outcome.workflow_run_id = self._evaluated_run(golden, world, observation)
                 if mode is ExecutionMode.SIMULATOR:
                     outcome.fixture = recorder.fixture(
@@ -579,9 +572,7 @@ class EvaluationHarness:
             knowledge=knowledge,
         )
         if mode is ExecutionMode.REPLAY:
-            outcome.extra["replay_remaining"] = (replay_tools.remaining if replay_tools else 0) + (
-                replay_model.remaining if replay_model else 0
-            )
+            _record_replay_observations(outcome, replay_tools, replay_model)
 
     def _run_investigation(
         self,
@@ -696,9 +687,7 @@ class EvaluationHarness:
             )
         outcome.extra["remediation_steps"] = steps
         if mode is ExecutionMode.REPLAY:
-            outcome.extra["replay_remaining"] = (replay_tools.remaining if replay_tools else 0) + (
-                replay_model.remaining if replay_model else 0
-            )
+            _record_replay_observations(outcome, replay_tools, replay_model)
 
     def _reopen(self, world: ScenarioWorld) -> uuid.UUID:
         with self._app() as session, session.begin():
@@ -1212,6 +1201,65 @@ class EvaluationHarness:
         session.add(row)
         session.flush()
         return row.id
+
+
+def _record_replay_observations(
+    outcome: ScenarioOutcome,
+    replay_tools: ReplayToolProvider | None,
+    replay_model: ReplayModelProvider | None,
+) -> None:
+    """Take what the replay seams observed: unconsumed answers, divergences, interaction."""
+    outcome.extra["replay_remaining"] = (replay_tools.remaining if replay_tools else 0) + (
+        replay_model.remaining if replay_model else 0
+    )
+    outcome.extra["replay_divergences"] = (replay_tools.divergences if replay_tools else 0) + (
+        replay_model.divergences if replay_model else 0
+    )
+    outcome.extra["replay_interaction_signature"] = interaction_signature(
+        replay_tools.consumed if replay_tools else (),
+        replay_model.consumed if replay_model else (),
+    )
+
+
+def _replay_checks(outcome: ScenarioOutcome, fixture: ReplayFixture | None) -> None:
+    """The three things that make a replay a reproduction rather than a similar-looking run.
+
+    Strict replay raises on divergence, but the broker's job is to let a node degrade rather
+    than abort, so a raised divergence reaches the evaluator as an ordinary tool failure. If
+    the scenario's expectations happen to survive that failure, the run would otherwise be
+    reported as a pass - which is how a replay that asked a question its recording never
+    answered used to reach ``passed``. So divergence is counted at the seam and checked here
+    in its own right, with zero tolerance, alongside the two completeness properties.
+    """
+    divergences = int(outcome.extra.get("replay_divergences", 0))
+    outcome.evaluation.add(
+        "replay.no_divergence",
+        divergences == 0,
+        f"{divergences} replay divergence(s): the run asked something the recording "
+        "never answered, so this is not a reproduction",
+        EvaluationFailureClass.HARNESS,
+        zero=True,
+    )
+    remaining = int(outcome.extra.get("replay_remaining", 0))
+    # A replay that left recorded answers unused asked fewer questions than the original
+    # run: that is a behaviour change, not a reproduction.
+    outcome.evaluation.add(
+        "replay.fully_consumed",
+        remaining == 0,
+        f"{remaining} recorded answer(s) never requested",
+        EvaluationFailureClass.HARNESS,
+        zero=True,
+    )
+    consumed = str(outcome.extra.get("replay_interaction_signature", ""))
+    expected = fixture.interaction_signature if fixture is not None else ""
+    outcome.evaluation.add(
+        "replay.interaction_signature",
+        bool(expected) and consumed == expected,
+        f"consumed interaction {consumed[:16] or 'none'} does not reproduce the recorded "
+        f"interaction {expected[:16] or 'none'}",
+        EvaluationFailureClass.HARNESS,
+        zero=True,
+    )
 
 
 def _verdict(evaluation: Evaluation, panel: PanelResult) -> EvaluationRunVerdict:

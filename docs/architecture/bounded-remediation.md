@@ -42,10 +42,14 @@ verdict, action hash, immutable target/scope binding, current action status, too
 expiry, approver identity, active role, tenant, environment and risk ceiling. Revocation or
 expiry before dispatch removes authority. The broker re-resolves the current write-tool
 definition and grant immediately before dispatch; a planning menu is never execution
-authority. The broker commits an append-only effect claim in
+authority. The executor commits the execution intent in its own transaction before dispatch, and the
+broker commits an append-only effect claim in
 an independent transaction before invoking a write adapter. If the process dies after the
-adapter receives the operation but before a receipt commits, recovery sees the claim and
-will not dispatch the effect again.
+adapter receives the operation but before a receipt commits, recovery reads both, does not
+dispatch the effect again, and classifies the action from that evidence: no claim means
+nothing was sent; a claim without a conclusive receipt is reconciled by an independent read
+and escalated as a partial effect when it cannot be confirmed. An applied effect is never
+recorded as a clean failure.
 
 Every declared precondition is mapped to a read capability and evaluated against an exact
 resource identity and explicit fields. Missing, stale, deduplicated or malformed evidence

@@ -40,6 +40,7 @@ from asic.domain.enums import (
 )
 from asic.domain.idempotency import incident_event_key
 from asic.domain.policy import PolicyInputs, evaluate_policy
+from asic.observability import lifecycle
 from asic.orchestration.remediation.context import RemediationDependencies
 
 #: Evidence older than this, relative to now, counts as stale support for an action.
@@ -129,13 +130,14 @@ def policy_gate_node(deps: RemediationDependencies) -> Any:
                 PolicyVerdict.DENY: RemediationActionStatus.DENIED,
                 PolicyVerdict.REQUIRE_APPROVAL: RemediationActionStatus.AWAITING_APPROVAL,
             }[result.verdict]
-            deps.session.execute(
+            lifecycle.core_update(
+                deps.session,
                 sa.update(RemediationAction)
                 .where(
                     RemediationAction.tenant_id == deps.context.tenant_id,
                     RemediationAction.id == action.id,
                 )
-                .values(status=new_status)
+                .values(status=new_status),
             )
 
             incident = deps.session.execute(

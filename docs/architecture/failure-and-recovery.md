@@ -191,7 +191,13 @@ On orchestrator restart:
 1. Reclaim workflows whose lease expired (lease + heartbeat prevents split-brain).
 2. Load the last checkpoint.
 3. **Reconcile before resuming**: for any action in `Executing` or `UnknownOutcome`, query
-   the target's actual state before deciding what to do next.
+   the target's actual state before deciding what to do next. The status alone is not the
+   trigger: recovery reads the durable dispatch evidence - the pre-dispatch execution
+   intent and the broker's effect claim, both committed outside the node's transaction -
+   and only evidence that *no effect was claimed* may end in `FailedClean`. A claim without
+   a conclusive receipt is reconciled, and escalated as a partial effect when the target
+   cannot confirm it, because the alternative is reading the action's own applied effect as
+   external drift.
 4. Resume from the checkpointed step. `workflow_run_id` is preserved; `resumed_count`
    increments; a `workflow.resumed` event is recorded.
 

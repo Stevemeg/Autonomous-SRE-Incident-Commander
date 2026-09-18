@@ -67,6 +67,24 @@ def model_identity(request: ModelRequest) -> str:
     )
 
 
+def interaction_signature(
+    tool_calls: Sequence[Mapping[str, Any]], model_calls: Sequence[Mapping[str, Any]]
+) -> str:
+    """A digest of the ordered interaction: what was asked, in what order, and answered how.
+
+    Computed from the recording's own entries, so a fixture recorded before this existed
+    still has one. Replay recomputes it from what the run actually consumed, which makes
+    the comparison a second, independent divergence detector: it holds only when every
+    recorded request was requested, in order, and nothing else was.
+    """
+    return digest(
+        {
+            "tools": [[str(c.get("identity")), str(c.get("outcome"))] for c in tool_calls],
+            "models": [[str(c.get("identity")), str(c.get("outcome"))] for c in model_calls],
+        }
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class ReplayFixture:
     scenario_key: str
@@ -74,6 +92,10 @@ class ReplayFixture:
     tool_calls: tuple[Mapping[str, Any], ...]
     model_calls: tuple[Mapping[str, Any], ...]
     format_version: int = REPLAY_FORMAT_VERSION
+
+    @property
+    def interaction_signature(self) -> str:
+        return interaction_signature(self.tool_calls, self.model_calls)
 
     def content(self) -> dict[str, Any]:
         value: dict[str, Any] = canonical(
@@ -234,7 +256,13 @@ def _refuse_production() -> None:
 
 
 class ReplayToolProvider:
-    """Serves recorded tool answers, strictly in order."""
+    """Serves recorded tool answers, strictly in order.
+
+    Divergences are *counted*, not only raised: the broker turns a tool failure into a
+    degraded result so a node can carry on, which is right for a real adapter and wrong as
+    the only record that a replay was asked a question its recording never answered. The
+    count is a zero-tolerance evaluation invariant (``replay.no_divergence``).
+    """
 
     def __init__(self, fixture: ReplayFixture) -> None:
         _refuse_production()
@@ -242,6 +270,8 @@ class ReplayToolProvider:
         self._cursor = 0
         self._lock = threading.Lock()
         self._tools = frozenset(str(c["tool"]) for c in self._calls)
+        self._divergences = 0
+        self._consumed: list[Mapping[str, Any]] = []
 
     @property
     def kind(self) -> ToolProviderKind:
@@ -251,6 +281,16 @@ class ReplayToolProvider:
     @property
     def remaining(self) -> int:
         return len(self._calls) - self._cursor
+
+    @property
+    def divergences(self) -> int:
+        return self._divergences
+
+    @property
+    def consumed(self) -> tuple[Mapping[str, Any], ...]:
+        """The recordings this run actually consumed, in the order it consumed them."""
+        with self._lock:
+            return tuple(self._consumed)
 
     def list_tools(self) -> tuple[str, ...]:
         return tuple(sorted(self._tools))
@@ -268,14 +308,17 @@ class ReplayToolProvider:
     ) -> Mapping[str, Any]:
         with self._lock:
             if self._cursor >= len(self._calls):
+                self._divergences += 1
                 raise ReplayDivergence(f"replay has no recorded answer for {descriptor.name}")
             entry = self._calls[self._cursor]
             if entry["identity"] != request_identity(descriptor, arguments):
+                self._divergences += 1
                 raise ReplayDivergence(
                     f"replay diverged at call {self._cursor}: expected {entry['tool']}, "
                     f"got {descriptor.name} with different arguments"
                 )
             self._cursor += 1
+            self._consumed.append(entry)
         if entry["outcome"] == "timeout":
             raise ToolTimeout(str(entry.get("message", "recorded timeout")))
         if entry["outcome"] == "error":
@@ -295,6 +338,8 @@ class ReplayModelProvider:
         self._lock = threading.Lock()
         self._provider_name = provider_name
         self._model_id = model_id
+        self._divergences = 0
+        self._consumed: list[Mapping[str, Any]] = []
 
     @property
     def provider_name(self) -> str:
@@ -307,6 +352,15 @@ class ReplayModelProvider:
     @property
     def remaining(self) -> int:
         return len(self._calls) - self._cursor
+
+    @property
+    def divergences(self) -> int:
+        return self._divergences
+
+    @property
+    def consumed(self) -> tuple[Mapping[str, Any], ...]:
+        with self._lock:
+            return tuple(self._consumed)
 
     def estimate(self, request: ModelRequest) -> ModelCallEstimate:
         with self._lock:
@@ -324,13 +378,16 @@ class ReplayModelProvider:
     def complete(self, request: ModelRequest) -> ModelResponse:
         with self._lock:
             if self._cursor >= len(self._calls):
+                self._divergences += 1
                 raise ModelProviderError("replay has no recorded model response", transient=False)
             entry = self._calls[self._cursor]
             if entry["identity"] != model_identity(request):
+                self._divergences += 1
                 raise ModelProviderError(
                     f"replay diverged at model call {self._cursor}", transient=False
                 )
             self._cursor += 1
+            self._consumed.append(entry)
         if entry["outcome"] == "error":
             raise ModelProviderError(
                 str(entry.get("message", "")), transient=bool(entry.get("transient"))
@@ -345,6 +402,7 @@ __all__ = [
     "ReplayModelProvider",
     "ReplayRefused",
     "ReplayToolProvider",
+    "interaction_signature",
     "model_identity",
     "request_identity",
 ]

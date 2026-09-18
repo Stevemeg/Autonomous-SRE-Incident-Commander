@@ -230,6 +230,23 @@ against the action's expected effect. Only reconciliation determines the true ou
 Actions whose effect cannot be observed by query are ineligible for the autonomous
 catalogue — if we cannot verify it, we do not automate it.
 
+A **crash is an unknown outcome as well**, and the harder one, because the process that
+knew what it had sent is gone. Two facts are therefore committed outside the executing
+transaction and before anything is dispatched: the execution intent, and the broker's
+effect claim. On recovery they answer the only question that matters — was an effect
+attempted — and the answer decides the classification:
+
+| Durable evidence | Classification |
+|---|---|
+| No claim | Nothing was sent; `FailedClean` is legitimate |
+| Claim, no conclusive receipt | `UnknownOutcome` → reconcile → `Succeeded`, else `FailedPartial` and escalate |
+| Receipt | The broker already classified it; recovery replays that classification |
+
+The order matters as much as the evidence. Precondition drift is evaluated *after* this,
+never before: a rolled-back deployment looks exactly like a drifted one, and an executor
+that asks "has the world changed?" before "did I change it?" will record its own applied
+effect as a clean failure.
+
 ### 5.3 Blast-radius limits
 
 > **Phase 8 implementation limit:** concurrent remediation in the same tenant/environment

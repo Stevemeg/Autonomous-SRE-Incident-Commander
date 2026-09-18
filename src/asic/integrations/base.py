@@ -150,6 +150,15 @@ def send_json(
         raise malformed(
             f"{request.describe()}: response is not valid JSON", effectful=request.effectful
         ) from exc
+    except RecursionError as exc:
+        # A vendor body nested deeply enough to exhaust the interpreter's recursion limit.
+        # Untrusted input decides how deep it goes, so this is a malformed *response*, not
+        # a programming error, and must classify like one rather than unwind into the
+        # kernel (where a write would lose its receipt entirely).
+        raise malformed(
+            f"{request.describe()}: response nesting exceeds the parser's limit",
+            effectful=request.effectful,
+        ) from exc
 
 
 def json_body(value: Mapping[str, Any] | list[Any]) -> bytes:

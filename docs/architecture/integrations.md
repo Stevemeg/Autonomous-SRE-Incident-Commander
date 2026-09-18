@@ -92,6 +92,14 @@ errors. The Teams webhook URL is itself the secret; its path and query are never
 | 429 | `rate_limited`, `Retry-After` capped at 5 s | read retried | reads only |
 | 5xx | `transient_unavailable`; write effect **not** assumed absent | read retried; write `unknown` | reads only |
 | 2xx with unparseable/contradictory body | `malformed_response` | read `failed_clean`; write `unknown` | no |
+| Body that breaks the parser itself (nesting beyond the recursion limit, a timestamp outside the representable range, an unexpected type) | `malformed_response` | read `failed_clean`; write `unknown` | no |
+
+Response *processing* is part of the contract, not an afterthought: depth, magnitude and
+type are chosen by whatever answered the socket, so the adapters classify those failures
+and the broker carries a final defensive boundary for anything unanticipated - clean for a
+read, `unknown` for anything effectful, with the exception type recorded and the vendor
+payload never copied into the message. No adapter exception reaches the kernel unclassified,
+because an effect that may have been applied must still leave a receipt and an audit record.
 
 Idempotency: every external record is keyed on a deterministic event id and protected by
 the broker's durable effect claim. PagerDuty uses a derived `dedup_key`; Jira creates are
