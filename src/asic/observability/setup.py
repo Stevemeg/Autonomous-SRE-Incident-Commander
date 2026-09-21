@@ -21,9 +21,10 @@ from __future__ import annotations
 
 import os
 import threading
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Final
+from urllib.parse import urlsplit
 
 from opentelemetry import metrics as otel_metrics
 from opentelemetry import trace as otel_trace
@@ -41,7 +42,9 @@ from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from prometheus_client import CONTENT_TYPE_LATEST, REGISTRY, generate_latest
 
 from asic import __version__
+from asic.domain.errors import IntegrationError
 from asic.integrations.credentials import DEPLOYMENT_ENV_VAR
+from asic.integrations.transport import validate_endpoint
 from asic.observability import lifecycle
 from asic.observability.catalogue import METRICS, InstrumentKind
 
@@ -51,6 +54,50 @@ SERVICE_NAME_ENV: Final[str] = "ASIC_SERVICE_NAME"
 _ENVIRONMENTS: Final[frozenset[str]] = frozenset(
     {"development", "test", "staging", "production", "prod"}
 )
+
+
+OTLP_ALLOW_INSECURE_ENV: Final[str] = "ASIC_OTLP_ALLOW_INSECURE"
+_OTLP_DEFAULT_ENDPOINT: Final[str] = "http://localhost:4318"
+
+
+def validate_otlp_endpoint(environ: Mapping[str, str] | None = None) -> str:
+    """Validate the OTLP trace endpoint at startup (Phase 13 egress policy).
+
+    The endpoint is operator configuration read from the standard OpenTelemetry variables.
+    It must be ``https``, or plain ``http`` to loopback (a sidecar collector), or plain
+    ``http`` to another host only when ``ASIC_OTLP_ALLOW_INSECURE`` is set explicitly - an
+    in-cluster collector behind a service mesh that supplies mutual TLS. It may not carry
+    user-info, a query or a fragment, and the shared egress host policy applies (no
+    metadata, link-local or ambiguous numeric hosts). Trace bodies contain incident
+    identifiers, so they are not sent in clear text across an untrusted network by accident.
+
+    Raises:
+        ValueError: the endpoint is unsafe. The URL is not echoed (it may embed a secret).
+    """
+    env = environ if environ is not None else os.environ
+    url = (
+        env.get("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT")
+        or env.get("OTEL_EXPORTER_OTLP_ENDPOINT")
+        or _OTLP_DEFAULT_ENDPOINT
+    ).strip()
+    insecure_ok = env.get(OTLP_ALLOW_INSECURE_ENV, "").strip().lower() in ("1", "true", "yes")
+    try:
+        endpoint = validate_endpoint(url, allow_loopback_http=True)
+    except IntegrationError:
+        # A non-loopback http endpoint is refused by the shared policy; permit it only with
+        # the explicit opt-in, re-validating everything else against an https twin.
+        parts = urlsplit(url)
+        if parts.scheme.lower() == "http" and insecure_ok:
+            try:
+                validate_endpoint("https" + url[4:], allow_loopback_http=False)
+            except IntegrationError:
+                raise ValueError("the OTLP endpoint is not acceptable") from None
+            return url
+        raise ValueError(
+            "the OTLP endpoint must be https, loopback http, or http with "
+            f"{OTLP_ALLOW_INSECURE_ENV}=true"
+        ) from None
+    return f"{endpoint.scheme}://{endpoint.host}:{endpoint.port}{endpoint.base_path}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,6 +112,8 @@ class TelemetrySettings:
         exporter = os.environ.get(TRACES_EXPORTER_ENV, "none").strip().lower()
         if exporter not in ("none", "otlp"):
             raise ValueError(f"{TRACES_EXPORTER_ENV} must be 'none' or 'otlp'")
+        if exporter == "otlp":
+            validate_otlp_endpoint()
         return cls(
             service_name=os.environ.get(SERVICE_NAME_ENV, default_service).strip()[:64]
             or default_service,

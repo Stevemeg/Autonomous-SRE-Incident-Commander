@@ -139,10 +139,10 @@ checks move into automation so that compliance does not depend on discipline:
 | `scripts/check_repo_hygiene.py` secret and junk scan | **In place** (Phase 0) |
 | `scripts/validate_docs.py` documentation and traceability validation | **In place** (Phase 2) |
 | `pre-commit` hooks (formatting, linting, secret scan) | Planned — Phase 3, with the first code |
-| Secret scanning in CI (e.g. gitleaks) | Planned — Phase 14 |
-| Dependency vulnerability scanning | Planned — Phase 14 |
-| SAST | Planned — Phase 14 |
-| Container image scanning | Planned — Phase 14 |
+| Secret scanning (gitleaks over history and tree) | **Executable locally (Phase 13)** via `scripts/security_gate.py`; CI wiring Phase 14 |
+| Dependency vulnerability scanning (`pip-audit`, `npm audit`) | **Executable locally (Phase 13)**; CI wiring Phase 14 |
+| SAST (`ruff --select S` plus policy tests) | **Executable locally (Phase 13)**; CI wiring Phase 14 |
+| Container image scanning | **Not executable until a Phase 14 image exists** (the gate reports `not_executable`, never a pass) |
 | Branch protection on `main` | Planned — when collaboration begins |
 
 ---

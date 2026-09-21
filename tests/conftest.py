@@ -29,6 +29,7 @@ application role does not hold those grants in production, and
 
 from __future__ import annotations
 
+import logging
 import os
 import uuid
 from collections.abc import Iterator
@@ -78,6 +79,51 @@ def _database_url() -> str | None:
 requires_postgres = pytest.mark.postgres
 
 
+@pytest.fixture
+def asic_log_records() -> Iterator[list[logging.LogRecord]]:
+    """Every record emitted anywhere under the ``asic`` logger hierarchy.
+
+    ``caplog`` attaches to the root logger, and ``asic.observability.logging.configure_logging``
+    (run once per process by other tests) sets ``asic`` to ``propagate = False`` - after which
+    ``caplog`` silently sees nothing and any "no secret in the logs" assertion becomes vacuous.
+    A handler attached to the ``asic`` logger itself is unaffected by propagation.
+
+    A second trap: the in-process Alembic tests run ``migrations/env.py``, whose
+    ``fileConfig`` defaults to ``disable_existing_loggers=True`` and so *disables* every
+    ``asic.*`` logger for the rest of the session. The fixture re-enables them (and restores
+    their state afterwards), otherwise a captured-nothing result is indistinguishable from a
+    clean one.
+    """
+    # Apply the production logging configuration first (idempotent). It replaces the logger's
+    # handlers and disables propagation, so capture must be attached *after* it.
+    from asic.observability.logging import configure_logging
+
+    configure_logging(service="tests")
+    records: list[logging.LogRecord] = []
+
+    class _Collect(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            records.append(record)
+
+    logger = logging.getLogger("asic")
+    handler = _Collect(level=logging.DEBUG)
+    previous_level = logger.level
+    disabled_before: dict[logging.Logger, bool] = {}
+    for name, candidate in list(logging.root.manager.loggerDict.items()):
+        if isinstance(candidate, logging.Logger) and (name == "asic" or name.startswith("asic.")):
+            disabled_before[candidate] = candidate.disabled
+            candidate.disabled = False
+    logger.addHandler(handler)
+    logger.setLevel(logging.DEBUG)
+    try:
+        yield records
+    finally:
+        logger.removeHandler(handler)
+        logger.setLevel(previous_level)
+        for candidate, was_disabled in disabled_before.items():
+            candidate.disabled = was_disabled
+
+
 @pytest.fixture(scope="session")
 def database_url() -> str:
     url = _database_url()
@@ -118,6 +164,26 @@ _TEST_ONLY_SEED_TABLES = (
 )
 
 
+#: Phase 13 (migration 0018) revoked these from ``asic_app``: the runtime reads identity,
+#: role-assignment, tool-grant and scope-catalogue tables but never writes them. Fixtures
+#: still need to arrange them, so the *test login role only* is re-granted the writes.
+#: ``tests/security/test_least_privilege.py`` asserts ``asic_app`` itself holds none of them.
+_TEST_ONLY_WRITE_TABLES = (
+    "app_user",
+    "environment",
+    "service",
+    "service_dependency",
+    "tenant_tool_grant",
+    "user_role_assignment",
+)
+
+#: ``DELETE`` is held by no runtime role. One fixture grant preserves the proof that row-level
+#: security (not just a missing privilege) stops a cross-tenant delete.
+#: The others simulate role revocation and projection rebuilds, which production performs
+#: through the owner/administrative path.
+_TEST_ONLY_DELETE_TABLES = ("incident", "timeline_event", "user_role_assignment")
+
+
 @pytest.fixture(scope="session")
 def _ensure_test_app_role(owner_engine: Engine, database_url: str) -> str:
     """Create a non-superuser login role that inherits the application role.
@@ -144,6 +210,10 @@ def _ensure_test_app_role(owner_engine: Engine, database_url: str) -> str:
         )
         for table in _TEST_ONLY_SEED_TABLES:
             conn.execute(sa.text(f"GRANT INSERT ON {table} TO {TEST_APP_ROLE}"))
+        for table in _TEST_ONLY_WRITE_TABLES:
+            conn.execute(sa.text(f"GRANT INSERT, UPDATE ON {table} TO {TEST_APP_ROLE}"))
+        for table in _TEST_ONLY_DELETE_TABLES:
+            conn.execute(sa.text(f"GRANT DELETE ON {table} TO {TEST_APP_ROLE}"))
 
         # Guard the guard: if this role ever gained superuser or BYPASSRLS, every
         # isolation test would pass while proving nothing.

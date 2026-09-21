@@ -152,6 +152,12 @@ class ExecutionTrace(Base, TenantScoped, TimestampMixin):
             "(workflow_run_id IS NOT NULL) <> (evaluation_run_id IS NOT NULL)",
             name="trace_belongs_to_exactly_one_run",
         ),
+        # F-11: a W3C trace id is 32 lowercase hex characters and not all zero. Migration
+        # 0018 adds it NOT VALID and validates it when no historical row violates it.
+        sa.CheckConstraint(
+            "trace_id ~ '^[0-9a-f]{32}$' AND trace_id <> repeat('0', 32)",
+            name="trace_id_is_w3c_trace_id",
+        ),
         sa.CheckConstraint("total_tokens IS NULL OR total_tokens >= 0", name="tokens_non_negative"),
         sa.CheckConstraint(
             "total_cost_usd IS NULL OR total_cost_usd >= 0", name="cost_non_negative"

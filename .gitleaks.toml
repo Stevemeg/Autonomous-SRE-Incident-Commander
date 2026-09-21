@@ -1,0 +1,46 @@
+# gitleaks configuration (Phase 13). See docs/security/SUPPLY_CHAIN.md.
+#
+# The default ruleset stays fully enabled. Two allowances exist, both narrow.
+#
+# 1. One false positive: a *token count* argument (``tokens=estimate.max_total_tokens``) trips
+#    the generic-api-key entropy rule. The allowance names one rule, one file and one exact
+#    exact, anchored matched text, and all three must match (condition = "AND"). It must not be widened to a
+#    directory, a rule family or a pattern such as "tokens=": that would hide a real
+#    credential that happened to be named ``tokens``.
+#
+# 2. Directories that git itself ignores (.gitignore): virtual environments, dependency
+#    caches and build output. They are not committed content, so they are not scanned by the
+#    working-tree pass; committed content is covered by the history pass (``gitleaks git``)
+#    and the pre-commit staged pass.
+
+title = "asic gitleaks configuration"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "llm/accounting.py: `tokens=estimate.max_total_tokens` is a token count, not a credential"
+condition = "AND"
+targetRules = ["generic-api-key"]
+paths = ['''(^|/)src/asic/llm/accounting\.py$''']
+# "match" (the text the rule matched), NOT "line": with "line" a real secret appended to the
+# allowed line would be hidden along with it (verified in Phase 13).
+regexTarget = "match"
+regexes = ['''^estimate\.max_total_tokens, cost_usd=estimate\.max_cost_usd$''']
+
+[[allowlists]]
+description = "gitignored tool and build directories (not committed content)"
+paths = [
+  '''(^|/)\.venv/''',
+  '''(^|/)\.uv-cache/''',
+  '''(^|/)\.uv-python/''',
+  '''(^|/)node_modules/''',
+  '''(^|/)\.next/''',
+  '''(^|/)build/''',
+  '''(^|/)\.mypy_cache/''',
+  '''(^|/)\.pytest_cache/''',
+  '''(^|/)\.ruff_cache/''',
+  '''(^|/)__pycache__/''',
+  '''(^|/)\.git/''',
+  '''(^|/)[^/]+\.egg-info/''',
+]

@@ -22,6 +22,74 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added — Phase 13 security, RBAC, tenant isolation and supply-chain controls
+
+Nothing here is a compliance claim. Infrastructure controls (TLS, encryption at rest, network
+policy, container scanning, CI wiring) remain Phase 14 obligations. Decisions: ADR-0030.
+
+- **Authentication.** A `TokenVerifier` abstraction. Production composes an OIDC/JWKS verifier
+  (asymmetric algorithms only; `alg=none` and HS/RS confusion unrepresentable; key-type check; `kid`
+  required; `jku`/`x5u`/`jwk` refused; issuer, audience, expiry, subject and tenant required; bounded,
+  rotation-aware key cache; HTTPS-only fetch with timeout and size ceiling; fail closed). The HS256
+  verifier is development-only and refused at startup in production. Failures are closed reason codes;
+  no token content reaches an error, log or trace. Dependency: `PyJWT[crypto]`.
+- **One permission vocabulary** (`asic.domain.permissions`) replacing four independent spellings,
+  with scope rules and the system-role matrix, asserted equal to the migrated database. A duplicate
+  spelling in the approval node was found and removed.
+- **Mechanical tenancy proof** (`asic.db.tenancy_audit`): RLS, FORCE, policies, composite foreign
+  keys, role privilege and grants checked against the live schema, with 19 mutation tests.
+- **Migration 0018.** The application role loses `DELETE`/`TRUNCATE` (it held `DELETE` on 18 tables
+  and no code deletes anything), write access to `alembic_version`, and write access to identity,
+  role-assignment, tool-grant, environment and service tables. `connector_scope_binding` gains a
+  composite `RESTRICT` foreign key to `integration_connector` (F-13); `execution_trace.trace_id`
+  gains a W3C CHECK (F-11). Both are added `NOT VALID` and validated only when no historical row
+  violates them, so existing databases upgrade and their rows are never rewritten.
+- **Audit.** Denied state changes and denied tenant-wide reads are durable, attributed, tenant-bound
+  `authorization.denied` records; ordinary denied reads are not (no audit flooding).
+- **Edge hardening.** 128 KiB body bound including streamed bodies, JSON-only, control-character
+  refusal in human text (a NUL byte used to return HTTP 500), bounded cursors, failed-auth limiter per
+  peer address, limiter before database lookup, bounded limiter key space, coalesced `/readyz`,
+  database connect and pool deadlines (F-15).
+- **Egress.** One host policy (no link-local, metadata, unspecified, multicast or ambiguous numeric
+  hosts; ASCII only) shared by connectors, JWKS and the OTLP endpoint.
+- **Secrets.** `SecretValue` redacted by type; `HttpRequest`/`HttpResponse` no longer render
+  credentials or bodies in `repr` (a request's `repr` printed its Authorization header); name-suffix
+  and signed-URL/vendor-token backup rules (F-16). Limits documented.
+- **Loki.** The stream `level` is mapped to a closed vocabulary; C1, zero-width and bidi characters
+  are removed from display text (F-06).
+- **Kubernetes nodes.** Node cordon/uncordon authority model made explicit and enforced: node identity
+  bound into the approval hash, R2, never admitted by policy alone; misleading service-label
+  documentation corrected (F-08).
+- **Trace ids.** One validity rule applied at construction, in the database and at the span-context
+  boundary; a malformed persisted id fails loudly and is never replaced (F-11).
+- **Data retention.** Complete table classification, tenant policy schema with minimums and holds,
+  and a dry-run planner. No deletion engine by design (the runtime cannot delete).
+- **Supply chain.** Upper-bounded direct ranges; hash-pinned universal locks (`requirements/`);
+  `scripts/check_dependency_lock.py`; prerelease allowlist (the only beta is the OpenTelemetry
+  Prometheus exporter, which has no stable release); frontend lock regenerated because 26 of 34
+  packages had no integrity digest (F-14); SAST via `ruff --select S` plus policy tests (with a scan
+  for invisible/bidirectional characters that found one real instance); `.gitleaks.toml` with an
+  allowance narrowed to one rule, file and anchored text (a line-level allowance was shown to hide an
+  appended secret).
+- **`scripts/security_gate.py`.** One fail-closed, machine-readable gate for Phase 14 CI. Container
+  scanning is reported `not_executable` until a Phase 14 image exists.
+- Package version `0.13.0`.
+
+### Changed — Phase 13
+
+- Inbound connector identities must now be registered in `integration_connector` (an inbound-only
+  identity may be registered disabled).
+- `ApiSettings` gains `auth_mode`, `oidc_jwks_url`, `oidc_algorithms`; production defaults to OIDC.
+- Test fixtures that arrange identity/configuration tables run as the test login role, which is granted
+  those writes; the application role is asserted not to hold them.
+
+### Known limitations carried forward
+
+Every approve-holder may decide through R2 (no R1/R2 approver split); a revoked signing key is trusted
+until the JWKS cache expires; rate limits are per process; `memory.promotion.decide` and
+`knowledge.source.access.manage` are held by no system role. Unrelated audit observations F-07, F-09,
+F-10, F-12 and F-17 are unchanged.
+
 ### Fixed — Phases 10-12 audit corrections
 
 Five defects an independent audit of Phases 10-12 reproduced - four blocking, plus an alert

@@ -214,6 +214,25 @@ stay open until the phase that would use them:
 Integrations are built against adapter interfaces with deterministic local simulators and
 replay fixtures. The project will not depend on live production infrastructure.
 
+## Security
+
+Security is built into every phase; Phase 13 consolidated and proved it
+([ADR-0030](docs/adr/0030-security-boundary-consolidation.md)). Start with
+[`docs/security/SECURITY_ARCHITECTURE.md`](docs/security/SECURITY_ARCHITECTURE.md); the focused
+documents cover [authorization](docs/security/AUTHORIZATION.md),
+[secrets](docs/security/SECRETS_POLICY.md), [supply chain](docs/security/SUPPLY_CHAIN.md) and
+[data retention](docs/security/DATA_RETENTION.md).
+
+```bash
+# One command, one machine-readable verdict (exit 0 = pass). CI uses --strict.
+python scripts/security_gate.py --strict --json security-verdict.json
+```
+
+Production authentication is OIDC/JWKS only; the shared-secret development verifier is refused
+at startup when `ASIC_DEPLOYMENT_ENVIRONMENT=production`. Container scanning, TLS, encryption at
+rest and network policy are Phase 14 obligations and are **not** claimed as implemented. Nothing
+in this repository is a compliance certification.
+
 ## Roadmap
 
 Taken from section 19 of the master specification. Phases 1 and 2 are documentation
@@ -233,10 +252,10 @@ section O.
 | 7 | Investigation agents, hypothesis management and bounded reflection | **Complete** |
 | 8 | Remediation planning, policy gates, human approval and verification | **Complete** |
 | 9 | Backend APIs and frontend incident-command dashboard | **Complete** |
-| 10 | External integrations | Not started |
-| 11 | Evaluation harness, replay and regression framework | Not started |
-| 12 | OpenTelemetry, metrics, logs, dashboards and SLOs | Not started |
-| 13 | Security, RBAC, tenant isolation and supply-chain controls | Not started |
+| 10 | External integrations | **Complete** |
+| 11 | Evaluation harness, replay and regression framework | **Complete** |
+| 12 | OpenTelemetry, metrics, logs, dashboards and SLOs | **Complete** |
+| 13 | Security, RBAC, tenant isolation and supply-chain controls | **Implemented; pending independent review** |
 | 14 | CI/CD, Docker, Kubernetes and Terraform | Not started |
 | 15 | Load, resilience, chaos, security and E2E hardening | Not started — carries two named obligations from Phase 4: concurrency under a shared connection pool, and preemptible node execution |
 | 16 | Documentation, demo scenarios, portfolio evidence and production-readiness review | Not started |

@@ -35,7 +35,7 @@ area and points to the document that owns the detail.
 | [`architecture/bounded-reflection.md`](./architecture/bounded-reflection.md) | The reflection decision loop: vocabulary, deterministic guards, hypothesis revision, failure handling | **Implemented and tested** |
 | [`architecture/integrations.md`](./architecture/integrations.md) | Native external adapters, connector authority, credentials, failure model | **Implemented; tested against local servers only** |
 | [`adr/`](./adr/) | Architecture Decision Records | See the ADR index for current status |
-| [`security/`](./security/) | Threat model (§L) and the active repository security checklist | **Authored** |
+| [`security/`](./security/) | Threat model (§L, reconciled through Phase 13), security architecture, authorization matrix, secrets, supply-chain and retention policy, repository checklist | **Implemented and tested** (deployment controls are Phase 14) |
 | [`evaluation/`](./evaluation/) | Evaluation harness architecture (§I) and Phase 11 implementation status | **Implemented (simulator/replay) and tested** |
 | [`observability/SLOS.md`](./observability/SLOS.md) | SLOs, error budgets, burn-rate and invariant alerts | **Implemented as rules; targets not measured** |
 | [`runbooks/`](./runbooks/README.md) | One runbook per alert | **Authored and linked from every alert** |

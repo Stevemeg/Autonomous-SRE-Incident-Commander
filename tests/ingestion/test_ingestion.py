@@ -764,7 +764,10 @@ def test_receipt_parent_deletion_cannot_erase_history(setup: Setup) -> None:
     result = setup.service.ingest(setup.context, payload())
     with setup.factory() as session:
         bind_tenant(session, setup.context.tenant_id)
-        with pytest.raises(sa.exc.IntegrityError):
+        # Phase 13: the application role holds no DELETE at all, so the privilege check
+        # refuses first; the composite FK that also protects the receipt is proved at
+        # owner level in tests/security/test_tenancy_and_grants.py.
+        with pytest.raises(sa.exc.ProgrammingError, match="permission denied"):
             session.execute(sa.delete(Alert).where(Alert.id == result.alert_id))
 
 

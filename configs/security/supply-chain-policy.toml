@@ -1,0 +1,37 @@
+# Supply-chain policy (Phase 13, ADR-0030). Enforced by scripts/check_dependency_lock.py and
+# run by scripts/security_gate.py. Narrative and procedure: docs/security/SUPPLY_CHAIN.md.
+
+[python]
+# Direct runtime dependencies are declared as compatible ranges in pyproject.toml; every
+# installation is derived from a hash-pinned lock, not from those ranges.
+runtime_lock = "requirements/runtime.lock"
+dev_lock = "requirements/dev.lock"
+security_tools_lock = "requirements/security-tools.lock"
+
+# A prerelease may appear in the runtime lock ONLY if named here with a reason. An entry that
+# no longer matches a locked prerelease is itself an error (the exception must not go stale).
+[python.prerelease_allowlist."opentelemetry-exporter-prometheus"]
+reason = """PyPI publishes this package only as 0.xxb0 betas (no stable release exists; verified
+against the package index in Phase 13). It is the OpenTelemetry -> Prometheus bridge behind
+/metrics. Replacing it means writing our own bridge, a larger risk than pinning a beta. It is
+capped below 1.0 in pyproject.toml and pinned exactly, with hashes, in the lock, in step with
+the opentelemetry-sdk release train."""
+
+[python.prerelease_allowlist."opentelemetry-semantic-conventions"]
+reason = """Transitive dependency of the OpenTelemetry SDK, versioned in lockstep with the
+exporter above (0.xxb0). Not directly selectable."""
+
+[node]
+lockfile = "frontend/package-lock.json"
+manifest = "frontend/package.json"
+# Production dependencies of the dashboard must be exact versions (no ^ ~ * ranges).
+exact_production_dependencies = true
+
+[scanners]
+# Vulnerability scanners run by the gate. They report only what their databases know.
+pip_audit_lock = "requirements/runtime.lock"
+npm_audit_level = "high"
+
+[container]
+# Container scanning is a V3 requirement whose gate cannot run until an image exists.
+status = "not_executable_until_phase_14_image_exists"

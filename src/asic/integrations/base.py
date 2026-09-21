@@ -31,9 +31,14 @@ from asic.tools.provider import ConnectorGrant, InvocationContext
 MAX_WINDOW_SECONDS: Final[int] = 6 * 3600
 
 _LABEL_NAME: Final[re.Pattern[str]] = re.compile(r"[a-zA-Z_][a-zA-Z0-9_]{0,63}")
-#: Every C0 control (newline and tab included), DEL and the Unicode line separators. Display
-#: text is single-line: an embedded newline could masquerade as a separate observation line.
-_CONTROL: Final[re.Pattern[str]] = re.compile(r"[\x00-\x1f\x7f\u2028\u2029]")
+#: Every C0 and C1 control (newline, tab, ESC and NEL included), DEL, the Unicode line and
+#: paragraph separators, and the invisible formatting characters that reorder or hide text
+#: (zero-width, bidi embeddings/overrides/isolates, BOM). Display text is single-line and
+#: visible: an embedded newline could masquerade as a separate observation line, and a bidi
+#: override could make a rendered line read differently from what it contains.
+_CONTROL: Final[re.Pattern[str]] = re.compile(
+    r"[\x00-\x1f\x7f-\x9f\u200b-\u200f\u2028-\u202e\u2060-\u2069\ufeff]"
+)
 
 
 @dataclass(frozen=True, slots=True)

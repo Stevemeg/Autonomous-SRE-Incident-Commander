@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Final, NoReturn, Protocol, runtime_checkable
 
 from asic.domain.errors import CredentialUnavailable
+from asic.domain.safety import NeverRender
 
 #: The only accepted shape of a reference. Mirrors the database check constraint.
 CREDENTIAL_REF_PATTERN: Final[re.Pattern[str]] = re.compile(r"asic/[a-z0-9][a-z0-9/_.-]{0,200}")
@@ -47,7 +48,7 @@ def validate_reference(reference: str) -> str:
     return reference
 
 
-class SecretValue:
+class SecretValue(NeverRender):
     """A resolved secret that refuses to be printed, logged, compared or serialised."""
 
     __slots__ = ("__value",)

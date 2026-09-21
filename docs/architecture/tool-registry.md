@@ -376,7 +376,7 @@ do.
 | `mutate.k8s_deployment` | R1 | `k8s.deployment.rollback`, `k8s.deployment.restart` | Rollback declared; approval in production |
 | `mutate.k8s_scale` | R1 | `k8s.hpa.adjust` | Bounded by registered min/max |
 | `mutate.k8s_pod` | R1 | `k8s.pod.delete` | Recreated by controller; blast radius one pod |
-| `mutate.k8s_node` | R2 | `k8s.node.cordon`, `k8s.node.drain` | Never autonomous |
+| `mutate.k8s_node` | R2 | `k8s.node.cordon`, `k8s.node.drain` | Never autonomous. *Phase 8 implemented cordon/uncordon (drain is not registered). Node-scoped, **not** service-scoped: authority is the frozen tenant/environment target, the node identity bound into the approved action hash, R2 and a current human approval on every dispatch (Phase 13, F-08; `AUTHORIZATION.md` section 5)* |
 | `mutate.k8s_network` | R2 | `k8s.networkpolicy.apply` | Never autonomous; from a registered template |
 | `notify.collaboration` | R1 | `slack.post`, `teams.post` | Outbound only. *Phase 10 registers these as `notify.slack_channel` / `notify.teams_channel`, effect class `external_record`* |
 | `write.ticketing` | R1 | `jira.create`, `jira.update`, `pagerduty.update` | *Phase 10: `write.jira_issue`, `write.jira_comment`, `write.pagerduty_event`, plus `write.grafana_annotation`; external records, no rollback, never retried* |

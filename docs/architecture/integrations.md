@@ -65,8 +65,15 @@ sequenceDiagram
   environment)`, enabled and unrevoked. Checked on every call before replay, so revocation
   refuses the next request, including a request that would have been deduplicated.
 - **Scope in the request:** service and environment labels, namespaces and Kubernetes target
-  labels come from the incident scope and service catalogue. Before any Kubernetes mutation
-  the target must carry the configured service label; otherwise `scope_denied`, nothing sent.
+  labels come from the incident scope and service catalogue. Before a **service-scoped**
+  Kubernetes mutation (deployment rollback, HPA adjustment) the target must carry the configured
+  service label; otherwise `scope_denied`, nothing sent.
+- **Node actions are scoped differently (Phase 13, F-08).** `k8s.node.cordon` and `uncordon`
+  act on shared infrastructure that has no service label, so no service-label check applies.
+  Their authority is the frozen tenant and environment of the remediation target, the node
+  identity bound into the human-approved action hash (a different node is a different action),
+  tier R2, and a current human approval at every dispatch - policy alone never admits a node
+  action. See [AUTHORIZATION.md](../security/AUTHORIZATION.md) section 5.
 
 ## 4. Credentials
 

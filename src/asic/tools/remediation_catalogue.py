@@ -237,6 +237,20 @@ K8S_NODE_UNCORDON: Final = ToolDescriptor(
 )
 
 
+#: Capabilities whose target is a cluster *node*, not a service's workload (F-08).
+#:
+#: A node is shared infrastructure: cordoning it affects every workload scheduled there, so it
+#: has no service label to check and the service-ownership rule that scopes deployment and HPA
+#: mutations is deliberately not applied to it. Its authority model is different and explicit:
+#:
+#: * environment and tenant come from the immutable remediation target, never from the model;
+#: * the node's identity is the ``node`` argument, frozen into the action and covered by the
+#:   action-version hash the human approval is bound to - a different node is a different
+#:   action that needs a new approval;
+#: * risk tier is R2 and policy can never admit it autonomously: dispatch demands a current,
+#:   scoped human approval every time (``asic.remediation.authorization``).
+NODE_SCOPED_CAPABILITIES: Final[frozenset[str]] = frozenset({"mutate.k8s_node"})
+
 #: The complete write catalogue. Ordered so the seeding migration is deterministic.
 WRITE_CATALOGUE: Final[tuple[ToolDescriptor, ...]] = (
     K8S_DEPLOYMENT_ROLLBACK,
@@ -268,6 +282,7 @@ __all__ = [
     "K8S_HPA_ADJUST",
     "K8S_NODE_CORDON",
     "K8S_NODE_UNCORDON",
+    "NODE_SCOPED_CAPABILITIES",
     "PRECONDITION_CAPABILITY",
     "REMEDIATION_CATALOGUE_VERSION",
     "WRITE_CATALOGUE",

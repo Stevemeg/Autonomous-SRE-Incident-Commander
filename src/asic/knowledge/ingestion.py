@@ -59,6 +59,7 @@ from asic.domain.enums import (
     KnowledgeVersionState,
     UserStatus,
 )
+from asic.domain.permissions import PermissionKey
 from asic.knowledge import telemetry
 from asic.knowledge.canonical import PARSER_VERSION, CanonicalDocument, canonicalize, sanitize
 from asic.knowledge.chunking import CHUNKER_VERSION, ChunkDraft, ChunkLimits, chunk_document
@@ -83,8 +84,8 @@ MAX_TITLE_CHARS: Final[int] = 300
 
 #: The permission required to change a knowledge source's access policy (P6-04). Seeded by
 #: migration 0010, the same way ``memory.promotion.decide`` was seeded by migration 0008.
-ACCESS_MANAGE_PERMISSION: Final[str] = "knowledge.source.access.manage"
-LIFECYCLE_MANAGE_PERMISSION: Final[str] = "knowledge.source.lifecycle.manage"
+ACCESS_MANAGE_PERMISSION: Final[str] = PermissionKey.KNOWLEDGE_ACCESS_MANAGE.value
+LIFECYCLE_MANAGE_PERMISSION: Final[str] = PermissionKey.KNOWLEDGE_LIFECYCLE_MANAGE.value
 
 _REASON = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 

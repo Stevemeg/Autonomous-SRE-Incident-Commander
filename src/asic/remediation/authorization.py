@@ -16,11 +16,12 @@ from asic.db.models.remediation import (
     RemediationAction,
     RemediationTarget,
 )
-from asic.domain.enums import ApprovalDecision, PolicyVerdict, RemediationActionStatus
+from asic.domain.enums import ApprovalDecision, PolicyVerdict, RemediationActionStatus, RiskTier
 from asic.domain.errors import CapabilityNotGranted
 from asic.domain.idempotency import action_version_hash
 from asic.remediation.approval_service import is_authorized_approver
 from asic.tools.descriptor import ToolDescriptor
+from asic.tools.remediation_catalogue import NODE_SCOPED_CAPABILITIES
 
 
 def require_write_authority(
@@ -90,6 +91,15 @@ def require_write_authority(
     ).scalar_one_or_none()
     if policy is None or policy.verdict is PolicyVerdict.DENY:
         raise CapabilityNotGranted("write requires a durable permitting policy decision")
+    if descriptor.capability in NODE_SCOPED_CAPABILITIES:
+        # F-08: a node is shared infrastructure with no service label to check. Its scope is
+        # the frozen tenant/environment target plus the node identity bound into the
+        # approved action hash, and it is never admitted without a human (see the catalogue).
+        node = arguments.get("node")
+        if not isinstance(node, str) or not node or action.arguments.get("node") != node:
+            raise CapabilityNotGranted("node-scoped write does not match the approved node")
+        if descriptor.risk_tier is not RiskTier.R2 or policy.verdict is PolicyVerdict.ALLOW:
+            raise CapabilityNotGranted("a node-scoped write always requires human approval")
     if policy.verdict is PolicyVerdict.ALLOW:
         return
     approval = session.execute(

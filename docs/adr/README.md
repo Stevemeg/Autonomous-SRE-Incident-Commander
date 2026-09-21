@@ -180,6 +180,12 @@ during implementation become ADRs rather than being made silently:
 |---|---|---|
 | [0029](./0029-bounded-telemetry-from-committed-records.md) | The designed tenant-dimensioned metrics would have exported identifiers, call-site counting would have counted rolled-back work, and exported traces could not be joined to their records | `tests/observability/`, `promtool test rules` |
 
+## Decisions raised by Phase 13
+
+| ADR | Discovered because | Evidence |
+|---|---|---|
+| [0030](./0030-security-boundary-consolidation.md) | Production authentication was a shared secret, permission names were spelled in four places, tenancy proof was a hand-picked list, the runtime role held grants no code used, and the lock/dependency policy was unverifiable | `tests/security/`, `tests/db/test_security_migration.py`, migration `0018_security_hardening`, `scripts/security_gate.py` |
+
 ## Candidate decisions still to be written
 
 Identified during the Architecture Package but not yet ADRs, because the evidence to decide

@@ -118,3 +118,15 @@ SECRET_REFERENCE_COLUMNS: Final[frozenset[str]] = frozenset(
 
 def is_secret_reference(name: str) -> bool:
     return normalise_field_name(name) in SECRET_REFERENCE_COLUMNS
+
+
+class NeverRender:
+    """Marker base for values that must not reach a log, span, prompt, audit row or response.
+
+    :class:`asic.integrations.credentials.SecretValue` derives from it. Redaction treats any
+    instance as fully redacted *by type*, which does not depend on the value's shape or on
+    the name of the field it travelled in - the property name- and pattern-based rules
+    cannot give (Phase 13, F-16).
+    """
+
+    __slots__ = ()

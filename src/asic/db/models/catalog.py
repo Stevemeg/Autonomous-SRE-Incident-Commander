@@ -160,6 +160,14 @@ class ConnectorScopeBinding(Base, TenantScoped, CreatedAtMixin):
             ondelete="CASCADE",
             name="fk_connector_binding_environment",
         ),
+        # F-13: a binding must name a connector that exists in the same tenant. RESTRICT:
+        # authority history must never be cascaded away by deleting a connector.
+        sa.ForeignKeyConstraint(
+            ["tenant_id", "connector_id"],
+            ["integration_connector.tenant_id", "integration_connector.connector_id"],
+            ondelete="RESTRICT",
+            name="fk_connector_scope_binding_connector",
+        ),
         sa.UniqueConstraint(
             "tenant_id",
             "connector_id",

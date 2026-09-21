@@ -6,6 +6,7 @@ import base64
 import hashlib
 import json
 import logging
+import re
 import uuid
 from collections.abc import Iterator, MutableMapping
 from contextlib import asynccontextmanager
@@ -19,17 +20,20 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from opentelemetry import metrics as otel_metrics
 from opentelemetry import trace
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session, sessionmaker
 
 from asic.api.auth import (
     ApiSettings,
     CurrentPrincipal,
+    PermissionDenied,
     Principal,
+    build_token_verifier,
     require_any_environment,
     require_environment,
     require_tenant_wide,
 )
+from asic.api.limits import RequestBoundsMiddleware
 from asic.api.rate_limit import RateLimiter
 from asic.db.models import (
     ApiIdempotencyRecord,
@@ -65,16 +69,19 @@ from asic.domain.clock import SystemClock
 from asic.domain.enums import (
     ActorType,
     ApprovalDecision,
+    AuditEventType,
     IncidentEventType,
     IncidentStatus,
     TerminationReason,
 )
 from asic.domain.errors import ApprovalInvalid, IllegalStateTransition
 from asic.domain.idempotency import incident_event_key
+from asic.domain.permissions import PermissionKey
 from asic.evaluation.versioning import digest
 from asic.ingestion.contracts import ConnectorContext, IngestionRejected
 from asic.ingestion.service import IngestionService
-from asic.observability.health import check_database, evaluate_readiness
+from asic.observability.audit import AuditWriter
+from asic.observability.health import ReadinessCache, check_database, evaluate_readiness
 from asic.observability.logging import log_event
 from asic.observability.setup import render_prometheus
 from asic.remediation.approval_service import decide
@@ -90,26 +97,46 @@ api_request_duration = _meter.create_histogram(
     description="API request duration, by method and route template.",
 )
 
-INCIDENT_READ = "incident.read"
-INCIDENT_CONTROL = "incident.control"
-INGEST_WRITE = "ingestion.write"
-APPROVAL_DECIDE = "remediation.approve"
-EVALUATION_READ = "evaluation.read"
-ADMIN_READ = "administration.read"
-AUDIT_READ = "audit.read"
+INCIDENT_READ = PermissionKey.INCIDENT_READ.value
+INCIDENT_CONTROL = PermissionKey.INCIDENT_CONTROL.value
+INGEST_WRITE = PermissionKey.INGESTION_WRITE.value
+APPROVAL_DECIDE = PermissionKey.REMEDIATION_APPROVE.value
+EVALUATION_READ = PermissionKey.EVALUATION_READ.value
+ADMIN_READ = PermissionKey.ADMINISTRATION_READ.value
+AUDIT_READ = PermissionKey.AUDIT_READ.value
 MAX_PAGE_SIZE = 100
+
+
+#: Characters a human-authored field may not carry: C0 controls other than tab, newline and
+#: carriage return; DEL and C1 controls; zero-width, bidi-override and BOM characters. A NUL
+#: byte in particular cannot be stored in PostgreSQL text and used to surface as a 500.
+_FORBIDDEN_TEXT = re.compile(
+    r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f\u200b-\u200f\u202a-\u202e\u2060-\u2069\ufeff]"
+)
+
+
+def _human_text(value: str) -> str:
+    if not value.strip():
+        raise ValueError("must not be blank")
+    if _FORBIDDEN_TEXT.search(value):
+        raise ValueError("must not contain control or invisible formatting characters")
+    return value
+
+
+#: A justification: bounded, non-blank and free of control characters (newlines are allowed).
+Justification = Annotated[str, Field(min_length=1, max_length=4000), AfterValidator(_human_text)]
 
 
 class DecisionBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
     decision: ApprovalDecision
-    justification: str = Field(min_length=1, max_length=4000)
+    justification: Justification
     action_version_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
 class ControlBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    justification: str = Field(min_length=1, max_length=4000)
+    justification: Justification
 
 
 def _json(value: Any) -> Any:
@@ -192,9 +219,14 @@ def _cursor(value: uuid.UUID) -> str:
     return base64.urlsafe_b64encode(str(value).encode()).decode().rstrip("=")
 
 
+MAX_CURSOR_CHARS = 64
+
+
 def _decode_cursor(value: str | None) -> uuid.UUID | None:
     if value is None:
         return None
+    if len(value) > MAX_CURSOR_CHARS:
+        raise HTTPException(400, detail={"code": "invalid_cursor", "message": "invalid cursor"})
     try:
         return uuid.UUID(base64.urlsafe_b64decode(value + "=" * (-len(value) % 4)).decode())
     except (ValueError, UnicodeError) as exc:
@@ -1119,11 +1151,56 @@ def admin_audit(
     )
 
 
+#: Denials worth a durable audit record. Every denial of a state-changing request, and of the
+#: tenant-wide reads that expose configuration, evaluation history or the audit stream itself.
+#: Ordinary denied reads (a viewer probing an incident list) are logged, not audited: a
+#: durable row per failed GET would turn the audit trail into noise an attacker could fill.
+#: Volume is bounded regardless by the per-principal request limiter.
+_AUDITED_READ_PERMISSIONS = frozenset(
+    {
+        PermissionKey.ADMINISTRATION_READ.value,
+        PermissionKey.AUDIT_READ.value,
+        PermissionKey.EVALUATION_READ.value,
+        PermissionKey.REMEDIATION_APPROVE.value,
+    }
+)
+
+
+def _record_denial(factory: sessionmaker[Session], request: Request, exc: PermissionDenied) -> None:
+    if request.method == "GET" and exc.permission not in _AUDITED_READ_PERMISSIONS:
+        return
+    principal = exc.principal
+    correlation = getattr(request.state, "correlation_id", None)
+    try:
+        with factory() as session, session.begin():
+            bind_tenant(session, principal.tenant_id)
+            AuditWriter(tenant_id=principal.tenant_id, clock=SystemClock()).record(
+                session,
+                event_type=AuditEventType.AUTHORIZATION_DENIED,
+                outcome="denied",
+                actor_type=ActorType.HUMAN,
+                actor_id=str(principal.user_id),
+                correlation_id=uuid.UUID(correlation) if correlation else None,
+                target_type="permission",
+                target_id=exc.permission,
+                payload={
+                    "method": _method_label(request.method),
+                    "route": _route_template(request.scope),
+                    # Which authority source was consulted: current database role grants.
+                    "authority_source": "rbac",
+                },
+            )
+    except Exception as error:  # an audit failure must never turn a denial into an allow
+        log_event(_logger, "audit.denial_write_failed", level=logging.ERROR, error=error)
+
+
 def create_app(
     *, settings: ApiSettings | None = None, factory: sessionmaker[Session] | None = None
 ) -> FastAPI:
     resolved_settings = settings or ApiSettings.from_environment()
     resolved_factory = factory or session_factory(create_app_engine())
+    # Composition refuses an unsafe production auth configuration here, at startup.
+    verifier = build_token_verifier(resolved_settings)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> Any:
@@ -1131,10 +1208,15 @@ def create_app(
         if factory is None:
             resolved_factory.kw["bind"].dispose()
 
-    app = FastAPI(title="Autonomous SRE Incident Commander", version="0.12.0", lifespan=lifespan)
+    app = FastAPI(title="Autonomous SRE Incident Commander", version="0.13.0", lifespan=lifespan)
     app.state.api_settings = resolved_settings
     app.state.session_factory = resolved_factory
+    app.state.token_verifier = verifier
     app.state.rate_limiter = RateLimiter(resolved_settings.rate_limit_per_minute)
+    #: Failed-authentication attempts per peer address; deliberately small.
+    app.state.auth_failure_limiter = RateLimiter(30)
+    readiness = ReadinessCache(lambda: evaluate_readiness([check_database(resolved_factory)]))
+    app.add_middleware(RequestBoundsMiddleware)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=[],
@@ -1161,6 +1243,7 @@ def create_app(
                 status_code=400,
                 media_type="application/json",
             )
+        request.state.correlation_id = correlation_id
         tracer = trace.get_tracer("asic.api")
         started = perf_counter()
         status = 500
@@ -1195,6 +1278,15 @@ def create_app(
                         correlation_id=correlation_id,
                     )
 
+    @app.exception_handler(PermissionDenied)
+    async def permission_denied(request: Request, exc: PermissionDenied) -> Response:
+        await run_in_threadpool(_record_denial, resolved_factory, request, exc)
+        return Response(
+            content=json.dumps({"detail": exc.detail}),
+            status_code=403,
+            media_type="application/json",
+        )
+
     root = APIRouter(prefix="/api/v1")
     for router in (ingestion, incidents, approvals, evaluation, admin):
         root.include_router(router)
@@ -1208,10 +1300,10 @@ def create_app(
 
     @app.get("/readyz", include_in_schema=False)
     def readyz() -> Response:
-        readiness = evaluate_readiness([check_database(resolved_factory)])
+        result = readiness.get()
         return Response(
-            content=json.dumps(readiness.as_dict()),
-            status_code=200 if readiness.ready else 503,
+            content=json.dumps(result.as_dict()),
+            status_code=200 if result.ready else 503,
             media_type="application/json",
         )
 

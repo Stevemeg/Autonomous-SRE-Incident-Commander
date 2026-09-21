@@ -182,3 +182,13 @@ be caught before traffic, not by an audit later.
 The in-flight workflow rule is the operational consequence of ADR-0002's accepted trade-off:
 LangGraph has no in-flight workflow versioning, so we drain instead. If draining becomes
 disruptive more than twice, that is a recorded trigger to revisit Temporal.
+
+## Phase 13 hand-off: the security gate
+
+Phase 13 delivers `scripts/security_gate.py`, the single entry point Phase 14 CI should invoke as
+`python scripts/security_gate.py --strict --require-container-scan --json security-verdict.json`.
+It fails closed, returns a machine-readable verdict, and reports container scanning as
+`not_executable` until Phase 14 builds a real image (then `--require-container-scan` makes that a
+failure). Phase 14 owns the workflow wiring, the image, its scan, SBOM and signing, TLS, encrypted
+storage, network policy and the owner-role retention job; see `docs/security/SECURITY_ARCHITECTURE.md`
+section 11.

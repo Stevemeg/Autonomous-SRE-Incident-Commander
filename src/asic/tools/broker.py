@@ -85,6 +85,7 @@ from asic.observability import metrics
 from asic.observability.audit import AuditWriter
 from asic.observability.logging import log_event
 from asic.observability.redaction import redact_arguments, redact_mapping
+from asic.observability.trace_ids import is_valid_span_id, is_valid_trace_id
 from asic.observability.tracing import SpanHandle, TraceRecorder
 from asic.remediation.authorization import require_write_authority
 from asic.tools.capability import (
@@ -1076,12 +1077,7 @@ def _classify_refusal(stage: BrokerStage, exc: DomainError) -> BrokerFailure:
 
 def _traceparent(trace_id: str, span_id: str) -> str | None:
     """W3C trace context for outbound calls, from the durable trace identity."""
-    if len(trace_id) != 32 or len(span_id) != 16:
-        return None
-    try:
-        int(trace_id, 16)
-        int(span_id, 16)
-    except ValueError:
+    if not is_valid_trace_id(trace_id) or not is_valid_span_id(span_id):
         return None
     return f"00-{trace_id}-{span_id}-01"
 

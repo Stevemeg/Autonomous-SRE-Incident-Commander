@@ -55,6 +55,7 @@ from asic.db.models.evaluation import TraceSpan
 from asic.domain.clock import Clock
 from asic.domain.enums import NodeId, SpanStatus, TerminationReason, TraceSpanKind
 from asic.observability.redaction import redact_mapping, redact_value
+from asic.observability.trace_ids import require_valid_trace_id
 
 #: Instrumentation scope name. Stable, because dashboards and sampling rules key on it.
 INSTRUMENTATION_NAME = "asic.orchestration"
@@ -66,7 +67,7 @@ def derive_trace_id(correlation_id: uuid.UUID) -> str:
     Deterministic on purpose: replaying a run must land on the same trace id, so the
     reproduction and the original are comparable rather than merely similar.
     """
-    return correlation_id.hex
+    return require_valid_trace_id(correlation_id.hex)  # the nil UUID would be all-zero
 
 
 def derive_span_id(trace_id: str, ordinal: int) -> str:
@@ -180,7 +181,9 @@ class TraceRecorder:
     ) -> None:
         self._tenant_id = tenant_id
         self._execution_trace_id = execution_trace_id
-        self._trace_id = trace_id
+        # F-11: refuse a malformed (possibly historical, persisted) id at the boundary, before
+        # any span exists. A fresh id is never substituted: that would fake preserved linkage.
+        self._trace_id = require_valid_trace_id(trace_id)
         self._clock = clock
         self._otel_tracer = otel_tracer or otel_trace.get_tracer(INSTRUMENTATION_NAME)
         # A resumed run continues the numbering of the trace it is resuming, because it is
@@ -270,6 +273,9 @@ class TraceRecorder:
 
     def _root(self) -> Span:
         """A remote parent carrying the derived trace id; never exported itself."""
+        # A persisted id may predate the database CHECK. Refuse it loudly: substituting a
+        # fresh id would silently break linkage while appearing to preserve it.
+        require_valid_trace_id(self._trace_id)
         return NonRecordingSpan(
             SpanContext(
                 trace_id=int(self._trace_id, 16),

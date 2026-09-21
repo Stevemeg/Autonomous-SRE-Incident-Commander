@@ -242,3 +242,19 @@ shipping a role that can already see everything.
 - Connection pooling in a real server: the current tests use one connection per test.
 - `pg_hba`/TLS configuration, which is deployment concern (Phase 14).
 - Performance of RLS predicates at scale (Phase 15).
+
+### Phase 13 addendum: proved globally, not by sample
+
+The list above was a hand-picked sample. Phase 13 derives the expectations from the model registry
+and checks the **live schema** mechanically (`asic.db.tenancy_audit`, run by the security gate):
+every tenant table has `tenant_id NOT NULL`, RLS enabled *and* forced, and a policy whose USING and
+WITH CHECK both bind `app.current_tenant_id()`; every table is classified as tenant-scoped or a
+declared global; **every foreign key between tenant tables is composite** and carries `tenant_id`;
+the application role is not a superuser, has no `BYPASSRLS`, inherits none, owns no table and cannot
+create objects; and its grants obey policy (no `DELETE`, `TRUNCATE`, `REFERENCES` or `TRIGGER`;
+append-only tables lose `UPDATE`; identity, authority and configuration tables are read-only).
+Nineteen of those controls are removed one at a time in a rolled-back transaction to show the audit
+notices (`tests/security/test_tenancy_and_grants.py`). Migration 0018 tightened the grants that the
+audit found over-broad and added the connector-binding composite key (ADR-0030). Still true:
+production composition must run the application as `asic_app` (a superuser bypasses RLS whatever
+`FORCE` says), and concurrency under a shared pool remains a Phase 15 obligation.

@@ -298,6 +298,7 @@ def bind_connector(
                 credential_ref=credential_ref,
             )
         )
+        session.flush()  # the binding's composite FK needs its connector row first
         session.add(
             ConnectorScopeBinding(
                 id=uuid.uuid4(),

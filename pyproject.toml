@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "asic"
-version = "0.12.0"
+version = "0.13.0"
 description = "Autonomous SRE Incident Commander - governed incident investigation and remediation"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -17,21 +17,27 @@ license = { text = "UNLICENSED" }
 dependencies = [
     "SQLAlchemy>=2.0.23,<2.1",
     "alembic>=1.13,<2.0",
-    "psycopg2-binary>=2.9.9",
+    "psycopg2-binary>=2.9.9,<3.0",
     "pydantic>=2.5,<3.0",
     "langgraph>=1.0,<2.0",
-    "opentelemetry-api>=1.27",
-    "opentelemetry-sdk>=1.27",
+    "opentelemetry-api>=1.27,<2.0",
+    "opentelemetry-sdk>=1.27,<2.0",
     # Phase 6: src/asic/db/models/knowledge.py imports pgvector.sqlalchemy.Vector at
     # module load time, so this is a hard runtime dependency, not a dev-only extra.
     "pgvector>=0.3.6,<0.6",
     "fastapi>=0.116,<1.0",
-    "PyJWT>=2.10,<3.0",
+    # Phase 13 (ADR-0030): the [crypto] extra brings the RSA/EC primitives the OIDC/JWKS
+    # verifier needs. The HS256 development verifier does not need it.
+    "PyJWT[crypto]>=2.10,<3.0",
     "uvicorn>=0.35,<1.0",
     # Phase 12 (ADR-0029): this application's own /metrics exposition and OTLP trace export.
-    "opentelemetry-exporter-prometheus>=0.50b0",
-    "opentelemetry-exporter-otlp-proto-http>=1.27",
-    "prometheus-client>=0.20",
+    # The Prometheus exporter is published only as ``0.xxb0`` betas - PyPI has no stable
+    # release of it - so a prerelease is unavoidable here. It is the ONLY prerelease
+    # permitted (docs/security/SUPPLY_CHAIN.md); it is capped below 1.0 and pinned exactly,
+    # with hashes, in requirements/runtime.lock, in step with the SDK release train.
+    "opentelemetry-exporter-prometheus>=0.50b0,<1.0",
+    "opentelemetry-exporter-otlp-proto-http>=1.27,<2.0",
+    "prometheus-client>=0.20,<1.0",
 ]
 
 [project.optional-dependencies]
@@ -102,4 +108,5 @@ pythonpath = ["src"]
 addopts = "-ra --strict-markers"
 markers = [
     "postgres: test requires a live PostgreSQL instance (set ASIC_TEST_DATABASE_URL)",
+    "security: Phase 13 security control proof, run by scripts/security_gate.py",
 ]

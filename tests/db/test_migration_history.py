@@ -482,7 +482,7 @@ class TestUpgradePaths:
             with engine.connect() as conn:
                 assert (
                     conn.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one()
-                    == "0017_evaluation_harness"
+                    == "0018_security_hardening"
                 )
         finally:
             engine.dispose()

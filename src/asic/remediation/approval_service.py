@@ -32,12 +32,13 @@ from asic.domain.clock import Clock
 from asic.domain.enums import ApprovalDecision, RemediationActionStatus, RiskTier, UserStatus
 from asic.domain.errors import ApprovalInvalid
 from asic.domain.idempotency import approval_callback_key
+from asic.domain.permissions import PermissionKey
 from asic.observability.logging import log_event
 
 _logger = logging.getLogger("asic.remediation.approval_service")
 
 #: The permission an approver must hold. Seeded by migration 0011.
-REMEDIATION_APPROVE_PERMISSION = "remediation.approve"
+REMEDIATION_APPROVE_PERMISSION = PermissionKey.REMEDIATION_APPROVE.value
 
 #: Mirrors ``asic.orchestration.remediation.nodes.planner.APPROVAL_WINDOW_SECONDS``. Kept
 #: independent (not imported) so this module - which Phase 9's API will depend on directly

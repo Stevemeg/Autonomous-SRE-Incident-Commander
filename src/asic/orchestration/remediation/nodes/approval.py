@@ -40,6 +40,7 @@ from asic.domain.enums import (
 from asic.domain.idempotency import approval_callback_key, incident_event_key
 from asic.orchestration.remediation.context import RemediationDependencies
 from asic.orchestration.remediation.nodes.planner import APPROVAL_WINDOW_SECONDS
+from asic.remediation.approval_service import REMEDIATION_APPROVE_PERMISSION
 
 #: The event naming this node's own incident-timeline entries; kept distinct from the
 #: approval *decision* events, which are emitted by the approval service itself when a
@@ -192,7 +193,7 @@ def _record_system_decision(
             action_version_hash_value=action.action_version_hash,
         )
         + ":system_expiry",
-        required_role_key="remediation.approve",
+        required_role_key=REMEDIATION_APPROVE_PERMISSION,
         proposer_user_id=None,
         approver_user_id=None,
         decision=decision,

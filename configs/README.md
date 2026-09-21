@@ -22,3 +22,10 @@ rules`, `otelcol-contrib validate`) but not deployed. Deployment wiring is Phase
 Secret material is supplied at runtime through a secret manager, per master
 specification section 15. The design for that lives in
 [`../docs/security/THREAT_MODEL.md`](../docs/security/THREAT_MODEL.md).
+
+## `security/`
+
+`security/supply-chain-policy.toml` - the dependency-lock policy enforced by
+`scripts/check_dependency_lock.py` (lock locations, the reasoned prerelease allowlist, frontend
+lockfile rules). The secret-scanning configuration is `.gitleaks.toml` at the repository root.
+See `docs/security/SUPPLY_CHAIN.md`.

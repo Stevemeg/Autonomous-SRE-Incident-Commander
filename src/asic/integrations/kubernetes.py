@@ -5,11 +5,18 @@ Every request path is composed here from a fixed API group/version and pattern-v
 names; every mutation body is built here from values the API server itself returned (a
 prior ReplicaSet's pod template) or from bounded integers.
 
-Scope is enforced twice. The broker only reaches this adapter for a namespace resolved from
-the service's registered ownership; and before any mutation the adapter reads the target
-and refuses (``scope_denied``, effect not applied) unless it carries the configured service
+Scope is enforced twice for **service-scoped** mutations (deployment rollback, HPA
+adjustment). The broker only reaches this adapter for a namespace resolved from the
+service's registered ownership; and before the mutation the adapter reads the target and
+refuses (``scope_denied``, effect not applied) unless it carries the configured service
 label with the incident's service as its value. A deployment that merely happens to share a
 namespace with the service is not a target.
+
+**Node cordon/uncordon are deliberately not service-scoped** (Phase 13, F-08): a node is
+shared infrastructure and has no service label. Their authority is the frozen tenant and
+environment, the node identity bound into the approved action hash, tier R2, and a current
+human approval on every dispatch (``asic.remediation.authorization``,
+``docs/security/AUTHORIZATION.md``). This adapter performs no service check for them.
 
 Reads use the connector's read credential; mutations use its separate write credential.
 A read credential is therefore never capable of a write at the API server (SI-4).

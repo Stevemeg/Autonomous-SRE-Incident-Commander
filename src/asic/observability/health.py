@@ -16,6 +16,7 @@ Details returned to callers are closed codes, never exception text or connection
 from __future__ import annotations
 
 import threading
+import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from enum import StrEnum
@@ -27,7 +28,7 @@ from opentelemetry.metrics import CallbackOptions, Observation
 from sqlalchemy.orm import Session
 
 #: The migration head this build expects. A test pins it to the Alembic script head.
-EXPECTED_SCHEMA_REVISION: Final[str] = "0017_evaluation_harness"
+EXPECTED_SCHEMA_REVISION: Final[str] = "0018_security_hardening"
 READINESS_STATEMENT_TIMEOUT_MS: Final[int] = 1000
 
 
@@ -107,12 +108,53 @@ def evaluate_readiness(checks: Iterable[DependencyCheck]) -> Readiness:
     return Readiness(ready=ready, checks=resolved)
 
 
+class ReadinessCache:
+    """Coalesces public readiness probing into at most one evaluation per interval.
+
+    ``/readyz`` is unauthenticated and reaches the database. Without this, a caller looping
+    on it turns every probe into a query and a pooled connection. Concurrent callers never
+    queue behind an in-flight evaluation: they are served the last result (or "not ready"
+    before the first), so probing cannot exhaust the worker pool either.
+    """
+
+    def __init__(
+        self,
+        evaluate: Callable[[], Readiness],
+        *,
+        ttl_seconds: float = 2.0,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self._evaluate = evaluate
+        self._ttl = ttl_seconds
+        self._clock = clock
+        self._lock = threading.Lock()
+        self._value: Readiness | None = None
+        self._at = 0.0
+
+    def get(self) -> Readiness:
+        now = self._clock()
+        if self._value is not None and now - self._at < self._ttl:
+            return self._value
+        if self._lock.acquire(blocking=False):
+            try:
+                self._value = self._evaluate()
+                self._at = self._clock()
+            finally:
+                self._lock.release()
+        if self._value is None:
+            return Readiness(
+                ready=False, checks=(DependencyCheck("database", DependencyStatus.DOWN, "unknown"),)
+            )
+        return self._value
+
+
 __all__ = [
     "EXPECTED_SCHEMA_REVISION",
     "READINESS_STATEMENT_TIMEOUT_MS",
     "DependencyCheck",
     "DependencyStatus",
     "Readiness",
+    "ReadinessCache",
     "check_database",
     "dependency_up",
     "evaluate_readiness",

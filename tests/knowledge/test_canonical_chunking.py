@@ -97,7 +97,7 @@ class TestCanonicalization:
         [
             (b"x" * (MAX_DOCUMENT_BYTES + 1), "document_too_large"),
             (b"\xff\xfe\xfa invalid", "invalid_utf8"),
-            ("​‌‍".encode(), "empty_document"),
+            ("\u200b\u200c\u200d".encode(), "empty_document"),
             (b"\n\n\n   \n\t\n  \n\n\n", "empty_document"),
         ],
         ids=["oversize", "invalid-utf8", "only-invisible", "only-blank-lines"],

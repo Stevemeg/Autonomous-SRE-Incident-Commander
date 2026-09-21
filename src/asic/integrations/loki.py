@@ -70,6 +70,38 @@ def build_query(
     return query
 
 
+#: Aliases seen in real log pipelines, mapped onto the closed display vocabulary.
+_LEVEL_ALIASES: Final[dict[str, str]] = {
+    "trace": "TRACE",
+    "debug": "DEBUG",
+    "info": "INFO",
+    "information": "INFO",
+    "notice": "INFO",
+    "warn": "WARN",
+    "warning": "WARN",
+    "error": "ERROR",
+    "err": "ERROR",
+    "fatal": "FATAL",
+    "crit": "FATAL",
+    "critical": "FATAL",
+    "panic": "FATAL",
+}
+
+
+def normalise_level(raw: object) -> str:
+    """The display level for an untrusted stream ``level`` label (F-06).
+
+    The label is attacker-influenced text. It is never rendered: it is mapped onto a closed
+    vocabulary and anything outside it becomes ``OTHER``. That keeps one observation to one
+    logical line whatever the label contains (newlines, CRLF, tabs, ANSI escapes, Unicode
+    separators, NUL). The raw value stays in the stream labels this function reads from; only
+    the normalised display value is emitted.
+    """
+    if raw is None:
+        return "LOG"
+    return _LEVEL_ALIASES.get(display_text(raw, limit=16).lower(), "OTHER")
+
+
 def _instant(nanoseconds: int) -> str:
     """Render a Loki nanosecond timestamp, or refuse it as malformed.
 
@@ -145,7 +177,7 @@ class LokiAdapter:
         for stream in sequence(data.get("result"), "loki result"):
             stream_map = mapping(stream, "loki stream")
             labels = mapping(stream_map.get("stream", {}), "loki stream labels")
-            level = str(labels.get(level_label, "log")).upper()[:5]
+            level = normalise_level(labels.get(level_label))
             for value in sequence(stream_map.get("values"), "loki values"):
                 if not isinstance(value, list) or len(value) < 2:
                     raise malformed("loki entry is not a [timestamp, line] pair")
@@ -180,4 +212,4 @@ class LokiAdapter:
         }
 
 
-__all__ = ["MAX_LIMIT", "SOURCE", "LokiAdapter", "build_query"]
+__all__ = ["MAX_LIMIT", "SOURCE", "LokiAdapter", "build_query", "normalise_level"]

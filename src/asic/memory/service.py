@@ -60,6 +60,7 @@ from asic.domain.enums import (
 )
 from asic.domain.errors import DomainError
 from asic.domain.incident_state import is_terminal
+from asic.domain.permissions import PermissionKey
 from asic.domain.untrusted import UntrustedBlock
 from asic.knowledge import telemetry
 from asic.knowledge.citations import citation_reference_exists
@@ -79,7 +80,7 @@ from asic.observability.audit import AuditWriter
 from asic.remediation.trust import trusted_verified_outcome
 
 #: The permission a human needs to decide a promotion. Seeded by migration 0008.
-DECIDE_PERMISSION: Final[str] = "memory.promotion.decide"
+DECIDE_PERMISSION: Final[str] = PermissionKey.MEMORY_PROMOTION_DECIDE.value
 PROPOSAL_LOCK_NAMESPACE: Final[str] = "asic.memory.proposal.v1"
 
 

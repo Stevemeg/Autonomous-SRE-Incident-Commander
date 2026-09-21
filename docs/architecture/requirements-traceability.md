@@ -24,6 +24,31 @@ terminal dispatch, read-only trigger deduplication,
 pre-drive crash recovery, trace redaction and migration clean/accepted-head/round-trip/drift.
 No production scale or performance result is implied.
 
+## Phase 13 implementation evidence
+
+Security, RBAC, tenant isolation and supply-chain controls
+([ADR-0030](../adr/0030-security-boundary-consolidation.md),
+[security architecture](../security/SECURITY_ARCHITECTURE.md)). Nothing here is a compliance claim;
+infrastructure controls (TLS, at-rest encryption, network policy, container scanning, CI wiring)
+are Phase 14 obligations and are stated as such.
+
+| Requirement | Implemented evidence and limits |
+|---|---|
+| NFR-SEC-01 | `TokenVerifier`: OIDC/JWKS (asymmetric only, `kid`, claims, bounded rotation-aware cache) for production; HS256 development verifier refused in production (`tests/security/test_authentication.py`). No live-IdP interop test; a revoked key is trusted for up to the cache TTL |
+| NFR-SEC-02 | One permission vocabulary and scope rules, equal to the migrated catalogue; every (role, assignment scope, route) cell tested; revocation, expiry, disabled users, forged claims and wrong tenant/environment attacked (`test_rbac_matrix.py`). Every approve-holder may decide through R2 (no R1/R2 approver split) |
+| NFR-SEC-03 | Mechanical tenancy audit of the live schema (RLS forced, policies, composite FKs, role, grants) with 19 mutation proofs; migration 0018 (`tests/security/test_tenancy_and_grants.py`, `tests/db/test_security_migration.py`) |
+| NFR-SEC-04 | Application role loses `DELETE`/`TRUNCATE`, write on `alembic_version` and on identity/authority/configuration tables; node authority model (F-08); capability inventory reviewed mechanically (`test_capability_authority.py`, `test_node_authority.py`) |
+| NFR-SEC-05 | No dynamic capability creation, no provider invoked outside the broker, reviewed closed set of free-text arguments |
+| NFR-SEC-06 | `SecretValue` typed redaction, credential-free request/response `repr`, name/shape backup, secret scanning of history and tree (`test_secrets_and_redaction.py`, `test_security_gate.py`). Redaction is not complete detection |
+| NFR-SEC-07 | Outbound TLS verified and HTTPS-only (OTLP/JWKS/connectors). **Inbound TLS and encryption at rest are not implemented here and not claimed** (Phase 14) |
+| NFR-SEC-08 | Denied state changes and tenant-wide reads are durable, attributed, tenant-bound audit records; authentication failures are structured logs (`test_security_audit.py`) |
+| NFR-SEC-09 | 128 KiB streamed body bound, JSON-only, control-character refusal (a NUL was a 500), bounded pagination/cursors, egress host policy, Loki level vocabulary, trace-id rule (`test_api_bounds.py`, `test_phase13_hardening.py`) |
+| NFR-SEC-10, NFR-SEC-11 | Adversarial payload set through the fence renderer and a live adapter/broker; menu, tenant, scope, tier, approvals, policy unchanged (`test_prompt_injection_phase13.py`) |
+| NFR-SEC-12 | Bounded per-principal and failed-auth limiters, limiter before database lookup, coalesced readiness, connect deadlines. Per-process only; shared limiter deferred to Phase 14/15 |
+| NFR-SEC-13 | `scripts/security_gate.py`: `pip-audit`, `npm audit`, `ruff --select S` plus policy tests, gitleaks, hash-locked dependency policy. Container scanning **not executable until a Phase 14 image exists** |
+| NFR-SEC-14 | Complete table classification, tenant policy schema with minimums and holds, dry-run planner; no deletion engine (`test_retention.py`). Owner-role lifecycle job is Phase 14 |
+| NFR-SEC-15 | Connector binding composite `RESTRICT` FK; credential references only; per-call resolution; separate read/write credentials |
+
 ## Phase 12 implementation evidence
 
 [`observability.md` §10](./observability.md#10-phase-12-implementation-status),

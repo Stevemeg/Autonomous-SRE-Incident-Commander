@@ -97,6 +97,7 @@ def add_connector(
                 settings=settings or {},
             )
         )
+        session.flush()  # the binding's composite FK needs its connector row first
         if bind:
             session.add(
                 ConnectorScopeBinding(

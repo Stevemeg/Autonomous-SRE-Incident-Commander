@@ -94,6 +94,7 @@ ALLOWED_SOURCE_ROOTS = (
     "src/asic/integrations",  # Phase 10 - native external adapters behind the broker
     "src/asic/notifications",  # Phase 10 - S2 deterministic notification service
     "src/asic/evaluation",  # Phase 11 - evaluation harness, replay and regression gate
+    "src/asic/retention",  # Phase 13 - retention classification, policy and dry-run planner
     "src/asic/simulators",
     "src/asic/tools",
     "migrations",
@@ -402,10 +403,11 @@ def check_responsibility_coverage(f: Findings) -> int:
 def check_phase_boundary(f: Findings) -> int:
     """Assert no later phase has started early.
 
-    Through Phase 12, the repository holds governed knowledge, bounded investigation,
+    Through Phase 13, the repository holds governed knowledge, bounded investigation,
     safety-gated remediation, authenticated API/dashboard surfaces, native external
-    integrations behind the broker, the evaluation/replay harness and observability with SLO
-    configuration. Phase 13 and deployment (Phase 14) remain out of scope.
+    integrations behind the broker, the evaluation/replay harness, observability with SLO
+    configuration, and security controls (OIDC verification, RBAC vocabulary, tenancy audit,
+    retention policy, supply-chain gates). Deployment (Phase 14) remains out of scope.
     """
     scanned = 0
 
@@ -622,7 +624,7 @@ def main() -> int:
     print(f"mermaid diagrams  : {blocks} checked")
     print(f"requirement IDs   : {defined} defined in SRS, {traced} referenced in matrix")
     print(f"spec section 4    : {responsibilities} responsibilities checked for disposition")
-    print(f"repository files  : {scanned} scanned against the Phase 12 boundary")
+    print(f"repository files  : {scanned} scanned against the Phase 13 boundary")
     print(f"safety invariants : {invariants} unique definitions checked")
     print()
 
@@ -631,7 +633,7 @@ def main() -> int:
         ("mermaid", "Mermaid structure"),
         ("traceability", "Requirement traceability"),
         ("coverage", "Specification coverage"),
-        ("phase", "Phase 12 scope boundary"),
+        ("phase", "Phase 13 scope boundary"),
         ("claims", "No unmeasured claims"),
         ("invariants", "Unique safety invariant IDs"),
     ]

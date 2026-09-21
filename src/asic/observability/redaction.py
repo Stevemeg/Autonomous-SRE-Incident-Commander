@@ -22,7 +22,12 @@ import re
 from collections.abc import Mapping, Sequence
 from typing import Any, Final
 
-from asic.domain.safety import is_forbidden_secret_field, is_secret_reference
+from asic.domain.safety import (
+    NeverRender,
+    is_forbidden_secret_field,
+    is_secret_reference,
+    normalise_field_name,
+)
 
 #: What replaces a redacted value. Distinctive enough to grep for in a trace.
 REDACTED: Final[str] = "[redacted]"
@@ -44,7 +49,66 @@ _SECRET_SHAPED: Final[tuple[re.Pattern[str], ...]] = (
     re.compile(r"\b[a-z][a-z0-9+.-]*://[^\s:/@]+:[^\s:/@]+@"),  # credentials in a URL
     re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
     re.compile(r"\bghp_[A-Za-z0-9]{20,}\b"),
+    # Phase 13 (F-16): secret-bearing URLs and vendor tokens that arrive under an innocuous
+    # key. This is the *backup* layer; the primary defences are typed (NeverRender) and
+    # structural (never log a request/credential object).
+    re.compile(r"\bhooks\.slack\.com/(?:services|workflows|triggers)/[A-Za-z0-9/_-]{8,}"),
+    re.compile(r"\bwebhook\.office(?:365)?\.com/webhook[A-Za-z0-9]*/[^\s\"']{8,}"),
+    re.compile(r"\boutlook\.office(?:365)?\.com/webhook/[^\s\"']{8,}"),
+    re.compile(r"\bxox[abposr]-[A-Za-z0-9-]{10,}"),
+    re.compile(r"\b(?:gh[opsu]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})"),
+    re.compile(r"\bAIza[0-9A-Za-z_-]{30,}"),
+    re.compile(r"\bATATT[A-Za-z0-9_=-]{20,}"),
+    re.compile(
+        r"[?&](?:access_token|token|api[_-]?key|apikey|key|sig|signature|secret|password|"
+        r"x-amz-signature|x-amz-credential|client_secret)=[^&\s\"']{6,}",
+        re.IGNORECASE,
+    ),
+    re.compile(r"\bauthorization\s*[:=]\s*\S{8,}", re.IGNORECASE),
 )
+
+#: Field-name suffixes that mean "this holds a secret" (``bot_token``, ``db_password``).
+#: Suffix, not substring: ``total_tokens`` and ``token_count`` are ordinary numbers.
+_SECRET_SUFFIXES: Final[tuple[str, ...]] = (
+    "_token",
+    "_secret",
+    "_password",
+    "_passwd",
+    "_api_key",
+    "_apikey",
+    "_private_key",
+    "_signing_key",
+    "_access_key",
+    "_routing_key",
+    "_integration_key",
+    "_webhook_url",
+    "_webhook",
+    "_credentials",
+)
+_SECRET_NAMES: Final[frozenset[str]] = frozenset(
+    {
+        "authorization",
+        "proxy_authorization",
+        "cookie",
+        "set_cookie",
+        "x_api_key",
+        "webhook",
+        "webhook_url",
+        "routing_key",
+        "integration_key",
+        "signing_key",
+    }
+)
+
+
+def is_secret_key_name(name: str) -> bool:
+    """Whether a mapping key names secret material, beyond the exact database-column list."""
+    normalised = normalise_field_name(name)
+    return (
+        is_forbidden_secret_field(name)
+        or normalised in _SECRET_NAMES
+        or normalised.endswith(_SECRET_SUFFIXES)
+    )
 
 
 def looks_like_secret(value: str) -> bool:
@@ -55,6 +119,10 @@ def redact_value(value: object, *, depth: int = 0) -> Any:
     """Redact and bound one value of any shape."""
     if depth > MAX_DEPTH:
         return f"[depth>{MAX_DEPTH}]"
+    if isinstance(value, NeverRender):
+        return REDACTED  # by type: independent of shape, key name and position
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        return f"[{len(value)} bytes]"  # never render raw bytes: they may be a body or a key
     if value is None or isinstance(value, (bool, int, float)):
         return value
     if isinstance(value, str):
@@ -85,7 +153,7 @@ def redact_mapping(payload: Mapping[str, Any], *, depth: int = 0) -> dict[str, A
         key = str(raw_key)
         if is_secret_reference(key):
             result[key] = redact_value(value, depth=depth)
-        elif is_forbidden_secret_field(key):
+        elif is_secret_key_name(key):
             result[key] = REDACTED
         else:
             result[key] = redact_value(value, depth=depth)
@@ -106,6 +174,7 @@ __all__ = [
     "MAX_ITEMS",
     "MAX_VALUE_CHARS",
     "REDACTED",
+    "is_secret_key_name",
     "looks_like_secret",
     "redact_arguments",
     "redact_mapping",

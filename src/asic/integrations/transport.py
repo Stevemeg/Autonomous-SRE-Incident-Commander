@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import http.client
 import ipaddress
+import re
 import ssl
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
@@ -74,6 +75,8 @@ def validate_endpoint(
     """
     if not url or len(url) > 512:
         raise _config("connector endpoint is not configured")
+    if _URL_FORBIDDEN_CHARS.search(url):
+        raise _config("connector endpoint contains control, space or backslash characters")
     parts = urlsplit(url)
     if parts.username or parts.password or "@" in parts.netloc:
         raise _config("connector endpoint must not carry credentials")
@@ -82,6 +85,11 @@ def validate_endpoint(
     host = (parts.hostname or "").lower()
     if not host:
         raise _config("connector endpoint has no host")
+    check_egress_host(host)
+    try:
+        parts.port  # noqa: B018 - parsing the port validates its range
+    except ValueError:
+        raise _config("connector endpoint has an invalid port") from None
     scheme = parts.scheme.lower()
     loopback = _is_loopback(host)
     if scheme == "http":
@@ -98,6 +106,56 @@ def validate_endpoint(
     port = parts.port or (443 if scheme == "https" else 80)
     base_path = parts.path.rstrip("/")
     return Endpoint(scheme=scheme, host=host, port=port, base_path=base_path)  # type: ignore[arg-type]
+
+
+#: Control characters, space and backslash never belong in an administrator-configured URL;
+#: different parsers disagree about them, which is how a URL is made to mean two things.
+_URL_FORBIDDEN_CHARS: Final[re.Pattern[str]] = re.compile(r"[\x00-\x20\x7f\\]")
+_NUMERIC_HOST: Final[re.Pattern[str]] = re.compile(r"[0-9a-fx.]+", re.IGNORECASE)
+
+#: Names of cloud instance-metadata services. Reaching one from a connector would hand out
+#: the node's own credentials.
+_METADATA_HOSTS: Final[frozenset[str]] = frozenset(
+    {
+        "metadata.google.internal",
+        "metadata.goog",
+        "metadata",
+        "instance-data",
+        "instance-data.ec2.internal",
+    }
+)
+_METADATA_IPV6: Final[frozenset[str]] = frozenset({"fd00:ec2::254"})
+
+
+def check_egress_host(host: str) -> None:
+    """Refuse hosts an administrator-configured endpoint must never target (SSRF policy).
+
+    This is application-level hygiene, not a network boundary: it refuses link-local,
+    unspecified and multicast addresses (which include the ``169.254.169.254`` metadata
+    endpoint, also when written as an IPv4-mapped IPv6 address), instance-metadata host
+    names, non-ASCII (IDN look-alike) hosts and ambiguous numeric hosts such as
+    ``2852039166`` or ``0xA9FEA9FE`` that some resolvers expand to a dotted address.
+    Private (RFC 1918) and loopback ranges are *allowed*: in-cluster and on-premises
+    systems are legitimate connector targets. Constraining where a process may connect,
+    and defeating DNS rebinding, belongs to network policy (Phase 14), not to this check.
+
+    Raises:
+        IntegrationError: ``configuration_error``, nothing sent.
+    """
+    if not host.isascii() or len(host) > 253:
+        raise _config("connector endpoint host must be ASCII (use punycode) and bounded")
+    if host in _METADATA_HOSTS or host in _METADATA_IPV6:
+        raise _config("connector endpoint targets an instance-metadata service")
+    try:
+        address = ipaddress.ip_address(host.strip("[]"))
+    except ValueError:
+        if _NUMERIC_HOST.fullmatch(host) and any(ch.isdigit() for ch in host):
+            raise _config("connector endpoint host is an ambiguous numeric address") from None
+        return
+    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped is not None:
+        address = address.ipv4_mapped
+    if address.is_link_local or address.is_unspecified or address.is_multicast:
+        raise _config("connector endpoint targets a link-local, unspecified or multicast address")
 
 
 def _host_matches(host: str, allowed: str) -> bool:
@@ -129,9 +187,12 @@ class HttpRequest:
     method: HttpMethod
     endpoint: Endpoint
     path: str
-    query: tuple[tuple[str, str], ...] = ()
-    headers: tuple[tuple[str, str], ...] = ()
-    body: bytes | None = None
+    # ``repr=False`` on everything that can carry a credential or vendor payload: the
+    # default dataclass repr would print the Authorization header and request body into any
+    # exception message, log line or assertion that formats a request (Phase 13, F-16).
+    query: tuple[tuple[str, str], ...] = field(default=(), repr=False)
+    headers: tuple[tuple[str, str], ...] = field(default=(), repr=False)
+    body: bytes | None = field(default=None, repr=False)
     #: True when the request can change external state. Governs unknown-outcome handling.
     effectful: bool = False
     #: Opaque header values (credentials) - never included in any rendering of the request.
@@ -160,8 +221,8 @@ class HttpRequest:
 @dataclass(frozen=True, slots=True)
 class HttpResponse:
     status: int
-    headers: Mapping[str, str]
-    body: bytes
+    headers: Mapping[str, str] = field(repr=False)
+    body: bytes = field(repr=False)
 
 
 class HttpTransport(Protocol):
@@ -370,6 +431,7 @@ __all__ = [
     "HttpRequest",
     "HttpResponse",
     "HttpTransport",
+    "check_egress_host",
     "malformed",
     "path",
     "raise_for_status",

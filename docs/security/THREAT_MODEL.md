@@ -153,6 +153,13 @@ away from failure.
 
 ### 5.1 Authentication
 
+> **Implemented (Phase 13):** the API verifies bearer tokens through a `TokenVerifier`. Production
+> composes the OIDC/JWKS verifier (asymmetric algorithms only, `kid` required, issuer/audience/expiry
+> enforced, bounded rotation-aware key cache) and refuses the HS256 development verifier at startup.
+> mTLS, signed webhooks per source, chat-platform signature verification, step-up authentication
+> and workload-identity mTLS below are **target** controls, not yet implemented. Details:
+> [SECURITY_ARCHITECTURE.md](SECURITY_ARCHITECTURE.md) §2.
+
 | Surface | Method |
 |---|---|
 | Ingestion API | mTLS or signed webhooks with per-source keys; replay-protected |
@@ -163,6 +170,14 @@ away from failure.
 | Outbound to customer infra | Per-tenant, per-capability credentials from the secret manager |
 
 ### 5.2 RBAC
+
+> **Reconciled in Phase 13.** The seven system roles exist as migrated (`0012`, `0011`, `0013`) and
+> the authoritative matrix is [AUTHORIZATION.md](AUTHORIZATION.md) §3, generated from code. The
+> "May not" column below is the *design intent*; two points differ from what is implemented today:
+> (1) `remediation.approve` carries one risk-tier ceiling (`r2`), so `sre_approver`,
+> `senior_approver` and `platform_admin` may each decide through R2 - the R1/R2 approver split below
+> is not enforced (future improvement, ADR-0030); (2) proposals are made by agents, never by humans
+> (`proposer_user_id` is null), so "may not approve actions they proposed" does not currently arise.
 
 | Role | May | May not |
 |---|---|---|
@@ -271,14 +286,14 @@ STRIDE-derived, ordered by severity. Likelihood is qualitative and pre-mitigatio
 
 ## 9. Supply chain
 
-| Control | Phase |
+| Control | Status |
 |---|---|
-| Pinned dependencies with lockfiles; reproducible builds | 2 (repository conventions) |
-| Dependency vulnerability scanning in CI | 14 (enforced), advisory earlier |
-| SAST | 14 (enforced), advisory earlier |
-| Container image scanning; minimal base images; non-root | 14 |
-| SBOM generation and image signing | 14 |
-| Pre-commit secret scanning | **Active now** (Phase 0) |
+| Pinned dependencies with lockfiles; reproducible builds | **Implemented (Phase 13):** hash-pinned universal locks, ranges upper-bounded, prerelease allowlist, frontend integrity digests - [SUPPLY_CHAIN.md](SUPPLY_CHAIN.md) |
+| Dependency vulnerability scanning | **Executable locally (Phase 13)** via `scripts/security_gate.py` (`pip-audit`, `npm audit`); CI enforcement Phase 14 |
+| SAST | **Executable locally (Phase 13):** `ruff --select S` plus pinned-policy tests; CI enforcement Phase 14 |
+| Container image scanning; minimal base images; non-root | **Phase 14** - not executable until an image exists (reported `not_executable`, never as passed) |
+| SBOM generation and image signing | Phase 14 |
+| Secret scanning | **Implemented (Phase 13):** gitleaks over history and tree with a narrowly scoped allowance; `check_repo_hygiene.py` pre-commit |
 | Third-party tool/MCP provider review | Before any provider is registered |
 
 ---
@@ -316,3 +331,29 @@ Stated honestly; none is fully eliminated by design:
 
 Every invariant in §2 maps to at least one test above, and all are **zero-tolerance release
 gates** — a regression blocks release regardless of improvements elsewhere.
+
+---
+
+## 12. Reconciliation: boundaries added in Phases 10-13
+
+Every mitigation below maps to code, configuration or a test. "Residual" is what remains true after
+the mitigation, stated plainly. Deployment-level controls are Phase 14/15 obligations
+([SECURITY_ARCHITECTURE.md](SECURITY_ARCHITECTURE.md) §11).
+
+| Boundary | Asset | Attacker | Failure mode | Mitigation | Evidence | Residual |
+|---|---|---|---|---|---|---|
+| Bearer-token verification | any tenant's data | anyone with a token or a leaked signing secret | forged or confused token accepted (`alg=none`, HS/RS confusion, wrong issuer/audience, expired, rotated-out key) | asymmetric-only explicit algorithms; key type must match; `kid` required; claims required; HS256 refused in production | `tests/security/test_authentication.py` | a revoked key is trusted for up to the cache TTL (300 s); no live-IdP interop test |
+| JWKS retrieval | signing keys | network attacker, hostile or slow issuer | key substitution, SSRF, resource exhaustion | connector transport (HTTPS, no redirects, timeout, 64 KiB, <=16 keys), duplicate `kid` refused, bounded cache | same | trust in the configured issuer host and its TLS certificate |
+| Permission model | administration, approval, audit | authenticated low-privilege user | privilege escalation by claim, by scope confusion, by stale grant | one vocabulary; scope rules; grants reloaded per request; forged claims ignored | `tests/security/test_rbac_matrix.py` | every approve-holder may decide through R2 (no R1/R2 split) |
+| Tenant boundary | all tenant data | authenticated user of tenant A | cross-tenant read/write/reference | RLS forced, composite FKs, unprivileged role, mechanical audit with mutation tests | `test_tenancy_and_grants.py`, `tests/db/test_tenant_isolation.py` | a superuser connection would bypass RLS: production composition must use `asic_app` (Phase 14) |
+| Application database role | evidence integrity, RBAC tables | compromised application process | erase history, self-grant authority, rewrite the schema-revision signal | migration 0018 revokes `DELETE`/`TRUNCATE`, write on `alembic_version` and identity/authority tables | `TestLeastPrivilege`, migration tests | the role can still insert into append-only tables and update mutable workflow tables |
+| Connector authority | outbound credentials and targets | tenant admin or attacker with DB write | binding to a nonexistent or foreign connector | composite `RESTRICT` FK; bindings read-only to the runtime | `TestConnectorReferentialIntegrity` | inbound identities must be registered as connectors |
+| Kubernetes node mutation | cluster availability | model-proposed or tampered action | cordon of an unapproved node; autonomous node action | node identity bound into the approval hash; R2; policy alone never admits it; SI-7 precondition | `tests/orchestration/test_node_authority.py` | no per-node allow-list beyond approval and the observed cluster |
+| Credential provider | connector secrets | any code path that logs | secret in log, trace, prompt, DB or response | `SecretValue` typed redaction; request/response `repr` exclude secrets; name/shape backup | `test_secrets_and_redaction.py`, canary tests | an unmarked secret formatted by hand can still leak |
+| Outbound endpoints (integrations, JWKS, OTLP) | internal network, cloud metadata | tenant admin, operator misconfiguration | SSRF to metadata/link-local, credential to a redirect target | shared host policy; no redirects; HTTPS; OTLP validated | `test_phase13_hardening.py` | private-range targets are allowed; DNS rebinding and egress policy are Phase 14 |
+| External text (logs, runbooks, tickets, adapter results) | approval, tools, tenant | anyone who can write a log line or document | prompt injection, fence forgery, level-label line injection | provenance never authoritative; fenced data; menu resolved first; closed level vocabulary | `test_prompt_injection_phase13.py`, Phase 6-8 corpus | the model may still be *misled* as to reasoning; humans approve effects |
+| Evaluation fixtures, replay, LLM judges | gate integrity | contributor, compromised fixture | replay reaching live systems; judge deciding authority | replay/live isolation and judge non-authority (Phase 11); fixtures hold no secrets | `tests/evaluation/` | judge quality is a measured, not guaranteed, property |
+| OTLP exporter and `/metrics` | trace and metric data | network observer, scraper | clear-text trace export; identifier disclosure | endpoint policy (HTTPS/loopback/opt-in); closed metric catalogue with no identifiers; `/metrics` off unless enabled | `test_phase13_hardening.py`, `tests/observability/` | `/metrics` is unauthenticated: internal network only |
+| Request edge | availability | unauthenticated caller | oversized/streamed body, wrong content type, NUL in text (was a 500), probing floods | 128 KiB bound, JSON only, control-character refusal, bounded limiters, coalesced readiness, connect deadlines | `tests/security/test_api_bounds.py` | per-process limits; shared limiter is Phase 14/15 |
+| Dependencies and source | the build | supply-chain attacker | vulnerable/typosquatted/unverifiable dependency, Trojan Source, committed secret | hash-pinned locks, index/URL refusal, prerelease policy, integrity digests, SAST, secret scanning, invisible-character scan | `test_security_gate.py`, `test_sast_policy.py` | scanners know only their databases; container/SBOM/signing are Phase 14 |
+| Retention | evidence lifetime | operator error | protected evidence deleted by a time predicate | classification, minimums, holds, dry-run only; no `DELETE` for the runtime | `tests/security/test_retention.py` | the owner-role lifecycle job does not exist yet |

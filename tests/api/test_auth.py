@@ -22,6 +22,7 @@ from asic.db.models import (
     ConnectorScopeBinding,
     Environment,
     IncidentEvent,
+    IntegrationConnector,
     Role,
     Service,
     User,
@@ -30,7 +31,13 @@ from asic.db.models import (
 )
 from asic.db.models.remediation import RemediationAction, RemediationTarget
 from asic.db.session import bind_tenant
-from asic.domain.enums import IncidentStatus, RemediationActionStatus, UserStatus, WorkflowRunStatus
+from asic.domain.enums import (
+    IncidentStatus,
+    IntegrationKind,
+    RemediationActionStatus,
+    UserStatus,
+    WorkflowRunStatus,
+)
 
 pytestmark = pytest.mark.postgres
 
@@ -112,6 +119,28 @@ def _bind_connector(
     environment_id: uuid.UUID | None = None,
 ) -> ConnectorScopeBinding:
     bind_tenant(session, fixture.tenant_id)
+    # F-13: a binding must reference a registered connector. An inbound-only identity is
+    # registered disabled: it authorises ingestion by binding, never an outbound call.
+    if (
+        session.scalar(
+            sa.select(IntegrationConnector.id).where(
+                IntegrationConnector.tenant_id == fixture.tenant_id,
+                IntegrationConnector.connector_id == connector_id,
+            )
+        )
+        is None
+    ):
+        session.add(
+            IntegrationConnector(
+                id=uuid.uuid4(),
+                tenant_id=fixture.tenant_id,
+                connector_id=connector_id,
+                kind=IntegrationKind.PROMETHEUS,
+                environment_id=environment_id or fixture.environment.id,
+                is_enabled=False,
+            )
+        )
+        session.flush()
     row = ConnectorScopeBinding(
         id=uuid.uuid4(),
         tenant_id=fixture.tenant_id,

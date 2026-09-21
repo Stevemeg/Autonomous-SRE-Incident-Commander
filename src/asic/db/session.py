@@ -65,6 +65,10 @@ DEFAULT_INGESTION_LOCK_TIMEOUT_MS: Final[int] = 1_000
 #: setting it below that would kill healthy work.
 DEFAULT_IDLE_IN_TRANSACTION_TIMEOUT_MS: Final[int] = 180_000
 
+#: Seconds allowed to establish a database connection, and to wait for a pooled one.
+DEFAULT_CONNECT_TIMEOUT_SECONDS: Final[int] = 5
+DEFAULT_POOL_TIMEOUT_SECONDS: Final[float] = 10.0
+
 #: Environment variable holding the *owner* connection string, used by migrations and by
 #: administrative operations such as creating a tenant. Deliberately distinct from
 #: :data:`DATABASE_URL_ENV`: the application role has no INSERT on the global catalogues,
@@ -117,7 +121,13 @@ def create_app_engine(url: str | None = None, **kwargs: Any) -> Engine:
         raise RuntimeError(f"no database URL: pass one explicitly or set {DATABASE_URL_ENV}")
     kwargs.setdefault("pool_pre_ping", True)
     kwargs.setdefault("future", True)
-    return create_engine(resolved, **kwargs)
+    # Bounded connection establishment and pool wait (Phase 13): an unreachable database
+    # must fail a request or a public health probe promptly, never hold a worker forever.
+    kwargs.setdefault("pool_timeout", DEFAULT_POOL_TIMEOUT_SECONDS)
+    connect_args = dict(kwargs.pop("connect_args", {}))
+    if resolved.startswith("postgresql"):
+        connect_args.setdefault("connect_timeout", DEFAULT_CONNECT_TIMEOUT_SECONDS)
+    return create_engine(resolved, connect_args=connect_args, **kwargs)
 
 
 def session_factory(engine: Engine) -> sessionmaker[Session]:
