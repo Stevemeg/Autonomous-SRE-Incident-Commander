@@ -18,7 +18,7 @@ Checks (each is an error, not a warning):
   specifier accepts;
 * a prerelease is locked only if the policy allowlists it with a reason, and an allowlist
   entry that matches no locked prerelease is stale and an error;
-* the development lock pins every shared package to the same version as the runtime lock;
+* the development lock contains every runtime package at the exact same version;
 * the frontend lockfile is v3, every package carries an ``integrity`` digest, none resolves
   outside the npm registry, and production dependencies are exact versions.
 
@@ -173,7 +173,11 @@ def check_python(repo: Path = REPO, policy: dict[str, object] | None = None) -> 
 
     dev = locks.get("dev_lock", {})
     for name, (version, _) in runtime.items():
-        if name in dev and dev[name][0] != version:
+        if name not in dev:
+            findings.append(
+                Finding("lock-consistency", f"{name}=={version} is missing from the dev lock")
+            )
+        elif dev[name][0] != version:
             findings.append(
                 Finding("lock-consistency", f"{name}: runtime {version} != dev {dev[name][0]}")
             )

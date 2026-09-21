@@ -386,6 +386,24 @@ class TestDependencyLockPolicy:
         _repo(tmp_path, runtime=GOOD, dev=f"alpha==1.9.0 \\\n    {_digest('a')}\n")
         assert "lock-consistency" in kinds(locks.check_python(tmp_path, POLICY))
 
+    def test_a_runtime_package_missing_entirely_from_the_dev_lock_is_refused(
+        self, tmp_path: Path
+    ) -> None:
+        alembic = f"alembic==1.16.5 \\\n    {_digest('d')}\n"
+        _repo(tmp_path, runtime=GOOD + alembic, dev=GOOD)
+        findings = locks.check_python(tmp_path, POLICY)
+        assert "lock-consistency" in kinds(findings)
+        assert any("alembic==1.16.5 is missing" in finding.detail for finding in findings)
+
+    def test_an_invalid_runtime_hash_is_refused(self, tmp_path: Path) -> None:
+        _repo(tmp_path, runtime="alpha==1.2.3 \\\n    --hash=sha256:not-a-digest\n")
+        assert "lock-hash" in kinds(locks.check_python(tmp_path, POLICY))
+
+    def test_extra_dev_only_packages_are_allowed(self, tmp_path: Path) -> None:
+        dev_only = f"pytest==8.4.2 \\\n    {_digest('d')}\n"
+        _repo(tmp_path, runtime=GOOD, dev=GOOD + dev_only)
+        assert locks.check_python(tmp_path, POLICY) == []
+
     def test_a_missing_lock_file_is_refused(self, tmp_path: Path) -> None:
         _repo(tmp_path, runtime=GOOD)
         (tmp_path / "requirements" / "dev.lock").unlink()

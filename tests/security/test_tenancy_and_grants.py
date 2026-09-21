@@ -13,6 +13,8 @@ import uuid
 
 import pytest
 import sqlalchemy as sa
+from alembic import command
+from scripts import security_gate
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -27,6 +29,7 @@ from asic.db.session import bind_tenant
 from asic.db.tenancy_audit import (
     APP_ROLE,
     RUNTIME_READ_ONLY_TABLES,
+    _is_canonical_tenant_predicate,
     audit_schema,
     privilege_inventory,
 )
@@ -43,12 +46,39 @@ from tests.conftest import (
     make_service,
     make_tenant,
 )
+from tests.db.test_migration_history import _alembic_config, throwaway_database  # noqa: F401
 
 pytestmark = pytest.mark.security
 
 
 def codes(session: Session) -> set[str]:
     return {finding.code for finding in audit_schema(session.connection())}
+
+
+@pytest.mark.parametrize(
+    "expression",
+    [
+        "(tenant_id = app.current_tenant_id())",
+        " (( tenant_id ) = ( app.current_tenant_id() )) ",
+        "((public.incident.tenant_id)::uuid = (app.current_tenant_id())::pg_catalog.uuid)",
+    ],
+)
+def test_policy_normalisation_accepts_only_catalog_equivalent_spelling(expression: str) -> None:
+    assert _is_canonical_tenant_predicate(expression, "incident")
+
+
+@pytest.mark.parametrize(
+    "expression",
+    [
+        "tenant_id = app.current_tenant_id() OR true",
+        "tenant_id = app.current_tenant_id() OR tenant_id IS NOT NULL",
+        "tenant_id = current_tenant_id()",
+        "id = app.current_tenant_id()",
+        'tenant_id = "App".current_tenant_id()',
+    ],
+)
+def test_policy_normalisation_rejects_semantic_changes(expression: str) -> None:
+    assert not _is_canonical_tenant_predicate(expression, "incident")
 
 
 @pytest.mark.postgres
@@ -68,13 +98,49 @@ class TestMechanicalAudit:
                 "policy_using",
             ),
             (
+                "ALTER POLICY tenant_isolation ON incident "
+                "USING (tenant_id = app.current_tenant_id() OR true)",
+                "policy_using",
+            ),
+            (
                 "ALTER POLICY tenant_isolation ON incident WITH CHECK (true)",
                 "policy_with_check",
+            ),
+            (
+                "ALTER POLICY tenant_isolation ON incident "
+                "WITH CHECK (tenant_id = app.current_tenant_id() OR true)",
+                "policy_with_check",
+            ),
+            (
+                "ALTER POLICY tenant_isolation ON incident USING (tenant_id IS NOT NULL)",
+                "policy_using",
+            ),
+            (
+                "ALTER POLICY tenant_isolation ON incident USING (id = app.current_tenant_id())",
+                "policy_using",
+            ),
+            (
+                "ALTER POLICY tenant_isolation ON incident "
+                "USING (tenant_id = NULLIF(app.current_tenant_id(), app.current_tenant_id()))",
+                "policy_using",
+            ),
+            (
+                "CREATE POLICY tenant_bypass ON incident FOR SELECT USING (true)",
+                "policy_inventory",
+            ),
+            (
+                "ALTER POLICY tenant_isolation ON incident TO asic_app",
+                "policy_roles",
             ),
             (
                 "ALTER TABLE alert ADD CONSTRAINT probe_fk FOREIGN KEY (incident_id) "
                 "REFERENCES incident (id)",
                 "fk_not_tenant_composite",
+            ),
+            (
+                "ALTER TABLE connector_scope_binding DROP CONSTRAINT "
+                "fk_connector_scope_binding_connector",
+                "fk_missing",
             ),
             (f"ALTER ROLE {APP_ROLE} BYPASSRLS", "role_bypasses_rls"),
             (f"ALTER ROLE {APP_ROLE} SUPERUSER", "role_bypasses_rls"),
@@ -100,6 +166,194 @@ class TestMechanicalAudit:
         owner_session.execute(sa.text(mutation))
         assert expected in codes(owner_session)
 
+    @pytest.mark.parametrize(
+        ("create_policy", "expected"),
+        [
+            (
+                "CREATE POLICY tenant_isolation ON incident "
+                "WITH CHECK (tenant_id = app.current_tenant_id())",
+                "policy_using",
+            ),
+            (
+                "CREATE POLICY tenant_isolation ON incident "
+                "USING (tenant_id = app.current_tenant_id())",
+                "policy_with_check",
+            ),
+            (
+                "CREATE POLICY tenant_isolation ON incident FOR SELECT TO PUBLIC "
+                "USING (tenant_id = app.current_tenant_id())",
+                "policy_command",
+            ),
+            (
+                "CREATE POLICY tenant_isolation ON incident AS RESTRICTIVE FOR ALL TO PUBLIC "
+                "USING (tenant_id = app.current_tenant_id()) "
+                "WITH CHECK (tenant_id = app.current_tenant_id())",
+                "policy_mode",
+            ),
+        ],
+    )
+    def test_policy_inventory_fails_closed_on_missing_or_unexpected_semantics(
+        self, owner_session: Session, create_policy: str, expected: str
+    ) -> None:
+        owner_session.execute(sa.text("DROP POLICY tenant_isolation ON incident"))
+        owner_session.execute(sa.text(create_policy))
+        assert expected in codes(owner_session)
+
+    def test_a_different_tenant_function_is_refused(self, owner_session: Session) -> None:
+        owner_session.execute(
+            sa.text(
+                "CREATE FUNCTION app.other_tenant_id() RETURNS uuid LANGUAGE sql STABLE "
+                "AS 'SELECT app.current_tenant_id()'"
+            )
+        )
+        owner_session.execute(
+            sa.text(
+                "ALTER POLICY tenant_isolation ON incident "
+                "USING (tenant_id = app.other_tenant_id())"
+            )
+        )
+        assert "policy_using" in codes(owner_session)
+
+    def test_live_policy_mutation_fails_then_restoration_passes(
+        self, owner_session: Session
+    ) -> None:
+        assert audit_schema(owner_session.connection()) == []
+        owner_session.execute(
+            sa.text(
+                "ALTER POLICY tenant_isolation ON incident "
+                "USING (tenant_id = app.current_tenant_id() OR true)"
+            )
+        )
+        assert "policy_using" in codes(owner_session)
+        owner_session.execute(
+            sa.text(
+                "ALTER POLICY tenant_isolation ON incident "
+                "USING (tenant_id = app.current_tenant_id()) "
+                "WITH CHECK (tenant_id = app.current_tenant_id())"
+            )
+        )
+        assert audit_schema(owner_session.connection()) == []
+
+    def test_live_required_fk_drop_fails_then_restoration_passes(
+        self, owner_session: Session
+    ) -> None:
+        constraint = "fk_connector_scope_binding_connector"
+        assert audit_schema(owner_session.connection()) == []
+        owner_session.execute(
+            sa.text(f"ALTER TABLE connector_scope_binding DROP CONSTRAINT {constraint}")
+        )
+        assert "fk_missing" in codes(owner_session)
+        owner_session.execute(
+            sa.text(
+                f"ALTER TABLE connector_scope_binding ADD CONSTRAINT {constraint} "
+                "FOREIGN KEY (tenant_id, connector_id) "
+                "REFERENCES integration_connector (tenant_id, connector_id) "
+                "ON DELETE RESTRICT"
+            )
+        )
+        assert audit_schema(owner_session.connection()) == []
+
+    @pytest.mark.parametrize(
+        ("replacement", "expected"),
+        [
+            (
+                "FOREIGN KEY (tenant_id, id) "
+                "REFERENCES integration_connector (tenant_id, id) ON DELETE RESTRICT NOT VALID",
+                "fk_signature",
+            ),
+            (
+                "FOREIGN KEY (environment_id, id) "
+                "REFERENCES integration_connector (tenant_id, id) ON DELETE RESTRICT NOT VALID",
+                "fk_signature",
+            ),
+            (
+                "FOREIGN KEY (tenant_id, service_id) "
+                "REFERENCES service (tenant_id, id) ON DELETE RESTRICT NOT VALID",
+                "fk_signature",
+            ),
+            (
+                "FOREIGN KEY (tenant_id, connector_id) "
+                "REFERENCES integration_connector (tenant_id, connector_id) "
+                "ON DELETE CASCADE NOT VALID",
+                "fk_action",
+            ),
+        ],
+    )
+    def test_required_fk_signature_and_actions_are_exact(
+        self, owner_session: Session, replacement: str, expected: str
+    ) -> None:
+        constraint = "fk_connector_scope_binding_connector"
+        owner_session.execute(
+            sa.text(f"ALTER TABLE connector_scope_binding DROP CONSTRAINT {constraint}")
+        )
+        owner_session.execute(
+            sa.text(
+                f"ALTER TABLE connector_scope_binding ADD CONSTRAINT {constraint} {replacement}"
+            )
+        )
+        assert expected in codes(owner_session)
+
+    def test_plain_connector_id_fk_cannot_substitute_for_the_tenant_boundary(
+        self, owner_session: Session
+    ) -> None:
+        constraint = "fk_connector_scope_binding_connector"
+        owner_session.execute(
+            sa.text(f"ALTER TABLE connector_scope_binding DROP CONSTRAINT {constraint}")
+        )
+        # Existing fixtures deliberately reuse connector labels across tenants. Make them
+        # globally unique inside this rolled-back mutation so PostgreSQL will permit the
+        # exact unsafe connector_id-only replacement the audit must reject.
+        owner_session.execute(
+            sa.text(
+                "UPDATE integration_connector SET connector_id = "
+                "left(connector_id, 200) || '-' || replace(id::text, '-', '')"
+            )
+        )
+        owner_session.execute(
+            sa.text(
+                "ALTER TABLE integration_connector ADD CONSTRAINT probe_connector_id_unique "
+                "UNIQUE (connector_id)"
+            )
+        )
+        owner_session.execute(
+            sa.text(
+                f"ALTER TABLE connector_scope_binding ADD CONSTRAINT {constraint} "
+                "FOREIGN KEY (connector_id) REFERENCES integration_connector (connector_id) "
+                "ON DELETE RESTRICT NOT VALID"
+            )
+        )
+        assert {"fk_signature", "fk_not_tenant_composite"} <= codes(owner_session)
+
+    def test_required_fk_column_order_is_exact(self, owner_session: Session) -> None:
+        constraint = "fk_connector_scope_binding_connector"
+        owner_session.execute(
+            sa.text(f"ALTER TABLE connector_scope_binding DROP CONSTRAINT {constraint}")
+        )
+        owner_session.execute(
+            sa.text(
+                "ALTER TABLE integration_connector ADD CONSTRAINT probe_connector_order_unique "
+                "UNIQUE (connector_id, tenant_id)"
+            )
+        )
+        owner_session.execute(
+            sa.text(
+                f"ALTER TABLE connector_scope_binding ADD CONSTRAINT {constraint} "
+                "FOREIGN KEY (connector_id, tenant_id) "
+                "REFERENCES integration_connector (connector_id, tenant_id) "
+                "ON DELETE RESTRICT NOT VALID"
+            )
+        )
+        assert "fk_signature" in codes(owner_session)
+
+    def test_removing_referenced_uniqueness_is_detected(self, owner_session: Session) -> None:
+        owner_session.execute(
+            sa.text(
+                "ALTER TABLE integration_connector DROP CONSTRAINT "
+                "uq_integration_connector_id CASCADE"
+            )
+        )
+        assert {"fk_missing", "fk_parent_not_unique"} <= codes(owner_session)
+
     def test_the_audit_role_is_not_privileged_and_owns_nothing(
         self, owner_session: Session
     ) -> None:
@@ -123,6 +377,65 @@ class TestMechanicalAudit:
             sa.text("SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user")
         ).one()
         assert (row.rolsuper, row.rolbypassrls) == (False, False)
+
+
+@pytest.mark.postgres
+def test_strict_gate_reproductions_fail_and_restored_schema_passes(
+    throwaway_database: str,  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Exercise the production gate path against both independently reported mutations."""
+    command.upgrade(_alembic_config(throwaway_database), "head")
+    engine = sa.create_engine(throwaway_database)
+    monkeypatch.setenv("ASIC_TEST_DATABASE_URL", throwaway_database)
+
+    def gate_exit() -> int:
+        result = security_gate.main(["--strict", "--only", "tenancy_schema"])
+        capsys.readouterr()
+        return result
+
+    try:
+        assert gate_exit() == 0
+        with engine.begin() as connection:
+            connection.execute(
+                sa.text(
+                    "ALTER POLICY tenant_isolation ON incident "
+                    "USING (tenant_id = app.current_tenant_id() OR true)"
+                )
+            )
+        assert gate_exit() == 1
+        with engine.begin() as connection:
+            connection.execute(
+                sa.text(
+                    "ALTER POLICY tenant_isolation ON incident "
+                    "USING (tenant_id = app.current_tenant_id()) "
+                    "WITH CHECK (tenant_id = app.current_tenant_id())"
+                )
+            )
+        assert gate_exit() == 0
+
+        with engine.begin() as connection:
+            connection.execute(
+                sa.text(
+                    "ALTER TABLE connector_scope_binding DROP CONSTRAINT "
+                    "fk_connector_scope_binding_connector"
+                )
+            )
+        assert gate_exit() == 1
+        with engine.begin() as connection:
+            connection.execute(
+                sa.text(
+                    "ALTER TABLE connector_scope_binding ADD CONSTRAINT "
+                    "fk_connector_scope_binding_connector "
+                    "FOREIGN KEY (tenant_id, connector_id) "
+                    "REFERENCES integration_connector (tenant_id, connector_id) "
+                    "ON DELETE RESTRICT"
+                )
+            )
+        assert gate_exit() == 0
+    finally:
+        engine.dispose()
 
 
 @pytest.mark.postgres

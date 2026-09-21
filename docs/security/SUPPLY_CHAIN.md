@@ -49,7 +49,8 @@ Everything else is stable.
 Every requirement is an exact `name==version` with at least one `sha256`; no requirement resolves
 from a URL or VCS and no `--index-url`, `--extra-index-url` or `--find-links` appears (a
 dependency-confusion vector); every direct dependency is locked at a version its range accepts; the
-dev lock agrees with the runtime lock; the frontend lockfile is v3, every package has an integrity
+dev lock contains every runtime package at the exact same resolved version (extra dev-only packages
+are allowed); the frontend lockfile is v3, every package has an integrity
 digest, none resolves outside the npm registry, and production dependencies are exact versions.
 `tests/security/test_security_gate.py` feeds it deliberately broken locks so it cannot pass vacuously.
 

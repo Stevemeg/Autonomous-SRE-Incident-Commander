@@ -54,7 +54,9 @@ argument), never on read. From strongest to weakest:
 
 **Not guaranteed.** A secret with no marker type, no telling key name and no known shape can still
 be logged by code that formats it by hand. The primary rule, which the layers exist to back up, is:
-**never pass a secret-bearing structure to a logger, span or audit payload at all.**
+**never pass a secret-bearing structure to a logger, span or audit payload at all.** At untrusted
+adapter exception boundaries the broker puts only the exception type and bounded classification
+fields on the raw `LogRecord`; it never attaches `exc_info`, exception text, or a traceback.
 `tests/security/test_secrets_and_redaction.py` and the canary tests in
 `tests/integrations/test_phase13_hardening.py` (a credential echoed by a vendor through 401/403/5xx
 and malformed bodies) prove the layers; they do not prove detection is complete.

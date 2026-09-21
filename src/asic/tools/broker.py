@@ -675,6 +675,11 @@ class ToolBroker:
                 # process exit and keyboard interrupt are not vendor failures and must keep
                 # unwinding.
                 effectful = descriptor.risk_tier is not RiskTier.RO
+                unclassified_failure = (
+                    IntegrationFailureClass.UNKNOWN_OUTCOME
+                    if effectful
+                    else IntegrationFailureClass.MALFORMED_RESPONSE
+                )
                 failure = BrokerFailure(
                     stage=BrokerStage.ADAPTER_INVOCATION,
                     error_type=type(exc).__name__,
@@ -691,21 +696,22 @@ class ToolBroker:
                         else OperationClass.C6_DETERMINISTIC_REJECTION
                     ),
                     retryable=False,
-                    failure_class=(
-                        IntegrationFailureClass.UNKNOWN_OUTCOME
-                        if effectful
-                        else IntegrationFailureClass.MALFORMED_RESPONSE
-                    ),
+                    failure_class=unclassified_failure,
                     effect_not_applied=not effectful,
                 )
-                _logger.warning(
-                    "adapter raised an unclassified exception",
-                    exc_info=exc,
-                    extra={
-                        "event": "tool.unclassified_exception",
-                        "tool": descriptor.name,
-                        "effectful": effectful,
-                    },
+                # This is an untrusted exception boundary. Even though the production JSON
+                # formatter renders only the exception type, ``exc_info`` would retain the
+                # raw message and traceback on the LogRecord for other handlers. Emit only
+                # bounded structural fields so no formatter can recover vendor text.
+                log_event(
+                    _logger,
+                    "tool.unclassified_exception",
+                    level=logging.WARNING,
+                    tool=descriptor.name,
+                    capability=descriptor.capability,
+                    effectful=effectful,
+                    error_type=type(exc).__name__,
+                    failure_class=unclassified_failure.value,
                 )
                 break
 

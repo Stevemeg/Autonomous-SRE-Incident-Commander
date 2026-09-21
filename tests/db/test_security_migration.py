@@ -8,6 +8,7 @@ left ``NOT VALID`` and enforced for new rows) and must never have those rows rew
 
 from __future__ import annotations
 
+import logging
 import uuid
 from collections.abc import Iterator
 
@@ -25,6 +26,7 @@ from asic.db.models import (
 )
 from asic.db.session import bind_tenant
 from asic.domain.enums import IntegrationKind, WorkflowRunStatus
+from asic.observability.logging import log_event
 from tests.conftest import (
     make_behaviour_version,
     make_environment,
@@ -142,6 +144,25 @@ def test_clean_database_round_trips_and_validates_both_constraints(
     command.upgrade(config, "head")
     assert _validated(engine, TRACE_CHECK) is True and _validated(engine, BINDING_FK) is True
     assert _app_can(engine, "incident", "DELETE") is False
+
+
+def test_log_capture_remains_positive_after_in_process_alembic(
+    throwaway_database: str,  # noqa: F811
+    asic_log_records: list[logging.LogRecord],
+) -> None:
+    command.upgrade(_alembic_config(throwaway_database), "head")
+    log_event(
+        logging.getLogger("asic.security.post_alembic"),
+        "capture.after_alembic",
+        marker="present",
+    )
+    records = [
+        record
+        for record in asic_log_records
+        if getattr(record, "event", None) == "capture.after_alembic"
+    ]
+    assert records, "Alembic logging configuration must not make secret tests vacuous"
+    assert getattr(records[-1], "marker", None) == "present"
 
 
 def test_historical_bad_rows_do_not_break_the_upgrade_and_are_never_rewritten(

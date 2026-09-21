@@ -38,7 +38,7 @@ uses grants reloaded from the database on this request.
 |---|---|---|
 | Production verifier | `OidcJwksVerifier`: asymmetric algorithms only (default RS256, ES256); algorithm must match key type; `kid` required; `jku`/`x5u`/`jwk` refused; `iss`, `aud`, `exp`, `sub`, `tenant_id` required; 30 s leeway; token length capped at 8192 | `tests/security/test_authentication.py` |
 | Key retrieval | `JwksClient` over the connector transport: HTTPS (loopback HTTP only when a test opts in), no redirects, 3 s timeout, 64 KiB, <=16 keys, duplicate `kid` refuses the set | same |
-| Rotation / revocation | unknown `kid` refreshes at most once per 30 s; TTL 300 s; stale keys served <=600 s then fail closed; the fetch never holds the lock, so a slow issuer cannot stall authentication of cached keys (one refresher, stale-while-revalidate). **A revoked key stays trusted until the cache expires (up to 300 s)** | same |
+| Rotation / revocation | unknown `kid` refreshes at most once per 30 s; normal cache TTL 300 s. If refresh succeeds, a removed key is refused after that TTL. If the issuer is unavailable, the last known-good set may be served for at most 600 s from its fetch; after that authentication fails closed. Thus outage-assisted revocation lag is bounded by 600 s, not 300 s. The fetch never holds the lock, so a slow issuer cannot stall authentication of cached keys (one refresher, stale-while-revalidate) | same |
 | Development verifier | `Hs256DevelopmentVerifier`, `is_development = True`; refused at startup in production; production defaults to OIDC and requires issuer, audience and JWKS URL | same |
 | Failure surface | closed reason codes, logged as `auth.rejected`; response is always `invalid_token`; no token content anywhere | same |
 
@@ -55,16 +55,18 @@ equal to the migrated database; the matrix test exercises every (role, assignmen
 
 | Layer | Control | Evidence |
 |---|---|---|
-| Schema | `tenant_id NOT NULL` on every tenant table; composite `(tenant_id, id)` foreign keys between tenant tables | `asic.db.tenancy_audit` (mechanical), `tests/security/test_tenancy_and_grants.py` |
-| Row level | `ENABLE` and `FORCE ROW LEVEL SECURITY`; policy USING and WITH CHECK on `app.current_tenant_id()` | same, plus `tests/db/test_tenant_isolation.py` |
+| Schema | `tenant_id NOT NULL` on every tenant table; every model-declared tenant-to-tenant FK is required by name, ordered columns, parent, update/delete actions and referenced uniqueness | `asic.db.tenancy_audit` (mechanical), `tests/security/test_tenancy_and_grants.py` |
+| Row level | `ENABLE` and `FORCE ROW LEVEL SECURITY`; exactly one permissive `ALL TO PUBLIC` policy named `tenant_isolation`, whose USING and explicit WITH CHECK are the canonical `tenant_id = app.current_tenant_id()` predicate | same, plus `tests/db/test_tenant_isolation.py` |
 | Role | `asic_app` is `NOSUPERUSER NOBYPASSRLS`, owns nothing, has no DDL and no privileged parent role | audit `role_*` checks; the isolation tests run as a non-superuser login role |
 | Grants | no `DELETE`/`TRUNCATE`/`REFERENCES`/`TRIGGER`; append-only tables lose `UPDATE`; identity, authority and configuration tables are read-only to the runtime | migration 0018; `TestLeastPrivilege` |
 | API | tenant comes from the verified token and must match a provisioned user; another tenant's resource answers exactly like a nonexistent one; a guessed cursor or idempotency key never crosses tenants | `test_rbac_matrix.py` |
 | Connectors | a binding references a connector of the *same tenant* by composite key (`RESTRICT`) | `TestConnectorReferentialIntegrity` |
 
-The principal audit guards each have a mutation test (nineteen controls are removed one at a time in
-a transaction; the audit must notice each). A random UUID is never an isolation mechanism: RLS and
-relational constraints are.
+The audit rejects any additional policy rather than attempting to prove the Boolean combination
+safe, and fails closed on an unrecognised predicate. Mutation tests cover broadened predicates,
+policy inventory/role/command changes, missing and malformed required FKs, action changes and
+missing referenced uniqueness against a live disposable PostgreSQL schema. A random UUID is never
+an isolation mechanism: RLS and relational constraints are.
 
 ## 5. Input validation
 

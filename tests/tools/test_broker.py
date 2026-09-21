@@ -7,6 +7,7 @@ audit row - is enforced by the database rather than by the code around it.
 
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import datetime
 
@@ -28,6 +29,7 @@ from asic.domain.enums import (
 )
 from asic.domain.errors import CapabilityNotGranted, RiskTierNotPermitted
 from asic.observability.audit import AuditWriter
+from asic.observability.logging import JsonFormatter
 from asic.observability.tracing import TraceRecorder, derive_trace_id
 from asic.simulators.provider import SimulatorProvider
 from asic.simulators.scenarios import scenario
@@ -147,6 +149,54 @@ class TestAuthorizedInvocation:
         assert result.outcome is ToolExecutionOutcome.SUCCEEDED
         assert result.payload["samples"], "the simulator returned a series"
         assert result.tool_execution_id is not None
+
+    @pytest.mark.security
+    def test_unclassified_adapter_exception_never_enters_the_raw_log_record(
+        self,
+        fixture: Fixture,
+        kernel_session: Session,
+        clock: FrozenClock,
+        monkeypatch: pytest.MonkeyPatch,
+        asic_log_records: list[logging.LogRecord],
+    ) -> None:
+        canary = "CANARY_SECRET_123"
+
+        def raise_untrusted_text(*_args: object, **_kwargs: object) -> object:
+            raise RuntimeError(canary)
+
+        monkeypatch.setattr(SimulatorProvider, "invoke", raise_untrusted_text)
+        broker, _, _ = _broker(fixture, kernel_session, clock)
+        result = broker.invoke(
+            kernel_session,
+            request=_request(
+                fixture,
+                "read.metrics",
+                arguments={
+                    "window_start": WINDOW_START,
+                    "window_end": WINDOW_END,
+                    "metric": "http_request_duration_p95_seconds",
+                },
+            ),
+            contract=G4_EVIDENCE_COLLECTOR,
+        )
+        broker.close()
+
+        records = [
+            record
+            for record in asic_log_records
+            if getattr(record, "event", None) == "tool.unclassified_exception"
+        ]
+        assert records, "the broker must emit the expected safe structural event"
+        record = records[-1]
+        assert result.failure is not None
+        assert result.failure.error_type == "RuntimeError"
+        assert getattr(record, "error_type", None) == "RuntimeError"
+        assert record.exc_info is None
+        assert record.exc_text is None
+        assert canary not in record.getMessage()
+        assert canary not in repr(record.__dict__)
+        assert canary not in logging.Formatter("%(levelname)s %(message)s").format(record)
+        assert canary not in JsonFormatter(service="test").format(record)
 
     def test_only_the_broker_assigns_verified_fact(
         self, fixture: Fixture, kernel_session: Session, clock: FrozenClock

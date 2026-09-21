@@ -138,7 +138,9 @@ def check_tenancy_schema(ctx: Context) -> Check:
     result = _run(ctx, [ctx.python, "-c", script, ctx.database_url])
     if result.returncode == 0 and "FINDINGS 0" in result.stdout:
         return Check(
-            "tenancy_schema", PASSED, "RLS, FORCE, policies, composite FKs, role and grants clean"
+            "tenancy_schema",
+            PASSED,
+            "RLS/FORCE, canonical policies, required tenant FKs, role and grants clean",
         )
     return Check(
         "tenancy_schema",

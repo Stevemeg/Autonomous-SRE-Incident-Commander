@@ -285,17 +285,27 @@ class TestKeyRotationAndRevocation:
             assert reason(verifier, Keys(f"junk-{index}").sign()) is RejectReason.KEY_ID_UNKNOWN
         assert len(idp.calls("GET", "/jwks")) == 1
 
-    def test_stale_keys_are_served_briefly_then_fail_closed(self, idp: LocalHttpServer) -> None:
-        clock, key = FakeClock(), Keys("k1")
-        idp.route("GET", "/jwks", Scripted(body=jwks(key)))
+    def test_revoked_key_outage_lag_is_bounded_by_the_documented_stale_window(
+        self, idp: LocalHttpServer
+    ) -> None:
+        clock, old, replacement = FakeClock(), Keys("old"), Keys("replacement")
+        idp.route("GET", "/jwks", Scripted(body=jwks(old, replacement)))
         verifier = verifier_for(idp, clock=clock)
-        assert verifier.verify(key.sign())["sub"] == "alice"
+        assert verifier.verify(old.sign())["sub"] == "alice"
 
+        # The issuer removes `old`, then becomes unavailable before clients can refresh.
+        # The normal cache remains authoritative before the 300-second TTL.
         idp.route("GET", "/jwks", Scripted(status=503))
-        clock.now += 400  # TTL expired, issuer down, still inside the staleness bound
-        assert verifier.verify(key.sign())["sub"] == "alice"
-        clock.now += 400  # beyond the staleness bound
-        assert reason(verifier, key.sign()) is RejectReason.KEYS_UNAVAILABLE
+        clock.now += 299
+        assert verifier.verify(old.sign())["sub"] == "alice"
+
+        # Refresh now fails, so the last-known-good key is served only within 600 seconds
+        # of its original fetch. The exact stale boundary remains accepted...
+        clock.now = 1600
+        assert verifier.verify(old.sign())["sub"] == "alice"
+        # ...and the first instant beyond it fails closed.
+        clock.now = 1600.001
+        assert reason(verifier, old.sign()) is RejectReason.KEYS_UNAVAILABLE
 
 
 class TestJwksHardening:

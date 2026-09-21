@@ -247,14 +247,20 @@ shipping a role that can already see everything.
 
 The list above was a hand-picked sample. Phase 13 derives the expectations from the model registry
 and checks the **live schema** mechanically (`asic.db.tenancy_audit`, run by the security gate):
-every tenant table has `tenant_id NOT NULL`, RLS enabled *and* forced, and a policy whose USING and
-WITH CHECK both bind `app.current_tenant_id()`; every table is classified as tenant-scoped or a
-declared global; **every foreign key between tenant tables is composite** and carries `tenant_id`;
+every tenant table has `tenant_id NOT NULL`, RLS enabled *and* forced, and exactly one permissive
+`ALL TO PUBLIC` policy named `tenant_isolation`. Both its USING and explicit WITH CHECK must match
+the canonical `tenant_id = app.current_tenant_id()` predicate; unexpected expressions and any
+additional policy fail closed. Every table is classified as tenant-scoped or a declared global;
+**every model-declared foreign key between tenant tables is required** with its exact name, ordered
+columns, parent, delete/update actions and referenced uniqueness, and every live tenant FK carries
+`tenant_id`;
 the application role is not a superuser, has no `BYPASSRLS`, inherits none, owns no table and cannot
 create objects; and its grants obey policy (no `DELETE`, `TRUNCATE`, `REFERENCES` or `TRIGGER`;
 append-only tables lose `UPDATE`; identity, authority and configuration tables are read-only).
-Nineteen of those controls are removed one at a time in a rolled-back transaction to show the audit
-notices (`tests/security/test_tenancy_and_grants.py`). Migration 0018 tightened the grants that the
-audit found over-broad and added the connector-binding composite key (ADR-0030). Still true:
+The mutation matrix changes those controls one at a time in rolled-back live PostgreSQL
+transactions to show the audit notices (`tests/security/test_tenancy_and_grants.py`), including
+`OR true`, a second permissive policy, missing USING/WITH CHECK, and dropped or substituted tenant
+FKs. Migration 0018 tightened the grants that the audit found over-broad and added the
+connector-binding composite key (ADR-0030). Still true:
 production composition must run the application as `asic_app` (a superuser bypasses RLS whatever
 `FORCE` says), and concurrency under a shared pool remains a Phase 15 obligation.
