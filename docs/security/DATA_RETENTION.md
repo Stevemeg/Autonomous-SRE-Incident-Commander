@@ -54,18 +54,22 @@ tenant configuration. The planner never recommends removing them and the databas
 application role if it tried. Aging them out is an explicit owner decision recorded outside this
 module.
 
-## 5. Phase 14 obligations
+## 5. Deployment boundary after Phase 14
 
-1. An owner-role lifecycle job (not the application role) that consumes `plan_retention`, deletes in
-   bounded batches inside one transaction per batch, and writes an audit receipt (`data.deleted`)
-   per run: tenant, class, cutoff, counts, reason.
-2. Refuse any table whose class is protected; honour holds; skip rows referenced by an active
-   incident, an open memory promotion or a verification lineage.
-3. Infrastructure lifecycle for what the database cannot express: backup and snapshot expiry, log
-   and trace retention in Loki/Tempo and the OTLP collector, object-store lifecycle rules, and
+Phase 14 does **not** schedule a privileged lifecycle Job. The only application primitive is
+`plan_retention`; there is no bounded deletion executor or durable `data.deleted` receipt. Inventing
+owner-role SQL in a CronJob would bypass the reviewed policy boundary. A future implementation must:
+
+1. Consume `plan_retention`, delete in bounded tenant-scoped batches inside one transaction per
+   batch, and write an audit receipt per run: tenant, class, cutoff, counts and reason.
+2. Refuse protected classes, honour holds, and skip active-incident, open-promotion and verification
+   lineage rows. It must support dry-run and expose no arbitrary SQL input.
+3. Use a maintenance identity never mounted into API pods.
+4. Coordinate infrastructure lifecycle for what the database cannot express: backup/snapshot expiry,
+   log and trace retention in Loki/Tempo and the OTLP collector, object-store lifecycle rules, and
    erasure requests, which are a separate process from time-based retention.
-4. Telemetry and cache-like data (metrics, traces, logs) follow the observability stack's own
-   retention; metric labels carry no tenant or incident identifiers by construction.
+5. Keep telemetry/cache lifecycle in the observability stack; metric labels contain no tenant or
+   incident identifiers by construction.
 
 ## 6. Tests
 

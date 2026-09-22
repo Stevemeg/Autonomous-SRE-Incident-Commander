@@ -142,15 +142,18 @@ security-setting changes (there is no write API for them; they are owner-path op
 
 See [DATA_RETENTION.md](DATA_RETENTION.md) and [SECRETS_POLICY.md](SECRETS_POLICY.md).
 
-## 11. Infrastructure obligations for Phase 14 (not implemented here)
+## 11. Phase 14 deployment controls and platform obligations
 
-TLS termination and, where required, mTLS; encrypted database storage and backups and a key
-management story (**at-rest encryption is not implemented and not claimed**); a secret manager and
-rotation; default-deny egress network policy; non-root, minimal images with container scanning, SBOM
-and signing; a shared rate limiter or gateway limits; CI wiring of `scripts/security_gate.py
---strict --require-container-scan`; an owner-role retention lifecycle job; pinning tool images
-(promtool, otelcol, gitleaks) by digest; running the application as `asic_app` and the migrations as
-a distinct owner role.
+Phase 14 supplies non-root minimal images, mandatory container scanning, final-image SBOMs, OIDC
+provenance attestation, a TLS Ingress contract, default-deny NetworkPolicies, tokenless service
+accounts, separate runtime/migration database references and CI wiring of `scripts/security_gate.py
+--strict --require-container-scan`. Production OIDC settings have no development fallback.
+
+The selected platform still owns actual TLS termination, encrypted database storage, backups/PITR,
+key management, external secret delivery, ingress/egress controllers and any shared gateway rate
+limit. No remote production environment has been executed. A retention Job is intentionally absent:
+the current application has a safe dry-run planner but no bounded deletion executor or durable
+receipt, and deploying arbitrary owner SQL would weaken the Phase 13 boundary.
 
 ## 12. Carry-forward findings addressed in Phase 13
 

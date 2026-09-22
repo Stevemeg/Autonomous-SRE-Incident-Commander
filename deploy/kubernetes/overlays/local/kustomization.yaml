@@ -1,0 +1,38 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: asic-system
+resources:
+  - ../../base
+  - ../local-database
+  - local-network-policy.yaml
+configMapGenerator:
+  - name: asic-runtime
+    behavior: merge
+    literals:
+      - ASIC_DEPLOYMENT_ENVIRONMENT=local
+      - ASIC_AUTH_MODE=development_hs256
+      - ASIC_JWT_ISSUER=asic-local-idp
+      - ASIC_JWT_AUDIENCE=asic-api
+      - ASIC_OIDC_JWKS_URL=http://127.0.0.1:9/jwks
+      - ASIC_OTEL_TRACES_EXPORTER=none
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318
+secretGenerator:
+  - name: asic-runtime-database
+    literals:
+      - url=postgresql+psycopg2://asic_app@postgres:5432/asic
+  - name: asic-local-auth
+    literals:
+      - jwt-secret=local-smoke-value-not-for-production-0001
+generatorOptions:
+  disableNameSuffixHash: true
+images:
+  - name: ghcr.io/stevemeg/asic-backend
+    newName: asic-backend
+    newTag: phase14-local
+  - name: ghcr.io/stevemeg/asic-frontend
+    newName: asic-frontend
+    newTag: phase14-local
+patches:
+  - path: backend-patch.yaml
+  - path: frontend-patch.yaml
+  - path: remove-production-edge.yaml

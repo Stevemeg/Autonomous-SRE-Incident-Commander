@@ -144,6 +144,7 @@ helm-rendered/
 # ===== Terraform =====
 .terraform/
 .terraform.lock.hcl
+!infra/terraform/platform/.terraform.lock.hcl
 *.tfstate
 *.tfstate.*
 *.tfstate.backup

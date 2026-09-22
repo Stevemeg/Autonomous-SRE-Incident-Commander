@@ -25,9 +25,9 @@ approval, verifies outcomes, and preserves operational memory.
 >
 > | | |
 > |---|---|
-> | **Completed** | Phase 0 bootstrap · Phase 1 requirements · Phase 2 architecture · Phase 3 persistence · Phase 4 orchestration · Phase 5 telemetry ingestion and correlation · Phase 6 operational knowledge, RAG and governed memory · Phase 7 bounded investigation · Phase 8 bounded remediation · Phase 9 authenticated API, RBAC and dashboard · Phase 10 external integrations · Phase 11 evaluation, replay and regression harness · **Phase 12 observability and SLO instrumentation** |
-> | **In progress** | Nothing — Phase 12 is complete |
-> | **Next** | Phase 13 |
+> | **Completed** | Phase 0 bootstrap · Phase 1 requirements · Phase 2 architecture · Phase 3 persistence · Phase 4 orchestration · Phase 5 telemetry ingestion and correlation · Phase 6 operational knowledge, RAG and governed memory · Phase 7 bounded investigation · Phase 8 bounded remediation · Phase 9 authenticated API, RBAC and dashboard · Phase 10 external integrations · Phase 11 evaluation, replay and regression harness · Phase 12 observability and SLO instrumentation · **Phase 13 security and governance** |
+> | **In progress** | Phase 14 delivery milestone; implementation and validation, pending independent review |
+> | **Next** | Independent Phase 14 review; Phase 15 has not begun |
 > | **Observability** | OpenTelemetry traces sharing the persisted trace id, catalogued bounded-label metrics counted from committed records, redacted JSON logs, `/livez` and `/readyz`, seven Grafana dashboards, SLO burn-rate alerts with runbooks. Objectives are **INITIAL ENGINEERING TARGETs**; configurations are validated with `promtool` and `otelcol-contrib`, **not deployed** ([SLOs](docs/observability/SLOS.md)) |
 > | **Evaluation** | Versioned 18-scenario golden corpus, strict replay at the provider seams, regression comparison and an executable gate. Results are **simulator/replay runs with a scripted model provider only** — they validate the pipeline and safety invariants, not reasoning quality; LLM judges are not measured ([evaluation harness](docs/evaluation/EVALUATION_ARCHITECTURE.md#11-phase-11-implementation-status)) |
 > | **External integrations** | Native Prometheus, Loki, Kubernetes, Slack, Teams, PagerDuty, Jira and Grafana adapters behind the broker, validated against **local deterministic servers only** — no live vendor system has been exercised ([integrations](docs/architecture/integrations.md)) |
@@ -226,12 +226,24 @@ documents cover [authorization](docs/security/AUTHORIZATION.md),
 ```bash
 # One command, one machine-readable verdict (exit 0 = pass). CI uses --strict.
 python scripts/security_gate.py --strict --json security-verdict.json
+# Once production images have been built, release gates also pass both immutable image refs and:
+# --require-container-scan
 ```
 
 Production authentication is OIDC/JWKS only; the shared-secret development verifier is refused
-at startup when `ASIC_DEPLOYMENT_ENVIRONMENT=production`. Container scanning, TLS, encryption at
-rest and network policy are Phase 14 obligations and are **not** claimed as implemented. Nothing
-in this repository is a compliance certification.
+at startup when `ASIC_DEPLOYMENT_ENVIRONMENT=production`. Phase 14 adds non-root production images,
+mandatory image scanning/SBOM/provenance, default-deny Kubernetes policy, TLS ingress and distinct
+runtime/migration identities. Actual TLS termination, encryption at rest and remote production
+deployment are platform obligations and are **not** claimed as executed. Nothing here is a
+compliance certification.
+
+## Deployment
+
+Phase 14 provides digest-pinned backend/frontend Dockerfiles, Kustomize bases and local overlays,
+provider-neutral Terraform prerequisites, GitHub quality/release/deploy workflows, and a disposable
+kind smoke. Production assumes managed PostgreSQL/pgvector and platform-provisioned secrets; no cloud
+provider is fabricated. See the [deployment guide](docs/deployment/PHASE14_DEPLOYMENT.md) and
+[delivery architecture](docs/architecture/cicd-and-infrastructure.md).
 
 ## Roadmap
 
@@ -255,8 +267,8 @@ section O.
 | 10 | External integrations | **Complete** |
 | 11 | Evaluation harness, replay and regression framework | **Complete** |
 | 12 | OpenTelemetry, metrics, logs, dashboards and SLOs | **Complete** |
-| 13 | Security, RBAC, tenant isolation and supply-chain controls | **Implemented; pending independent review** |
-| 14 | CI/CD, Docker, Kubernetes and Terraform | Not started |
+| 13 | Security, RBAC, tenant isolation and supply-chain controls | **Complete** |
+| 14 | CI/CD, Docker, Kubernetes and Terraform | **Implemented; pending independent review** |
 | 15 | Load, resilience, chaos, security and E2E hardening | Not started — carries two named obligations from Phase 4: concurrency under a shared connection pool, and preemptible node execution |
 | 16 | Documentation, demo scenarios, portfolio evidence and production-readiness review | Not started |
 

@@ -291,7 +291,7 @@ STRIDE-derived, ordered by severity. Likelihood is qualitative and pre-mitigatio
 | Pinned dependencies with lockfiles; reproducible builds | **Implemented (Phase 13):** hash-pinned universal locks, ranges upper-bounded, prerelease allowlist, frontend integrity digests - [SUPPLY_CHAIN.md](SUPPLY_CHAIN.md) |
 | Dependency vulnerability scanning | **Executable locally (Phase 13)** via `scripts/security_gate.py` (`pip-audit`, `npm audit`); CI enforcement Phase 14 |
 | SAST | **Executable locally (Phase 13):** `ruff --select S` plus pinned-policy tests; CI enforcement Phase 14 |
-| Container image scanning; minimal base images; non-root | **Phase 14** - not executable until an image exists (reported `not_executable`, never as passed) |
+| Container image scanning; minimal base images; non-root | **Phase 14 implemented** - Trivy HIGH/CRITICAL policy over both final images; release requires `container_scan: passed` |
 | SBOM generation and image signing | Phase 14 |
 | Secret scanning | **Implemented (Phase 13):** gitleaks over history and tree with a narrowly scoped allowance; `check_repo_hygiene.py` pre-commit |
 | Third-party tool/MCP provider review | Before any provider is registered |

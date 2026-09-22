@@ -40,13 +40,13 @@ are Phase 14 obligations and are stated as such.
 | NFR-SEC-04 | Application role loses `DELETE`/`TRUNCATE`, write on `alembic_version` and on identity/authority/configuration tables; node authority model (F-08); capability inventory reviewed mechanically (`test_capability_authority.py`, `test_node_authority.py`) |
 | NFR-SEC-05 | No dynamic capability creation, no provider invoked outside the broker, reviewed closed set of free-text arguments |
 | NFR-SEC-06 | `SecretValue` typed redaction, credential-free request/response `repr`, name/shape backup, secret scanning of history and tree (`test_secrets_and_redaction.py`, `test_security_gate.py`). Redaction is not complete detection |
-| NFR-SEC-07 | Outbound TLS verified and HTTPS-only (OTLP/JWKS/connectors). **Inbound TLS and encryption at rest are not implemented here and not claimed** (Phase 14) |
+| NFR-SEC-07 | Outbound TLS verified and HTTPS-only; Phase 14 supplies a TLS Ingress contract. Actual termination and encryption at rest remain platform responsibilities and are not claimed executed |
 | NFR-SEC-08 | Denied state changes and tenant-wide reads are durable, attributed, tenant-bound audit records; authentication failures are structured logs (`test_security_audit.py`) |
 | NFR-SEC-09 | 128 KiB streamed body bound, JSON-only, control-character refusal (a NUL was a 500), bounded pagination/cursors, egress host policy, Loki level vocabulary, trace-id rule (`test_api_bounds.py`, `test_phase13_hardening.py`) |
 | NFR-SEC-10, NFR-SEC-11 | Adversarial payload set through the fence renderer and a live adapter/broker; menu, tenant, scope, tier, approvals, policy unchanged (`test_prompt_injection_phase13.py`) |
 | NFR-SEC-12 | Bounded per-principal and failed-auth limiters, limiter before database lookup, coalesced readiness, connect deadlines. Per-process only; shared limiter deferred to Phase 14/15 |
-| NFR-SEC-13 | `scripts/security_gate.py`: `pip-audit`, `npm audit`, `ruff --select S` plus policy tests, gitleaks, hash-locked dependency policy. Container scanning **not executable until a Phase 14 image exists** |
-| NFR-SEC-14 | Complete table classification, tenant policy schema with minimums and holds, dry-run planner; no deletion engine (`test_retention.py`). Owner-role lifecycle job is Phase 14 |
+| NFR-SEC-13 | `scripts/security_gate.py`: dependency/SAST/secret controls plus Phase 14 fail-closed Trivy scans of both built images; `--require-container-scan` is mandatory in release CI |
+| NFR-SEC-14 | Complete table classification, holds and dry-run planner; Phase 14 intentionally deploys no owner Job because a safe bounded deletion/receipt primitive does not exist |
 | NFR-SEC-15 | Connector binding composite `RESTRICT` FK; credential references only; per-call resolution; separate read/write credentials |
 
 ## Phase 12 implementation evidence
@@ -470,3 +470,14 @@ Confirmation that no numbered section stating a product requirement is unreprese
 
 Sections 1 and 24 are role and quality-bar statements governing how the project is run; they
 are traced to process rather than to product components.
+
+## Phase 14 delivery evidence mapping
+
+| V3 boundary | Implementation | Acceptance evidence |
+|---|---|---|
+| Sections 13, 18: reproducible builds | Root/frontend Dockerfiles, hash locks, standalone Next.js | Actual image builds; UID/runtime checks; Trivy final-image scans and bound SBOMs |
+| Sections 15, 18: release security | `scripts/security_gate.py`, pinned Actions/tools, release attestations | Required container scan; malformed/missing/wrong-image mutation tests; repository security suite |
+| Sections 11, 12, 18: deployment | Kustomize base/local overlays, migration Job, probes, network policies | Disposable kind migration/rollout/probes and failed-rollout recovery; Cilium denial probe |
+| Sections 16, 19: infrastructure ownership | Terraform namespace and tokenless identities; ADR-0031 | fmt/init/validate and local apply; no cloud or raw-secret state claims |
+| Sections 17, 18: quality/evaluation | Reusable quality workflow plus trusted release | Full pytest; golden 18-scenario simulator and strict replay; frontend and observability checks |
+| Sections 20, 24: truthful operating boundary | Deployment guide and CI/CD architecture | Remote production, TLS, cloud capacity and disaster recovery remain unmeasured |

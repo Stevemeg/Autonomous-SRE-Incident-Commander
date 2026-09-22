@@ -186,6 +186,12 @@ during implementation become ADRs rather than being made silently:
 |---|---|---|
 | [0030](./0030-security-boundary-consolidation.md) | Production authentication was a shared secret, permission names were spelled in four places, tenancy proof was a hand-picked list, the runtime role held grants no code used, and the lock/dependency policy was unverifiable | `tests/security/`, `tests/db/test_security_migration.py`, migration `0018_security_hardening`, `scripts/security_gate.py` |
 
+## Decisions raised by Phase 14
+
+| ADR | Discovered because | Evidence |
+|---|---|---|
+| [0031](./0031-production-delivery-boundary.md) | Deployable artifacts needed a cloud-neutral ownership split, immutable release identity, migration ordering and an honest boundary for nonexistent workers/retention execution | `Dockerfile`, `frontend/Dockerfile`, `.github/workflows/`, `deploy/kubernetes/`, `infra/terraform/platform/` |
+
 ## Candidate decisions still to be written
 
 Identified during the Architecture Package but not yet ADRs, because the evidence to decide
@@ -197,7 +203,7 @@ them does not exist. Recorded so the scope is visible.
 | C2 | ~~Integration simulator design and replay-fixture format~~ | 14 | **Replay-fixture format resolved by ADR-0028** |
 | C3 | Evaluation judge calibration approach | 9 | Judge strategy settled by ADR-0028; calibration needs a human-labelled set and a live judge provider |
 | C4 | Frontend scope and framework commitment beyond Next.js baseline | 13 | Deferred beyond Phase 9; ADR-0024 fixes the Phase 9 baseline |
-| C5 | Kubernetes deployment topology and Terraform module boundaries | 13, 16 | Phase 14 |
+| C5 | ~~Kubernetes deployment topology and Terraform module boundaries~~ | 13, 16 | **Resolved by ADR-0031** |
 | C6 | Embedding model selection and re-index strategy | 8 | Phase 6 — needs the retrieval evaluation set |
 | C7 | Weighted/graph alert correlation beyond deterministic v2 | 3, 4 | Later — requires an alert corpus and evaluation evidence |
 | C8 | Data-retention automation and partition management | 15 | Phase 13 |

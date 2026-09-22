@@ -22,6 +22,31 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added — Phase 14 CI/CD, Docker, Kubernetes and Terraform
+
+- Digest-pinned multi-stage backend and Next.js standalone images run as UID/GID 10001 and contain
+  only runtime dependencies/artifacts; simulator and test sources are excluded from production.
+- Trivy HIGH/CRITICAL scanning is now a mandatory fail-closed security-gate input. Final-image
+  CycloneDX SBOMs are checked for expected packages, and trusted GHCR releases receive GitHub OIDC
+  build-provenance attestations over immutable registry digests.
+- Kustomize defines the API/frontend, TLS Ingress contract, PDBs, probes, initial resources,
+  tokenless service accounts, hardened pod contexts, default-deny networking and a separate one-shot
+  Alembic migration Job. Local overlays add disposable PostgreSQL/pgvector only for smoke testing.
+- Provider-neutral Terraform owns only the namespace and three service-account prerequisites. No
+  cloud cluster or database is pretended; workload ownership remains with Kustomize.
+- GitHub Actions add least-privilege PR quality, trusted release and protected manual deployment
+  paths with pinned Actions/tools, timeouts, serialization, complete 18-scenario release evaluation,
+  build/scan/SBOM gates and local kind deployment validation.
+- ADR-0031 and the deployment guide document configuration/secrets, database-role separation,
+  migration ordering, dynamic-egress limits, rollback, remote-state/backup expectations and the
+  distinction between local validation and unexecuted remote production.
+
+### Deferred after Phase 14
+
+- A retention execution Job remains absent because no safe bounded deletion/receipt primitive exists.
+  Production TLS, cloud identity, managed database/PITR, scale/HA/DR and remote
+  deployment are not claimed. P13-SEC-05 and F-07/F-09/F-10/F-12/F-17 remain open.
+
 ### Added — Phase 13 security, RBAC, tenant isolation and supply-chain controls
 
 Nothing here is a compliance claim. Infrastructure controls (TLS, encryption at rest, network

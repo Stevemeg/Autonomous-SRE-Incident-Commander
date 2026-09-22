@@ -1,0 +1,2 @@
+kube_context = "kind-asic-phase14"
+namespace    = "asic-system"

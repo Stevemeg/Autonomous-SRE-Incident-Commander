@@ -96,11 +96,126 @@ class TestGateVerdict:
         assert by_name["container_scan"] == "not_executable"
         assert {v for k, v in by_name.items() if k != "container_scan"} == {"passed"}
         reason = next(c for c in verdict["checks"] if c["name"] == "container_scan")["detail"]  # type: ignore[index]
-        assert "NOT YET EXECUTABLE UNTIL PHASE 14 IMAGE EXISTS" in reason
+        assert "CONTAINER IMAGE NOT SUPPLIED" in reason
 
     def test_the_container_scan_can_be_made_mandatory_for_phase_14(self) -> None:
         verdict = gate.run_gate(context(clean_runner), require_container_scan=True)
         assert verdict["passed"] is False
+
+    def test_a_real_container_scan_satisfies_the_phase_14_requirement(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("ASIC_TRIVY", "trivy")
+
+        def runner(command: Sequence[str], cwd: Path, timeout: int) -> object:
+            assert command[-1] == "asic-backend:phase14-test"
+            return gate.CommandResult(
+                0,
+                json.dumps(
+                    {
+                        "ArtifactName": "asic-backend:phase14-test",
+                        "ArtifactType": "container_image",
+                        "Metadata": {"ImageID": "sha256:" + "a" * 64},
+                        "Results": [
+                            {"Target": "debian", "Class": "os-pkgs", "Vulnerabilities": None}
+                        ],
+                    }
+                ),
+                "",
+            )
+
+        verdict = gate.run_gate(
+            context(runner, container_images=("asic-backend:phase14-test",)),
+            only=["container_scan"],
+            require_container_scan=True,
+        )
+        assert verdict["passed"] is True
+        assert statuses(verdict)["container_scan"] == "passed"
+
+    def test_required_container_check_cannot_be_excluded(self) -> None:
+        verdict = gate.run_gate(
+            context(clean_runner), only=["dependency_lock"], require_container_scan=True
+        )
+        assert verdict["passed"] is False
+        assert statuses(verdict)["container_scan"] == "failed"
+
+    @pytest.mark.parametrize(
+        "mutation", ["wrong_image", "empty_target", "wrong_type", "empty_targets"]
+    )
+    def test_scanner_success_without_image_evidence_fails(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        mutation: str,
+    ) -> None:
+        monkeypatch.setenv("ASIC_TRIVY", "trivy")
+        report: dict[str, object] = {
+            "ArtifactName": "asic-backend:phase14-test",
+            "ArtifactType": "container_image",
+            "Metadata": {"ImageID": "sha256:" + "a" * 64},
+            "Results": [{"Target": "alpine", "Class": "os-pkgs"}],
+        }
+        if mutation == "wrong_image":
+            report["ArtifactName"] = "unrelated:phase14-test"
+        elif mutation == "wrong_type":
+            report["ArtifactType"] = "filesystem"
+        else:
+            report["Results"] = [{}] if mutation == "empty_target" else []
+        verdict = gate.run_gate(
+            context(
+                lambda *_args: gate.CommandResult(0, json.dumps(report), ""),
+                container_images=("asic-backend:phase14-test",),
+            ),
+            only=["container_scan"],
+            require_container_scan=True,
+        )
+        assert verdict["passed"] is False
+
+    @pytest.mark.parametrize(
+        ("result", "detail"),
+        [
+            (gate.CommandResult(0, "not json", ""), "not valid JSON"),
+            (
+                gate.CommandResult(0, json.dumps({"Metadata": {}, "Results": []}), ""),
+                "did not identify",
+            ),
+            (
+                gate.CommandResult(
+                    1,
+                    json.dumps(
+                        {
+                            "ArtifactName": "asic-backend:phase14-test",
+                            "ArtifactType": "container_image",
+                            "Metadata": {"ImageID": "sha256:" + "b" * 64},
+                            "Results": [
+                                {
+                                    "Target": "python",
+                                    "Class": "lang-pkgs",
+                                    "Vulnerabilities": [{"Severity": "HIGH"}],
+                                }
+                            ],
+                        }
+                    ),
+                    "",
+                ),
+                "blocking container vulnerabilities",
+            ),
+        ],
+    )
+    def test_container_scan_output_fails_closed(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        result: object,
+        detail: str,
+    ) -> None:
+        monkeypatch.setenv("ASIC_TRIVY", "trivy")
+        verdict = gate.run_gate(
+            context(lambda *_args: result, container_images=("asic-backend:phase14-test",)),
+            only=["container_scan"],
+            require_container_scan=True,
+        )
+        check = verdict["checks"][0]  # type: ignore[index]
+        assert verdict["passed"] is False
+        assert detail in check["detail"]  # type: ignore[index]
 
     def test_a_missing_scanner_fails_closed(self) -> None:
         def runner(command: Sequence[str], cwd: Path, timeout: int) -> object:
@@ -533,7 +648,7 @@ class TestSecretScanConfiguration:
 
         def scan() -> int:
             return subprocess.run(
-                ["docker", "run", "--rm", "-v", f"{tmp_path}:/repo", "zricethezav/gitleaks:latest",
+                ["docker", "run", "--rm", "-v", f"{tmp_path}:/repo", gate.GITLEAKS_IMAGE,
                  "dir", "/repo", "--config", "/repo/.gitleaks.toml", "--no-banner", "--redact"],
                 capture_output=True, check=False, env=env,
             ).returncode  # fmt: skip

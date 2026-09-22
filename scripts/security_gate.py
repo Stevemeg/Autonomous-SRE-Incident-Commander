@@ -9,9 +9,8 @@ pinned scanner - and it owns the one property that matters for a gate: **fail cl
   never ``passed``. Absence of evidence is not evidence of absence.
 * A check that legitimately cannot run here (no database URL, offline) is ``skipped`` with a
   stated reason; ``--strict`` (what CI must use) turns every skip into a failure.
-* Container scanning cannot run until Phase 14 produces an image. It is reported as
-  ``not_executable`` - never as passed - with the exact reason; ``--require-container-scan``
-  (Phase 14 flips this on) makes it failing.
+* Container scanning requires supplied production image references. No reference is
+  ``not_executable``, never passed; Phase 14 release paths require the check explicitly.
 
 Output: a JSON document on stdout (``--json PATH`` also writes it to a file) and a one-line
 summary per check on stderr. Exit code: 0 = every executed check passed (and, with
@@ -40,9 +39,14 @@ REPO: Final[Path] = Path(__file__).resolve().parent.parent
 PASSED, FAILED, SKIPPED, NOT_EXECUTABLE = "passed", "failed", "skipped", "not_executable"
 
 CONTAINER_REASON: Final[str] = (
-    "CONTAINER SCANNING NOT YET EXECUTABLE UNTIL PHASE 14 IMAGE EXISTS: no production image is "
-    "built in Phase 13, and scanning a placeholder image would be theatre. Phase 14 must run "
-    "this gate against the real image (see docs/security/SUPPLY_CHAIN.md, 'Container scanning')."
+    "CONTAINER IMAGE NOT SUPPLIED: provide --container-image for each production artifact. "
+    "Phase 14 releases must use --require-container-scan; absence is never a passed scan."
+)
+TRIVY_IMAGE: Final[str] = (
+    "aquasec/trivy@sha256:e2b22eac59c02003d8749f5b8d9bd073b62e30fefaef5b7c8371204e0a4b0c08"
+)
+GITLEAKS_IMAGE: Final[str] = (
+    "zricethezav/gitleaks@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f"
 )
 
 
@@ -89,6 +93,7 @@ class Context:
     offline: bool
     database_url: str | None
     timeout: int = 900
+    container_images: tuple[str, ...] = ()
 
 
 def _run(ctx: Context, command: Sequence[str], *, cwd: Path | None = None) -> CommandResult:
@@ -332,7 +337,7 @@ def _gitleaks_command(ctx: Context, mode: str) -> list[str] | None:
     if docker:
         mount = str(ctx.repo)
         return [
-            docker, "run", "--rm", "-v", f"{mount}:/repo", "zricethezav/gitleaks:latest",
+            docker, "run", "--rm", "-v", f"{mount}:/repo", GITLEAKS_IMAGE,
             mode, "/repo", "--config", "/repo/" + config, "--no-banner", "--redact",
         ]  # fmt: skip
     return None
@@ -372,7 +377,122 @@ def check_gitleaks_tree(ctx: Context) -> Check:
 
 
 def check_container_scan(ctx: Context) -> Check:
-    return Check("container_scan", NOT_EXECUTABLE, CONTAINER_REASON)
+    images = ctx.container_images
+    if not images:
+        configured = os.environ.get("ASIC_CONTAINER_IMAGES", "")
+        images = tuple(value.strip() for value in configured.split(",") if value.strip())
+    if not images:
+        return Check("container_scan", NOT_EXECUTABLE, CONTAINER_REASON)
+
+    explicit = os.environ.get("ASIC_TRIVY")
+    trivy = explicit or shutil.which("trivy")
+    docker = shutil.which("docker") if trivy is None else None
+    if trivy is None and docker is None:
+        return Check(
+            "container_scan",
+            FAILED,
+            "container images were supplied but neither trivy nor docker is available",
+        )
+
+    evidence: list[str] = []
+    for image in images:
+        if not re.fullmatch(
+            r"[a-z0-9][a-z0-9./:_-]*(?:@sha256:[0-9a-f]{64}|:phase14-[A-Za-z0-9_.-]+)",
+            image,
+        ):
+            return Check(
+                "container_scan",
+                FAILED,
+                f"container identity is mutable or unrecognised: {image}",
+            )
+        base = (
+            [trivy]
+            if trivy is not None
+            else [
+                docker or "docker",
+                "run",
+                "--rm",
+                "-v",
+                "/var/run/docker.sock:/var/run/docker.sock",
+                "-v",
+                "asic-trivy-cache:/root/.cache/trivy",
+                TRIVY_IMAGE,
+            ]
+        )
+        result = _run(
+            ctx,
+            [
+                *base,
+                "image",
+                "--quiet",
+                "--scanners",
+                "vuln",
+                "--severity",
+                "HIGH,CRITICAL",
+                "--exit-code",
+                "1",
+                "--format",
+                "json",
+                image,
+            ],
+        )
+        try:
+            report = json.loads(result.stdout)
+        except json.JSONDecodeError:
+            return Check(
+                "container_scan",
+                FAILED,
+                f"trivy output for {image} was not valid JSON",
+                evidence=_tail(result.stdout + result.stderr, 12),
+            )
+        if not isinstance(report, dict):
+            return Check("container_scan", FAILED, "trivy report must be an object")
+        metadata = report.get("Metadata", {})
+        results = report.get("Results")
+        if not isinstance(metadata, dict) or not metadata.get("ImageID"):
+            return Check(
+                "container_scan", FAILED, f"trivy did not identify the scanned image {image}"
+            )
+        if not isinstance(results, list) or not results:
+            return Check(
+                "container_scan",
+                FAILED,
+                f"trivy produced no analyzable targets for {image}",
+            )
+        if report.get("ArtifactName") != image or report.get("ArtifactType") != "container_image":
+            return Check("container_scan", FAILED, "trivy report identifies a different artifact")
+        if any(
+            not isinstance(target, dict)
+            or not target.get("Target")
+            or target.get("Class") not in {"os-pkgs", "lang-pkgs"}
+            or not isinstance(target.get("Vulnerabilities") or [], list)
+            for target in results
+        ):
+            return Check("container_scan", FAILED, "trivy produced malformed scan targets")
+        vulnerabilities = [
+            vulnerability
+            for target in results
+            if isinstance(target, dict)
+            for vulnerability in (target.get("Vulnerabilities") or [])
+        ]
+        if result.returncode != 0 or vulnerabilities:
+            severities: dict[str, int] = {}
+            for vulnerability in vulnerabilities:
+                severity = str(vulnerability.get("Severity", "UNKNOWN"))
+                severities[severity] = severities.get(severity, 0) + 1
+            return Check(
+                "container_scan",
+                FAILED,
+                f"blocking container vulnerabilities in {image}: {severities}",
+                evidence=_tail(result.stderr, 8),
+            )
+        evidence.append(f"{image} -> {metadata['ImageID']} ({len(results)} targets)")
+    return Check(
+        "container_scan",
+        PASSED,
+        "trivy found no HIGH or CRITICAL vulnerabilities in the production images",
+        evidence=evidence,
+    )
 
 
 CHECKS: Final[tuple[tuple[str, Callable[[Context], Check]], ...]] = (
@@ -411,6 +531,8 @@ def run_gate(
 ) -> dict[str, object]:
     selected = [(n, f) for n, f in CHECKS if (not only or n in only) and n not in skip]
     results = [_guard(name, ctx, body) for name, body in selected]
+    if require_container_scan and not any(check.name == "container_scan" for check in results):
+        results.append(Check("container_scan", FAILED, "required container check was excluded"))
     passed = evaluate(results, strict=ctx.strict, require_container_scan=require_container_scan)
     return {
         "gate": "phase13-security",
@@ -442,6 +564,12 @@ def main(argv: Sequence[str] | None = None, *, runner: Runner = subprocess_runne
     )
     parser.add_argument("--only", action="append", default=[], choices=[n for n, _ in CHECKS])
     parser.add_argument("--skip", action="append", default=[], choices=[n for n, _ in CHECKS])
+    parser.add_argument(
+        "--container-image",
+        action="append",
+        default=[],
+        help="production image reference to scan; repeat for backend/frontend",
+    )
     parser.add_argument("--json", type=Path, help="also write the JSON verdict to this path")
     parser.add_argument("--timeout", type=int, default=900)
     args = parser.parse_args(argv)
@@ -455,6 +583,7 @@ def main(argv: Sequence[str] | None = None, *, runner: Runner = subprocess_runne
         database_url=os.environ.get("ASIC_TEST_DATABASE_URL")
         or os.environ.get("ASIC_MIGRATION_DATABASE_URL"),
         timeout=args.timeout,
+        container_images=tuple(args.container_image),
     )
     verdict = run_gate(
         ctx, only=args.only, skip=args.skip, require_container_scan=args.require_container_scan

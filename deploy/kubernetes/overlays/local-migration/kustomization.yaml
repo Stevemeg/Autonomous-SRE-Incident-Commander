@@ -1,0 +1,31 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: asic-system
+resources:
+  - ../../migration
+  - local-network-policy.yaml
+secretGenerator:
+  - name: asic-migration-database
+    literals:
+      - url=postgresql+psycopg2://asic_owner@postgres:5432/asic
+generatorOptions:
+  disableNameSuffixHash: true
+images:
+  - name: ghcr.io/stevemeg/asic-backend
+    newName: asic-backend
+    newTag: phase14-local
+patches:
+  - target:
+      kind: NetworkPolicy
+      name: migration-egress
+    patch: |-
+      - op: add
+        path: /spec/egress/-
+        value:
+          to:
+            - podSelector:
+                matchLabels:
+                  app.kubernetes.io/name: postgres
+          ports:
+            - protocol: TCP
+              port: 5432

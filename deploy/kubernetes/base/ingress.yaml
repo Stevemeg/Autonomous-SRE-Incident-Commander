@@ -1,0 +1,27 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: asic
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts: [asic.example.invalid]
+      secretName: asic-tls
+  rules:
+    - host: asic.example.invalid
+      http:
+        paths:
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: asic-api
+                port:
+                  name: http
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: asic-frontend
+                port:
+                  name: http

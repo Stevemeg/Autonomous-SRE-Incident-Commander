@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: asic-runtime
+data:
+  ASIC_DEPLOYMENT_ENVIRONMENT: production
+  ASIC_AUTH_MODE: oidc_jwks
+  ASIC_API_HOST: 0.0.0.0
+  ASIC_API_PORT: "8000"
+  ASIC_LOG_LEVEL: INFO
+  ASIC_METRICS_ENABLED: "true"
+  ASIC_OIDC_ALGORITHMS: RS256,ES256
+  ASIC_SERVICE_NAME: asic-api
+  ASIC_OTEL_TRACES_EXPORTER: otlp
+  ASIC_API_BASE_URL: http://asic-api:8000/api/v1
+  # ASIC_JWT_ISSUER, ASIC_JWT_AUDIENCE and ASIC_OIDC_JWKS_URL are deliberately
+  # absent. A production overlay must supply all three; the pod fails closed otherwise.

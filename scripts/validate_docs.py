@@ -116,7 +116,7 @@ FORBIDDEN_PACKAGES = (
     "src/asic/vector",
     "web",
     "ui",
-    "terraform",  # Phase 14
+    "terraform",  # root-level duplicate; Phase 14 Terraform belongs under infra/terraform
     "charts",
 )
 
@@ -158,7 +158,7 @@ FORBIDDEN_IMPORTS = (
 )
 
 #: Frontend languages are permitted only below the Phase 9 dashboard tree.
-FORBIDDEN_EXTENSIONS = {".ts", ".tsx", ".jsx", ".vue", ".svelte", ".tf", ".go", ".java"}
+FORBIDDEN_EXTENSIONS = {".ts", ".tsx", ".jsx", ".vue", ".svelte", ".go", ".java"}
 
 #: Capability prefixes the read-only kernel may register. A write capability in the
 #: catalogue would mean a tool exists with no policy gate in front of it.
@@ -403,11 +403,12 @@ def check_responsibility_coverage(f: Findings) -> int:
 def check_phase_boundary(f: Findings) -> int:
     """Assert no later phase has started early.
 
-    Through Phase 13, the repository holds governed knowledge, bounded investigation,
+    Through Phase 14, the repository holds governed knowledge, bounded investigation,
     safety-gated remediation, authenticated API/dashboard surfaces, native external
     integrations behind the broker, the evaluation/replay harness, observability with SLO
     configuration, and security controls (OIDC verification, RBAC vocabulary, tenancy audit,
-    retention policy, supply-chain gates). Deployment (Phase 14) remains out of scope.
+    retention policy and supply-chain gates), plus the approved deployment boundary.
+    Phase 15 load, chaos, penetration and scale campaigns remain out of scope.
     """
     scanned = 0
 
@@ -427,6 +428,9 @@ def check_phase_boundary(f: Findings) -> int:
         if any(part in {"__pycache__", "node_modules", ".next"} for part in parts):
             continue
         scanned += 1
+
+        if path.suffix.lower() == ".tf" and parts[:2] != ("infra", "terraform"):
+            f.add("phase", f"{rel(path)}: Terraform belongs only below infra/terraform")
 
         if path.suffix.lower() in FORBIDDEN_EXTENSIONS and parts[0] != "frontend":
             f.add("phase", f"{rel(path)}: {path.suffix} files belong to a later phase")
@@ -624,7 +628,7 @@ def main() -> int:
     print(f"mermaid diagrams  : {blocks} checked")
     print(f"requirement IDs   : {defined} defined in SRS, {traced} referenced in matrix")
     print(f"spec section 4    : {responsibilities} responsibilities checked for disposition")
-    print(f"repository files  : {scanned} scanned against the Phase 13 boundary")
+    print(f"repository files  : {scanned} scanned against the Phase 14 boundary")
     print(f"safety invariants : {invariants} unique definitions checked")
     print()
 
@@ -633,7 +637,7 @@ def main() -> int:
         ("mermaid", "Mermaid structure"),
         ("traceability", "Requirement traceability"),
         ("coverage", "Specification coverage"),
-        ("phase", "Phase 13 scope boundary"),
+        ("phase", "Phase 14 scope boundary"),
         ("claims", "No unmeasured claims"),
         ("invariants", "Unique safety invariant IDs"),
     ]

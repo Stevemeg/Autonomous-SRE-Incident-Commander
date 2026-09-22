@@ -1,0 +1,17 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: asic-system
+resources:
+  - configmap.yaml
+  - backend-deployment.yaml
+  - backend-service.yaml
+  - frontend-deployment.yaml
+  - frontend-service.yaml
+  - ingress.yaml
+  - pdb.yaml
+  - network-policies.yaml
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: asic
+      app.kubernetes.io/managed-by: kustomize
+    includeSelectors: false

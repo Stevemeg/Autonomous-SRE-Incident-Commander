@@ -31,6 +31,11 @@ recorded with a reasoned, time-boxed exception; none is suppressed silently.
 
 ## 2. Prerelease policy
 
+Phase 14's `requirements/build-tools.lock` pins the editable-install build backend separately from
+runtime and development dependencies. CI installs it with `--require-hashes --no-deps`; these tools
+are not copied into the backend final image. The existing clean-install validator separately checks
+the declared metadata in an empty environment, so it intentionally does not replace lock validation.
+
 A prerelease may be locked only if `configs/security/supply-chain-policy.toml` names it with a
 reason, and an entry that matches no locked prerelease is itself an error (exceptions do not go
 stale). Current exceptions (both verified against the package index in Phase 13):
@@ -90,11 +95,18 @@ a genuine secret appended to the allowed line; `"match"` does not, and a test pl
 
 ## 6. Container scanning
 
-**CONTAINER SCANNING NOT YET EXECUTABLE UNTIL PHASE 14 IMAGE EXISTS.** V3 §15/§18 require it; no
-production image is built in Phase 13, and scanning a placeholder would be theatre. The gate reports
-`container_scan: not_executable` with that reason and never counts it as a pass. Phase 14 must build
-the real image, scan it (vulnerabilities, secrets, misconfiguration, non-root user, minimal base),
-generate an SBOM, sign it, and run the gate with `--require-container-scan`.
+Phase 14 builds the backend and frontend production images and scans the exact local artifacts with
+Trivy 0.67.2 before publication. `scripts/security_gate.py --strict --require-container-scan
+--container-image ...` rejects missing/mutable release identity, a missing scanner, non-JSON output,
+an absent image ID, an empty target list, or any HIGH/CRITICAL vulnerability. Findings block whether
+or not a fix is currently available. Temporary acceptance requires an explicit, reviewed,
+expiry-bearing policy change; there is no silent ignore file. Scanner-database unavailability fails
+closed.
+
+Trivy emits CycloneDX SBOMs from each final image. `scripts/validate_sbom.py` requires non-empty
+components, known final-stage packages and the actual final image ID, preventing an empty or wrong-image
+SBOM from satisfying the gate. Trusted releases retain SBOMs as artifacts and create GitHub OIDC provenance attestations
+for GHCR digests. PR images are neither published nor trusted-signature candidates.
 
 ## 7. The gate
 
@@ -108,6 +120,11 @@ must use) turns every skip into a failure. A pinned local `pip-audit` is used vi
 
 ## 8. Not covered
 
-SBOM generation, image signing and provenance, Dependabot-style automated update PRs, and
-verification of transitive *binaries* (promtool, otelcol, gitleaks images are pulled by tag today;
-Phase 14 should pin them by digest).
+Automated dependency-update PRs, a selected cloud registry/cluster identity, and independent
+third-party signer trust are not configured. The release/deploy workflows verify this repository's
+release provenance. Signing is exercised by GitHub
+only on a trusted tag/manual run; local work does not claim a trusted signature. Production image,
+Trivy, gitleaks, Terraform, PostgreSQL and kind-node images are digest-pinned. Existing observability
+tools are also digest-pinned: Prometheus 3.14.0 and Collector Contrib 0.161.0 in
+`scripts/check_observability.sh`. Gitleaks is pinned to 8.30.1, retaining support for the reviewed
+rule-specific allowances. Kind and actionlint binary downloads require exact SHA-256 checksums.

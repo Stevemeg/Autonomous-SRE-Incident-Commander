@@ -1,0 +1,110 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: asic-api
+spec:
+  replicas: 2
+  minReadySeconds: 10
+  progressDeadlineSeconds: 300
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: asic-api
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: asic-api
+        app.kubernetes.io/component: backend
+    spec:
+      serviceAccountName: asic-api
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: api
+          image: ghcr.io/stevemeg/asic-backend@sha256:0000000000000000000000000000000000000000000000000000000000000000
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef:
+                name: asic-runtime
+          env:
+            - name: ASIC_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: asic-runtime-database
+                  key: url
+            - name: ASIC_JWT_ISSUER
+              valueFrom:
+                configMapKeyRef:
+                  name: asic-runtime
+                  key: ASIC_JWT_ISSUER
+            - name: ASIC_JWT_AUDIENCE
+              valueFrom:
+                configMapKeyRef:
+                  name: asic-runtime
+                  key: ASIC_JWT_AUDIENCE
+            - name: ASIC_OIDC_JWKS_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: asic-runtime
+                  key: ASIC_OIDC_JWKS_URL
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              valueFrom:
+                configMapKeyRef:
+                  name: asic-runtime
+                  key: OTEL_EXPORTER_OTLP_ENDPOINT
+          ports:
+            - name: http
+              containerPort: 8000
+          livenessProbe:
+            httpGet:
+              path: /livez
+              port: http
+            initialDelaySeconds: 10
+            timeoutSeconds: 2
+            periodSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            initialDelaySeconds: 5
+            timeoutSeconds: 3
+            periodSeconds: 5
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: asic-api
+      terminationGracePeriodSeconds: 30
