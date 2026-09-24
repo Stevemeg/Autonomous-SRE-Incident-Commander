@@ -239,3 +239,17 @@ def test_actions_hygiene(name: str) -> None:
         for step in _steps(job):
             # Untrusted/dispatch values reach shell only through env, never interpolated.
             assert "${{" not in step.get("run", ""), (job_name, step.get("name"))
+
+
+def test_publish_binds_registry_identity_before_attesting() -> None:
+    steps = _steps(RELEASE["jobs"]["publish-attest"])
+    names = [step.get("name", step.get("uses", "")) for step in steps]
+    bind = names.index("Bind pushed registry digests to the scanned image identities")
+    push = names.index("Push the exact scanned images")
+    attest = next(i for i, n in enumerate(names) if n.startswith("actions/attest-build-provenance"))
+    assert push < bind < attest
+    script = steps[bind]["run"]
+    # Both registry shapes are handled; neither check is optional.
+    for token in ("application/vnd.oci.image.index.v1+json", ".config.digest", "RUNTIME_ARCH"):
+        assert token in script
+    assert "set -euo pipefail" in script

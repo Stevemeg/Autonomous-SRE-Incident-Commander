@@ -1,7 +1,10 @@
 """Behavior of the authoritative deployment sequence against a simulated cluster.
 
-The real sequence is also exercised end to end on disposable kind by deployment_smoke.py; these
-tests pin the ordering, fail-fast and smoke semantics deterministically (no cluster, no sleeps).
+The real sequence is also exercised end to end on disposable kind by deployment_smoke.py
+(including sequential redeployments); these tests pin the ordering, Job-slot, fail-fast and smoke
+semantics deterministically (no cluster, no sleeps). The fake enforces the Kubernetes rules that
+matter here: a Job's pod template is immutable, ``create`` refuses an existing name, and
+foreground deletion can take several polls.
 """
 
 from __future__ import annotations
@@ -11,26 +14,43 @@ import importlib.util
 import json
 import subprocess
 import sys
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from pathlib import Path
 from types import ModuleType
+from typing import Any
 
 import pytest
+import yaml
 from scripts import deploy_release
 from scripts.deploy_release import (
+    DeploymentError,
     Kubectl,
+    MigrationActive,
     MigrationFailed,
     RolloutFailed,
     SmokeFailed,
+    bounded,
     job_state,
     post_rollout_smoke,
     redact,
     run_deployment,
+    split_migration,
     wait_for_job,
 )
 
 REPO = Path(__file__).resolve().parents[2]
-MIGRATION = "kind: Job\nmetadata: {name: asic-migration}\n"
+
+
+def migration(command: str = "alembic upgrade head") -> str:
+    return (
+        "kind: Job\nmetadata: {name: asic-migration}\n"
+        f"spec:\n  template:\n    spec:\n      containers:\n        - name: migrate\n"
+        f"          command: [{command!r}]\n"
+        "---\nkind: NetworkPolicy\nmetadata: {name: migration-egress}\n"
+    )
+
+
+MIGRATION = migration()
 APPLICATION = (
     "kind: Deployment\nmetadata: {name: asic-api}\n---\n"
     "kind: Deployment\nmetadata: {name: asic-frontend}\n"
@@ -43,22 +63,44 @@ CONDITIONS = {
     ],
     "running": [],
 }
+NOT_FOUND = 'Error from server (NotFound): jobs.batch "asic-migration" not found'
+IMMUTABLE = (
+    'The Job "asic-migration" is invalid: spec.template: Invalid value: '
+    + '{"Spec":{"Containers":[' * 200
+    + "]}}: field is immutable"
+)
+
+
+def _template(content: str) -> str:
+    job = next(doc for doc in yaml.safe_load_all(content) if doc and doc["kind"] == "Job")
+    return yaml.safe_dump(job["spec"]["template"], sort_keys=True)
 
 
 class FakeCluster:
-    """Interprets the kubectl commands the orchestrator issues and records them."""
+    """Stateful model of the one migration Job plus the calls the orchestrator makes."""
 
     def __init__(
         self,
-        job_states: Sequence[str],
+        new_job_states: Sequence[str] = ("complete",),
         *,
+        previous: tuple[str, str] | None = None,
+        delete_polls: int = 0,
         failing_rollout: str | None = None,
         ready: int = 1,
+        fail: str | None = None,
     ) -> None:
-        self.job_states = list(job_states)
+        self.new_job_states = list(new_job_states)
+        self.job: dict[str, Any] | None = None
+        if previous:
+            state, content = previous
+            self.job = {"uid": "uid-old", "template": _template(content), "states": [state]}
+        self.delete_polls = delete_polls
         self.failing_rollout = failing_rollout
         self.ready = ready
+        self.fail = fail  # "get" | "delete" | "job-dry-run" | "create"
         self.calls: list[tuple[list[str], str | None]] = []
+        self.events: list[str] = []
+        self.created = 0
         self.now = 0.0
 
     def clock(self) -> float:
@@ -67,83 +109,163 @@ class FakeCluster:
     def sleep(self, seconds: float) -> None:
         self.now += seconds
 
+    def _result(
+        self, command: Sequence[str], out: str = "", code: int = 0, err: str = ""
+    ) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(list(command), code, out, err)
+
+    def _job_json(self) -> str:
+        assert self.job is not None
+        states = self.job["states"]
+        state = states.pop(0) if len(states) > 1 else states[0]
+        return json.dumps(
+            {"metadata": {"uid": self.job["uid"]}, "status": {"conditions": CONDITIONS[state]}}
+        )
+
     def __call__(
         self, command: Sequence[str], content: str | None, timeout: float
     ) -> subprocess.CompletedProcess[str]:
         args = list(command[3:])  # strip "kubectl -n <namespace>"
         self.calls.append((args, content))
-        out, code = "", 0
+        is_job = content is not None and "kind: Job" in content
+        dry = "--dry-run=server" in args
         if args[:2] == ["get", "job"]:
-            state = self.job_states.pop(0) if len(self.job_states) > 1 else self.job_states[0]
-            out = json.dumps({"status": {"conditions": CONDITIONS[state]}})
-        elif args[:2] == ["get", "pods"]:
-            out = json.dumps(
-                {
-                    "items": [
-                        {
-                            "metadata": {"name": "asic-migration-x"},
-                            "status": {
-                                "phase": "Failed",
-                                "containerStatuses": [
-                                    {
-                                        "name": "migrate",
-                                        "state": {"terminated": {"reason": "Error", "exitCode": 1}},
-                                    }
-                                ],
-                            },
-                        }
-                    ]
-                }
+            if self.fail == "get":
+                return self._result(command, code=1, err="Unauthorized")
+            if self.job is not None and "deleting" in self.job:
+                if self.job["deleting"] > 0:
+                    self.job["deleting"] -= 1
+                else:
+                    self.job = None
+                    self.events.append("old job gone")
+            if self.job is None:
+                return self._result(command, code=1, err=NOT_FOUND)
+            return self._result(command, self._job_json())
+        if args[:2] == ["delete", "job"]:
+            if self.fail == "delete":
+                return self._result(command, code=1, err="Forbidden: cannot delete jobs")
+            assert self.job is not None, "orchestrator deleted a Job that does not exist"
+            self.events.append("delete")
+            self.job["deleting"] = self.delete_polls
+            return self._result(command)
+        if args[0] in {"apply", "create"} and is_job:
+            if dry and self.fail == "job-dry-run":
+                return self._result(command, code=1, err="admission webhook denied the Job")
+            if self.job is not None:
+                if args[0] == "create" and not dry:
+                    return self._result(command, code=1, err="AlreadyExists")
+                if self.job["template"] != _template(content or ""):
+                    return self._result(command, code=1, err=IMMUTABLE)
+            if dry:
+                return self._result(command)
+            if self.fail == "create":
+                return self._result(command, code=1, err="quota exceeded")
+            self.created += 1
+            uid = f"uid-new-{self.created}"
+            self.events.append(f"create {uid}")
+            self.job = {
+                "uid": uid,
+                "template": _template(content or ""),
+                "states": list(self.new_job_states),
+            }
+            return self._result(command, uid)
+        if args[:2] == ["get", "pods"]:
+            return self._result(
+                command,
+                json.dumps(
+                    {
+                        "items": [
+                            {
+                                "metadata": {"name": "asic-migration-x"},
+                                "status": {
+                                    "phase": "Failed",
+                                    "containerStatuses": [
+                                        {
+                                            "name": "migrate",
+                                            "state": {
+                                                "terminated": {"reason": "Error", "exitCode": 1}
+                                            },
+                                        }
+                                    ],
+                                },
+                            }
+                        ]
+                    }
+                ),
             )
-        elif args[0] == "logs":
+        if args[0] == "logs":
             out = "\n".join(f"line {n}" for n in range(100)) + (
                 "\nFATAL: password authentication failed for "
                 "postgresql+psycopg2://owner:hunter2@db:5432/asic password=hunter2"
             )
-        elif args[0] == "rollout":
-            code = 1 if self.failing_rollout and self.failing_rollout in args[2] else 0
-        elif args[:2] == ["get", "endpointslices"]:
-            out = json.dumps(
-                {"items": [{"endpoints": [{"conditions": {"ready": True}}] * self.ready}]}
-            )
-        return subprocess.CompletedProcess(command, code, out, "rollout timed out" if code else "")
+            return self._result(command, out)
+        if args[0] == "rollout":
+            bad = bool(self.failing_rollout and self.failing_rollout in args[2])
+            return self._result(command, code=int(bad), err="rollout timed out" if bad else "")
+        if args[:2] == ["get", "endpointslices"]:
+            endpoints = [{"conditions": {"ready": True}}] * self.ready
+            return self._result(command, json.dumps({"items": [{"endpoints": endpoints}]}))
+        if args[0] == "apply" and not dry and content == APPLICATION:
+            self.events.append("application")
+        return self._result(command)
 
-    def applies(self) -> list[str]:
-        return [
-            "migration" if content == MIGRATION else "application"
-            for args, content in self.calls
-            if args[0] == "apply" and "--dry-run=server" not in args
-        ]
+    def kinds(self) -> list[str]:
+        """Mutating (non-dry-run) operations in order."""
+        out = []
+        for args, content in self.calls:
+            if "--dry-run=server" in args:
+                continue
+            if args[0] == "create":
+                out.append("create-job")
+            elif args[0] == "apply":
+                out.append("application" if content == APPLICATION else "supporting")
+            elif args[:2] == ["delete", "job"]:
+                out.append("delete-job")
+        return out
 
 
 def _deploy(
-    cluster: FakeCluster, smoke: object = None, module: ModuleType = deploy_release
-) -> object:
+    cluster: FakeCluster,
+    smoke: Callable[[Kubectl], None] | None = None,
+    module: ModuleType = deploy_release,
+    manifest: str = MIGRATION,
+    log: Callable[[str], None] = lambda _msg: None,
+) -> Any:
     kube = module.Kubectl("asic-system", runner=cluster)
-    original = module.wait_for_job
+    return module.run_deployment(
+        kube,
+        manifest,
+        APPLICATION,
+        smoke=smoke or (lambda _kube: None),
+        log=log,
+        clock=cluster.clock,
+        sleep=cluster.sleep,
+    )
 
-    def wait(kube_: Kubectl, **kwargs: float) -> object:
-        return original(kube_, clock=cluster.clock, sleep=cluster.sleep, **kwargs)
 
-    module.wait_for_job = wait  # type: ignore[attr-defined]
+def _mutant(tmp_path: Path, old: str, new: str) -> ModuleType:
+    source = (REPO / "scripts/deploy_release.py").read_text("utf-8")
+    assert source.count(old) == 1, old
+    path = tmp_path / "deploy_release_mutant.py"
+    path.write_text(source.replace(old, new), "utf-8")
+    spec = importlib.util.spec_from_file_location("deploy_release_mutant", path)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module  # dataclass annotation resolution needs the module
     try:
-        return module.run_deployment(
-            kube,
-            MIGRATION,
-            APPLICATION,
-            smoke=smoke or (lambda _kube: None),
-            log=lambda _msg: None,
-        )
+        spec.loader.exec_module(module)
     finally:
-        module.wait_for_job = original  # type: ignore[attr-defined]
+        del sys.modules[spec.name]
+    return module
 
 
+# ------------------------------------------------------------------ LOW-7 / LOW-8 behavior
 def test_failed_migration_stops_before_any_application_apply() -> None:
     cluster = FakeCluster(["running", "failed"])
     smoked: list[bool] = []
     with pytest.raises(MigrationFailed, match="NOT applied") as raised:
         _deploy(cluster, smoke=lambda _k: smoked.append(True))
-    assert cluster.applies() == ["migration"]
+    assert cluster.kinds() == ["supporting", "create-job"]
     assert not any(args[0] == "rollout" for args, _ in cluster.calls)
     assert not smoked
     # Fail-fast: detected on the second poll, not after the 600s deadline.
@@ -169,8 +291,8 @@ def test_successful_migration_rolls_out_then_smokes() -> None:
     cluster = FakeCluster(["running", "running", "complete"])
     smoked: list[bool] = []
     outcome = _deploy(cluster, smoke=lambda _k: smoked.append(True))
-    assert outcome.state == "complete"  # type: ignore[attr-defined]
-    assert cluster.applies() == ["migration", "application"]
+    assert outcome.state == "complete"
+    assert cluster.kinds() == ["supporting", "create-job", "application"]
     rollouts = [args[2] for args, _ in cluster.calls if args[0] == "rollout"]
     assert rollouts == ["deployment/asic-api", "deployment/asic-frontend"]
     assert smoked == [True]
@@ -187,12 +309,23 @@ def test_successful_migration_rolls_out_then_smokes() -> None:
 
 def test_hung_migration_times_out_without_rollout() -> None:
     cluster = FakeCluster(["running"])
-    kube = Kubectl("asic-system", runner=cluster)
-    outcome = wait_for_job(kube, timeout=30, interval=2, clock=cluster.clock, sleep=cluster.sleep)
+    _deploy_kube = Kubectl("asic-system", runner=cluster)
+    cluster.job = {"uid": "u", "template": "", "states": ["running"]}
+    outcome = wait_for_job(
+        _deploy_kube, timeout=30, interval=2, clock=cluster.clock, sleep=cluster.sleep
+    )
     assert outcome.state == "timeout"
     assert cluster.now == pytest.approx(30)
     with pytest.raises(MigrationFailed, match="migration timeout"):
         _deploy(FakeCluster(["running"]))
+
+
+def test_result_must_come_from_the_created_job() -> None:
+    cluster = FakeCluster(["running"])
+    kube = Kubectl("asic-system", runner=cluster)
+    cluster.job = {"uid": "someone-else", "template": "", "states": ["complete"]}
+    outcome = wait_for_job(kube, uid="uid-new-1", clock=cluster.clock, sleep=cluster.sleep)
+    assert outcome.state == "replaced"
 
 
 def test_failed_rollout_fails_the_deployment_and_skips_smoke() -> None:
@@ -203,6 +336,154 @@ def test_failed_rollout_fails_the_deployment_and_skips_smoke() -> None:
     assert not smoked
 
 
+# --------------------------------------------------------------- N-1: migration Job slot
+def test_absent_previous_job_proceeds_without_delete() -> None:
+    cluster = FakeCluster(["complete"])
+    _deploy(cluster)
+    assert "delete-job" not in cluster.kinds()
+    assert cluster.events == ["create uid-new-1", "application"]
+
+
+@pytest.mark.parametrize("previous_state", ["complete", "failed"])
+@pytest.mark.parametrize(
+    "changed", [False, True], ids=["same-template", "changed-template(new digest/command)"]
+)
+def test_terminal_previous_job_is_replaced(previous_state: str, changed: bool) -> None:
+    """The original N-1 defect: a lingering terminal Job must not block the next release."""
+    new = migration("alembic upgrade head --release-b") if changed else MIGRATION
+    cluster = FakeCluster(["complete"], previous=(previous_state, MIGRATION), delete_polls=2)
+    logs: list[str] = []
+    outcome = _deploy(cluster, manifest=new, log=logs.append)
+    assert outcome.state == "complete"
+    assert cluster.events == ["delete", "old job gone", "create uid-new-1", "application"]
+    assert cluster.kinds() == ["delete-job", "supporting", "create-job", "application"]
+    if previous_state == "failed":
+        # Earlier failure evidence is logged before the object is deleted.
+        assert any("previous failed migration evidence" in line for line in logs)
+
+
+def test_fix_forward_after_failed_migration_recovers() -> None:
+    cluster = FakeCluster(["failed"])
+    with pytest.raises(MigrationFailed):
+        _deploy(cluster, manifest=migration("broken"))
+    cluster.new_job_states = ["running", "complete"]
+    outcome = _deploy(cluster, manifest=migration("fixed"))
+    assert outcome.state == "complete"
+    assert cluster.events == [
+        "create uid-new-1",
+        "delete",
+        "old job gone",
+        "create uid-new-2",
+        "application",
+    ]
+
+
+def test_active_previous_job_fails_closed_and_is_left_running() -> None:
+    cluster = FakeCluster(["complete"], previous=("running", MIGRATION))
+    with pytest.raises(MigrationActive, match="still active"):
+        _deploy(cluster, manifest=migration("next release"))
+    assert cluster.job is not None and cluster.job["uid"] == "uid-old"
+    assert "deleting" not in cluster.job
+    assert cluster.kinds() == []  # no delete, no create, no supporting apply, no application
+
+
+def test_delete_waits_for_absence_before_creating_the_replacement() -> None:
+    cluster = FakeCluster(["complete"], previous=("complete", MIGRATION), delete_polls=5)
+    _deploy(cluster, manifest=migration("release-b"))
+    assert cluster.events.index("old job gone") < cluster.events.index("create uid-new-1")
+    assert cluster.now == pytest.approx(10)  # 5 polls x 2s, bounded
+
+
+def test_delete_timeout_fails_without_creating() -> None:
+    cluster = FakeCluster(["complete"], previous=("complete", MIGRATION), delete_polls=10_000)
+    with pytest.raises(DeploymentError, match="still exists 180s after deletion"):
+        _deploy(cluster, manifest=migration("release-b"))
+    assert cluster.created == 0 and "application" not in cluster.events
+    assert cluster.now == pytest.approx(180)
+
+
+@pytest.mark.parametrize(
+    ("fail", "previous", "match"),
+    [
+        ("get", None, "cannot inspect previous migration Job"),
+        ("delete", ("complete", MIGRATION), "Forbidden"),
+        ("job-dry-run", None, "admission webhook denied"),
+        ("create", None, "quota exceeded"),
+    ],
+)
+def test_slot_and_replacement_failures_stop_before_migration(
+    fail: str, previous: tuple[str, str] | None, match: str
+) -> None:
+    cluster = FakeCluster(["complete"], previous=previous, fail=fail)
+    with pytest.raises(DeploymentError, match=match):
+        _deploy(cluster, manifest=migration("release-b"))
+    assert cluster.created == 0
+    assert "application" not in cluster.events
+
+
+def test_split_migration_requires_exactly_one_migration_job() -> None:
+    job, supporting = split_migration(MIGRATION)
+    assert "kind: Job" in job and "NetworkPolicy" in supporting
+    with pytest.raises(DeploymentError):
+        split_migration("kind: NetworkPolicy\nmetadata: {name: x}\n")
+    with pytest.raises(DeploymentError):
+        split_migration(MIGRATION + "---\n" + MIGRATION)
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        # cleanup removed entirely
+        (
+            '    raw = kube.probe("get", "job", job, "-o", "json")\n'
+            "    if _not_found(raw):\n"
+            '        return "absent"\n',
+            '    return "absent"\n',
+        ),
+        # the original ordering: validate the new Job before clearing the old one
+        (
+            "    previous = clear_previous_migration(\n",
+            '    kube("apply", "--dry-run=server", "-f", "-", content=job_manifest)\n'
+            "    previous = clear_previous_migration(\n",
+        ),
+    ],
+    ids=["cleanup-removed", "validate-before-cleanup"],
+)
+def test_slot_mutations_recreate_the_immutable_field_regression(
+    tmp_path: Path, old: str, new: str
+) -> None:
+    mutant = _mutant(tmp_path, old, new)
+    cluster = FakeCluster(["complete"], previous=("complete", MIGRATION))
+    with pytest.raises(mutant.DeploymentError, match="field is immutable"):
+        _deploy(cluster, module=mutant, manifest=migration("release-b"))
+
+
+# ------------------------------------------------------------------ bounded diagnostics
+def test_bounded_errors_keep_the_cause_and_the_end() -> None:
+    message = IMMUTABLE + " trailing-noise" * 400 + " FINAL-LINE"
+    kept = bounded(message)
+    assert kept.startswith('The Job "asic-migration" is invalid')
+    assert "characters truncated" in kept and kept.endswith("FINAL-LINE")
+    assert len(kept) < 3200
+    assert bounded("short error") == "short error"
+
+
+def test_kubectl_error_preserves_immutable_cause_and_redacts() -> None:
+    canary = "postgresql+psycopg2://owner:CANARY-9931@db/asic password=CANARY-9931"
+    stderr = "cause: field is immutable " + canary + " noise" * 2000 + " " + canary
+
+    def runner(command: Sequence[str], content: str | None, timeout: float) -> Any:
+        return subprocess.CompletedProcess(list(command), 1, "", stderr)
+
+    with pytest.raises(DeploymentError) as raised:
+        Kubectl("asic-system", runner=runner)("apply", "-f", "-")
+    text = str(raised.value)
+    assert "field is immutable" in text
+    assert "CANARY-9931" not in text
+    assert "postgresql+psycopg2://***@db" in text and "password=***" in text
+
+
+# ------------------------------------------------------------------------ smoke semantics
 @pytest.mark.parametrize(
     ("statuses", "failure"),
     [
@@ -286,22 +567,12 @@ def test_redact_removes_credentials_only() -> None:
 def test_guard_mutation_is_detected(tmp_path: Path) -> None:
     """Non-vacuity: with the migration-success guard removed, a failed migration WOULD roll
     out the application, and the ordering assertion above would catch it."""
-    source = (REPO / "scripts/deploy_release.py").read_text("utf-8")
-    guard = 'if outcome.state != "complete":  # migration-success guard'
-    assert source.count(guard) == 1
-    mutant_path = tmp_path / "deploy_release_mutant.py"
-    mutant_path.write_text(source.replace(guard, "if False:"), "utf-8")
-    spec = importlib.util.spec_from_file_location("deploy_release_mutant", mutant_path)
-    assert spec and spec.loader
-    mutant = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = mutant  # dataclass annotation resolution needs the module
-    try:
-        spec.loader.exec_module(mutant)
-    finally:
-        del sys.modules[spec.name]
+    mutant = _mutant(
+        tmp_path, 'if outcome.state != "complete":  # migration-success guard', "if False:"
+    )
     cluster = FakeCluster(["failed"])
     _deploy(cluster, module=mutant)
-    assert cluster.applies() == ["migration", "application"]
+    assert cluster.kinds() == ["supporting", "create-job", "application"]
 
 
 def test_cli_exits_nonzero_on_failed_migration(
@@ -320,4 +591,23 @@ def test_cli_exits_nonzero_on_failed_migration(
     )
     assert code == 1
     assert "DEPLOYMENT FAILED" in capsys.readouterr().err
-    assert cluster.applies() == ["migration"]
+    assert cluster.kinds() == ["supporting", "create-job"]
+
+
+def test_cli_reports_an_active_migration_collision(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    (tmp_path / "m.yaml").write_text(MIGRATION, "utf-8")
+    (tmp_path / "a.yaml").write_text(APPLICATION, "utf-8")
+    cluster = FakeCluster(["complete"], previous=("running", MIGRATION))
+    monkeypatch.setattr(
+        deploy_release,
+        "Kubectl",
+        lambda namespace, kubeconfig: Kubectl(namespace, runner=cluster),
+    )
+    code = deploy_release.main(
+        ["--migration", str(tmp_path / "m.yaml"), "--application", str(tmp_path / "a.yaml")]
+    )
+    assert code == 1
+    assert "still active" in capsys.readouterr().err
+    assert cluster.kinds() == []

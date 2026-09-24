@@ -19,6 +19,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import urllib.request
 from pathlib import Path
@@ -26,10 +27,13 @@ from types import ModuleType
 
 import yaml
 from deploy_release import (
+    MIGRATION_JOB,
     Kubectl,
+    MigrationActive,
     MigrationFailed,
     SmokeFailed,
     http_status,
+    job_state,
     port_forward,
     post_rollout_smoke,
     ready_endpoints,
@@ -107,11 +111,172 @@ def recording(kube: Kubectl) -> tuple[Kubectl, list[tuple[list[str], str | None]
     return Kubectl(kube.namespace, kube.kubeconfig, kube.binary, runner), calls
 
 
+def job_created(calls: list[tuple[list[str], str | None]]) -> int:
+    """Number of migration Jobs the orchestrator actually created (not dry-run)."""
+    return sum(1 for args, _ in calls if "create" in args and "--dry-run=server" not in args)
+
+
+def job_deleted(calls: list[tuple[list[str], str | None]]) -> bool:
+    return any("delete" in args and "job" in args for args, _ in calls)
+
+
 def applied(calls: list[tuple[list[str], str | None]], manifest: str) -> bool:
     return any(
         "apply" in args and "--dry-run=server" not in args and content == manifest
         for args, content in calls
     )
+
+
+def migration_variant(migration: str, release: str, command: list[str] | None = None) -> str:
+    """Same migration manifest with a changed Job pod template (as a new release would have)."""
+    documents = [doc for doc in yaml.safe_load_all(migration) if doc]
+    for doc in documents:
+        if doc["kind"] == "Job":
+            template = doc["spec"]["template"]
+            template.setdefault("metadata", {}).setdefault("annotations", {})["asic/release"] = (
+                release
+            )
+            if command:
+                template["spec"]["containers"][0]["command"] = command
+    return yaml.safe_dump_all(documents, sort_keys=False)
+
+
+def job_uid_and_state(kube: Kubectl) -> tuple[str, str | None]:
+    job = json.loads(kube("get", "job", MIGRATION_JOB, "-o", "json"))
+    return job["metadata"]["uid"], job_state(job)
+
+
+def redeployment_matrix(kube: Kubectl, migration: str, application: str) -> dict[str, object]:
+    """N-1: a lingering terminal migration Job must never block the next release."""
+    python = "/usr/local/bin/python"
+    results: dict[str, object] = {}
+
+    def deploy(name: str, manifest: str) -> list[tuple[list[str], str | None]]:
+        recorder, calls = recording(kube)
+        begun = time.monotonic()
+        outcome = run_deployment(recorder, manifest, application, poll_interval=1)
+        uid, state = job_uid_and_state(kube)
+        results[name] = {
+            "seconds": round(time.monotonic() - begun, 1),
+            "migration": outcome.state,
+            "old_job_deleted": job_deleted(calls),
+            "job_uid": uid,
+            "job_state": state,
+            "smoke": "passed",
+        }
+        return calls
+
+    before, _ = job_uid_and_state(kube)
+    deploy("B_same_release_again", migration)
+    if job_uid_and_state(kube)[0] == before:
+        raise RuntimeError("same-release redeploy did not replace the terminal Job")
+    deploy("C_changed_template_over_complete_job", migration_variant(migration, "release-b"))
+
+    recorder, calls = recording(kube)
+    begun = time.monotonic()
+    try:
+        run_deployment(
+            recorder,
+            migration_variant(migration, "release-c", [python, "-c", "raise SystemExit(7)"]),
+            application,
+            poll_interval=1,
+        )
+    except MigrationFailed:
+        pass
+    else:
+        raise RuntimeError("failing migration C did not stop the deployment")
+    if applied(calls, application) or job_uid_and_state(kube)[1] != "failed":
+        raise RuntimeError("failed migration C applied the application or is not Failed")
+    results["D1_failed_migration_changed_template"] = {
+        "seconds": round(time.monotonic() - begun, 1),
+        "old_job_deleted": job_deleted(calls),
+        "application_applied": False,
+        "job_state": "failed",
+    }
+    deploy("D2_fix_forward_over_failed_job", migration_variant(migration, "release-d"))
+
+    # Delete-wait: hold the terminal Job with a finalizer; the replacement must not be created
+    # until Kubernetes has actually removed it.
+    kube(
+        "patch",
+        "job",
+        MIGRATION_JOB,
+        "--type=merge",
+        "-p",
+        '{"metadata":{"finalizers":["asic.smoke/hold"]}}',
+    )
+    released: list[float] = []
+
+    def release() -> None:
+        time.sleep(20)
+        released.append(time.monotonic())
+        kube(
+            "patch",
+            "job",
+            MIGRATION_JOB,
+            "--type=json",
+            "-p",
+            '[{"op":"remove","path":"/metadata/finalizers"}]',
+        )
+
+    holder = threading.Thread(target=release)
+    holder.start()
+    recorder, calls = recording(kube)
+    created_at: list[float] = []
+    inner = recorder.runner
+
+    def timed(command: object, content: str | None, timeout: float) -> object:
+        if "create" in command and "--dry-run=server" not in command:  # type: ignore[operator]
+            created_at.append(time.monotonic())
+        return inner(command, content, timeout)  # type: ignore[arg-type]
+
+    begun = time.monotonic()
+    run_deployment(
+        Kubectl(kube.namespace, kube.kubeconfig, kube.binary, timed),  # type: ignore[arg-type]
+        migration_variant(migration, "release-f"),
+        application,
+        poll_interval=1,
+    )
+    holder.join()
+    if not created_at or created_at[0] < released[0]:
+        raise RuntimeError("replacement Job was created before the old Job was gone")
+    results["F_delete_wait_with_finalizer"] = {
+        "seconds": round(time.monotonic() - begun, 1),
+        "created_after_release_seconds": round(created_at[0] - released[0], 1),
+    }
+
+    # Active collision: a still-running migration must never be deleted or duplicated.
+    kube("delete", "job", MIGRATION_JOB, "--cascade=foreground", "--wait=true", timeout=180)
+    active = next(
+        doc
+        for doc in yaml.safe_load_all(
+            migration_variant(migration, "active", [python, "-c", "import time; time.sleep(900)"])
+        )
+        if doc and doc["kind"] == "Job"
+    )
+    active_uid = kube(
+        "create", "-f", "-", "-o", "jsonpath={.metadata.uid}", content=yaml.safe_dump(active)
+    ).strip()
+    recorder, calls = recording(kube)
+    try:
+        run_deployment(recorder, migration_variant(migration, "release-e"), application)
+    except MigrationActive as error:
+        refusal = str(error)
+    else:
+        raise RuntimeError("deployment proceeded over an active migration")
+    uid, state = job_uid_and_state(kube)
+    if uid != active_uid or state is not None:
+        raise RuntimeError("active migration Job was deleted, replaced or stopped")
+    if job_deleted(calls) or job_created(calls) or applied(calls, application):
+        raise RuntimeError("deployment touched the active migration or applied the app")
+    results["E_active_migration_collision"] = {
+        "refused": refusal[:160],
+        "active_job_untouched": True,
+        "application_applied": False,
+    }
+    kube("delete", "job", MIGRATION_JOB, "--cascade=foreground", "--wait=true", timeout=180)
+    deploy("G_recovery_after_collision", migration_variant(migration, "release-g"))
+    return results
 
 
 def deployment_exists(kube: Kubectl, name: str) -> bool:
@@ -371,8 +536,8 @@ def main() -> int:
                 raise RuntimeError("failing migration did not stop the deployment")
             if failed_after >= FAST_FAILURE_SECONDS:
                 raise RuntimeError(f"migration failure took {failed_after:.0f}s to detect")
-            if not applied(calls, bad_migration):
-                raise RuntimeError("migration Job was never applied")
+            if job_created(calls) != 1:
+                raise RuntimeError("migration Job was never created")
             if applied(calls, application):
                 raise RuntimeError("application manifest was applied after a failed migration")
             job = json.loads(kube("get", "job", "asic-migration", "-o", "json"))
@@ -416,12 +581,13 @@ def main() -> int:
             recorder, calls = recording(kube)
             outcome = run_deployment(recorder, migration, application, poll_interval=1)
             order = [
-                "migration" if content == migration else "application"
+                "migration" if "create" in args_ else "application"
                 for args_, content in calls
-                if "apply" in args_ and "--dry-run=server" not in args_ and content
+                if "--dry-run=server" not in args_
+                and ("create" in args_ or ("apply" in args_ and content == application))
             ]
             if order != ["migration", "application"]:
-                raise RuntimeError(f"unexpected apply order: {order}")
+                raise RuntimeError(f"unexpected create/apply order: {order}")
             evidence["successful_migration_seconds"] = round(outcome.elapsed_seconds, 1)
             evidence["post_rollout_smoke"] = "passed_automatically"
 
@@ -622,6 +788,9 @@ def main() -> int:
             kube("rollout", "status", "deployment/asic-api", "--timeout=180s", timeout=240)
             post_rollout_smoke(kube)
             evidence["rollback"] = "passed"
+
+            step("Redeployment matrix on one cluster: repeat, new template, fail, fix-forward")
+            evidence["redeployment"] = redeployment_matrix(kube, migration, application)
 
             for image, expected in image_ids.items():
                 if (

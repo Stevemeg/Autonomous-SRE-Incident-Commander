@@ -40,7 +40,9 @@ build-validate   (contents: read; checkout without persisted credentials; no pac
 
 publish-attest   (packages/id-token/attestations: write; production environment; no checkout)
   download -> sha256sum --check against build outputs -> docker load -> image ID must match
-  push GHCR SHA tags -> registry manifest config digest must equal the scanned image ID
+  push GHCR SHA tags -> bind registry identity to the scanned image ID (single manifest: config
+  digest == image ID; OCI index/list: index digest == image ID or its single linux/amd64
+  runtime manifest's config == image ID; anything else fails)
   GitHub OIDC build-provenance attestation on the registry digests
   gh attestation verify --signer-workflow release.yml --source-ref <ref> --source-digest <sha>
 ```
@@ -61,7 +63,8 @@ failure, missing scanner, malformed report, missing image ID or an empty result 
 4. Patch `192.0.2.1/32` to the managed database egress CIDR. Route dynamic vendor egress through the
    approved DNS-aware gateway; do not add unrestricted internet egress.
 5. Patch hostname, ingress class, TLS secret and the two immutable image digests.
-6. Apply the migration Job and watch it to a terminal state; stop immediately if it fails.
+6. Free the migration Job slot (see below), create the new Job and watch it to a terminal state;
+   stop immediately if it fails.
 7. Only then apply the base and wait for both Deployment rollouts and readiness.
 8. Automatic post-rollout smoke: Service endpoints ready; API `/livez`, `/readyz` 200 and
    unauthenticated `/api/v1/incidents` 401; frontend `/livez`, `/readyz` 200. Optionally also check
@@ -124,6 +127,27 @@ identity; the generic protected kubeconfig fallback must be scoped and rotated b
 
 ## Rollback and failure handling
 
+### Migration Job lifecycle and redeployment
+
+The migration Job has a fixed name (`asic-migration`) and is kept for an hour after it finishes
+(`ttlSecondsAfterFinished: 3600`), while a Job's pod template is immutable. Every deployment
+therefore handles the previous Job explicitly before it validates the new one:
+
+| Previous `asic-migration` Job | Deployment behavior |
+|---|---|
+| absent | proceed |
+| `Complete` (any earlier release, same or different template) | log its UID/conditions, delete (foreground), wait up to 180 s until it is gone, then create the new Job |
+| `Failed` (e.g. a failed earlier release) | also log its bounded, redacted diagnostics, then delete and recreate as above: this is the fix-forward path |
+| active (no terminal condition) | **fail closed**: another migration may be running; it is not deleted, no second Job is created and nothing is applied |
+
+The new Job is validated with a server-side dry-run only after the old one is gone, then created with
+`kubectl create` (never adopted), and the watcher only accepts a result from the UID it created. If
+the old Job cannot be deleted in time (e.g. a stuck finalizer) the deployment fails without creating
+the replacement. Repeat deployments of the same release, new image digests and fix-forward releases
+after a failed migration all work without manual cleanup. If an active Job is reported and no other
+deployment is running, inspect it (`kubectl -n asic-system describe job asic-migration`) and let it
+finish or deliberately delete it; the workflow never does that for you.
+
 If migration fails, stop. The orchestrator detects the Job's `Failed` condition within one poll
 interval (2 s) rather than waiting for the 10-minute deadline, prints the Job conditions, pod
 termination reasons and a bounded, credential-redacted log tail, exits nonzero and never applies the
@@ -181,7 +205,12 @@ Terraform state and kubeconfig live in a temporary directory, destroyed with the
 - `CreateContainerConfigError`: one of the platform-created Secrets or required OIDC ConfigMap keys
   is absent. Do not replace it with a committed value.
 - Migration failed/timeout: the workflow log already contains the Job conditions, termination reason
-  and a redacted log tail. Check DB network policy/role; keep application rollout stopped.
+  and a redacted log tail. Check DB network policy/role; keep application rollout stopped. Fix
+  forward by re-dispatching a corrected release; the failed Job is replaced automatically.
+- `migration Job asic-migration is still active`: another migration is running (or stuck). Wait for it,
+  or inspect and deliberately remove it; the deploy workflow refuses to delete a running migration.
+- Long kubectl errors are shown as their first and last 1500 characters (redacted), so the cause
+  (e.g. `field is immutable`, `forbidden`) stays visible.
 - Frontend not ready but live: the frontend `/readyz` reports the API dependency; fix the API rather
   than restarting the frontend.
 - Pod rejected with `violates PodSecurity`: fix the workload security context. Do not relax the

@@ -5,12 +5,16 @@ This is the ONLY implementation of the ordering. The production workflow (deploy
 disposable-kind smoke (deployment_smoke.py) both call ``run_deployment``, so the ordering that is
 tested locally is the ordering that runs in production.
 
-1. server-side dry-run of both rendered manifests;
-2. replace the one-shot migration Job and watch it until Complete, Failed or timeout;
-3. on anything but Complete: record bounded, redacted diagnostics and stop (application manifests
-   are never applied);
-4. apply the application manifest and wait for every Deployment rollout;
-5. probe backend and frontend health plus an unauthenticated API refusal through the Services.
+1. server-side dry-run of the application manifest;
+2. clear the migration Job slot: a previous Job that is Complete/Failed is recorded and deleted
+   (foreground) and its absence is confirmed; an ACTIVE previous Job fails the deployment closed
+   and is never touched. Job pod templates are immutable, so the new Job is validated only after
+   the old one is gone;
+3. server-side dry-run, then ``create`` (never adopt) the new Job and bind to its UID;
+4. watch that Job until Complete, Failed or timeout; on anything but Complete record bounded,
+   redacted diagnostics and stop (application manifests are never applied);
+5. apply the application manifest and wait for every Deployment rollout;
+6. probe backend and frontend health plus an unauthenticated API refusal through the Services.
 
 A failed rollout or smoke exits nonzero. Nothing here ever downgrades the database.
 """
@@ -31,12 +35,16 @@ import urllib.request
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 import yaml
 
 MIGRATION_JOB = "asic-migration"
 LOG_TAIL_LINES = 40
 LOG_LIMIT_BYTES = 8000
+# kubectl errors keep their beginning (the cause, e.g. "field is immutable") and their end.
+ERROR_HEAD_CHARS = 1500
+ERROR_TAIL_CHARS = 1500
 # (service, port, [(path, expected status)]). 401 proves the API router and auth are serving
 # without needing a production credential for the smoke.
 SMOKE_CHECKS: tuple[tuple[str, int, tuple[tuple[str, int], ...]], ...] = (
@@ -55,6 +63,10 @@ class MigrationFailed(DeploymentError):
     """The migration Job reached Failed, or never completed within its deadline."""
 
 
+class MigrationActive(DeploymentError):
+    """A migration Job from another deployment is still running; it is never deleted."""
+
+
 class RolloutFailed(DeploymentError):
     """An application Deployment did not become available."""
 
@@ -66,6 +78,15 @@ class SmokeFailed(DeploymentError):
 def redact(text: str) -> str:
     """Strip URL credentials and ``key=value`` secrets from operator diagnostics."""
     return _SECRET_ASSIGNMENT.sub(r"\1=***", _USERINFO.sub(r"\1***@", text))
+
+
+def bounded(text: str, head: int = ERROR_HEAD_CHARS, tail: int = ERROR_TAIL_CHARS) -> str:
+    """Redact, then keep the first ``head`` and last ``tail`` characters of long output."""
+    text = redact(text)
+    if len(text) <= head + tail:
+        return text
+    omitted = len(text) - head - tail
+    return f"{text[:head]}\n...[{omitted} characters truncated]...\n{text[-tail:]}"
 
 
 Runner = Callable[[Sequence[str], str | None, float], "subprocess.CompletedProcess[str]"]
@@ -104,9 +125,7 @@ class Kubectl:
     def __call__(self, *args: str, content: str | None = None, timeout: float = 120) -> str:
         result = self.runner([*self.base(), *args], content, timeout)
         if result.returncode:
-            raise DeploymentError(
-                f"kubectl {' '.join(args[:2])} failed: {redact(result.stderr[-2000:])}"
-            )
+            raise DeploymentError(f"kubectl {' '.join(args[:2])} failed: {bounded(result.stderr)}")
         return result.stdout
 
     def probe(self, *args: str, timeout: float = 30) -> subprocess.CompletedProcess[str]:
@@ -180,21 +199,102 @@ def migration_diagnostics(kube: Kubectl, job: str = MIGRATION_JOB) -> str:
     return redact("\n".join(lines) or "no diagnostics available")
 
 
+def _not_found(result: subprocess.CompletedProcess[str]) -> bool:
+    return result.returncode != 0 and "NotFound" in result.stderr
+
+
+def _job_summary(job: dict[str, Any]) -> str:
+    status = job.get("status") or {}
+    conditions = ",".join(
+        f"{c.get('type')}={c.get('status')}" for c in status.get("conditions") or []
+    )
+    return f"uid={(job.get('metadata') or {}).get('uid')} conditions=[{conditions or 'none'}]"
+
+
+def clear_previous_migration(
+    kube: Kubectl,
+    job: str = MIGRATION_JOB,
+    *,
+    timeout: float = 180,
+    interval: float = 2,
+    clock: Callable[[], float] = time.monotonic,
+    sleep: Callable[[float], None] = time.sleep,
+    log: Callable[[str], None] = print,
+) -> str:
+    """Free the fixed Job name for this release, or fail closed.
+
+    Returns "absent", "complete" or "failed" (the previous Job's terminal state). A Job with no
+    terminal condition is ACTIVE: raise MigrationActive and leave it running.
+    """
+    raw = kube.probe("get", "job", job, "-o", "json")
+    if _not_found(raw):
+        return "absent"
+    if raw.returncode:
+        raise DeploymentError(f"cannot inspect previous migration Job: {bounded(raw.stderr)}")
+    previous = json.loads(raw.stdout)
+    state = job_state(previous)
+    summary = _job_summary(previous)
+    if state is None:
+        raise MigrationActive(
+            f"migration Job {job} is still active ({summary}); another deployment may be "
+            "migrating. Refusing to delete it or start a second migration."
+        )
+    uid = previous.get("metadata", {}).get("uid")
+    log(f"previous migration Job is terminal ({state}; {summary}); removing it for this release")
+    if state == "failed":
+        # Keep the earlier failure's evidence in this run's log before the object disappears.
+        log("previous failed migration evidence:\n" + migration_diagnostics(kube, job))
+    kube("delete", "job", job, "--cascade=foreground", "--wait=false", timeout=60)
+    started = clock()
+    while True:
+        raw = kube.probe("get", "job", job, "-o", "json")
+        if _not_found(raw):
+            return state
+        if raw.returncode == 0:
+            current = json.loads(raw.stdout)
+            if current.get("metadata", {}).get("uid") != uid:
+                raise MigrationActive(f"migration Job {job} was replaced during cleanup")
+        if clock() - started >= timeout:
+            raise DeploymentError(
+                f"previous migration Job {job} still exists {timeout:.0f}s after deletion "
+                "(finalizer or controller delay); the replacement was NOT created"
+            )
+        sleep(interval)
+
+
+def split_migration(manifest: str) -> tuple[str, str]:
+    """Separate the one migration Job from its supporting objects (policies, secrets)."""
+    documents = [doc for doc in yaml.safe_load_all(manifest) if isinstance(doc, dict)]
+    jobs = [doc for doc in documents if doc.get("kind") == "Job"]
+    if len(jobs) != 1 or jobs[0].get("metadata", {}).get("name") != MIGRATION_JOB:
+        raise DeploymentError(f"migration manifest must contain exactly one Job {MIGRATION_JOB}")
+    others = [doc for doc in documents if doc is not jobs[0]]
+    supporting = yaml.safe_dump_all(others, sort_keys=False) if others else ""
+    return yaml.safe_dump(jobs[0], sort_keys=False), supporting
+
+
 def wait_for_job(
     kube: Kubectl,
     job: str = MIGRATION_JOB,
     *,
+    uid: str | None = None,
     timeout: float = 600,
     interval: float = 2,
     clock: Callable[[], float] = time.monotonic,
     sleep: Callable[[float], None] = time.sleep,
 ) -> JobOutcome:
-    """Poll until the Job is Complete or Failed; a known failure never waits for the timeout."""
+    """Poll until the Job is Complete or Failed; a known failure never waits for the timeout.
+
+    With ``uid`` the result must come from that exact Job object, never a predecessor.
+    """
     started = clock()
     while True:
         raw = kube.probe("get", "job", job, "-o", "json")
-        state = job_state(json.loads(raw.stdout)) if raw.returncode == 0 else None
+        current = json.loads(raw.stdout) if raw.returncode == 0 else None
+        state = job_state(current) if current is not None else None
         elapsed = clock() - started
+        if current is not None and uid and current.get("metadata", {}).get("uid") != uid:
+            return JobOutcome("replaced", elapsed, f"Job {job} is no longer the one created")
         if state == "complete":
             return JobOutcome("complete", elapsed)
         if state == "failed":
@@ -306,23 +406,33 @@ def run_deployment(
     poll_interval: float = 2,
     smoke: Callable[[Kubectl], None] = post_rollout_smoke,
     log: Callable[[str], None] = print,
+    clock: Callable[[], float] = time.monotonic,
+    sleep: Callable[[float], None] = time.sleep,
 ) -> JobOutcome:
     """Run the one authoritative migrate-then-rollout sequence. Raises on any failure."""
-    kube("apply", "--dry-run=server", "-f", "-", content=migration)
+    job_manifest, supporting = split_migration(migration)
     kube("apply", "--dry-run=server", "-f", "-", content=application)
-    # Foreground cascade: old migration pods must be gone so diagnostics describe this run only.
-    kube(
-        "delete",
-        "job",
-        MIGRATION_JOB,
-        "--ignore-not-found",
-        "--cascade=foreground",
-        "--wait=true",
-        timeout=180,
+    if supporting:
+        kube("apply", "--dry-run=server", "-f", "-", content=supporting)
+    previous = clear_previous_migration(
+        kube, interval=poll_interval, clock=clock, sleep=sleep, log=log
     )
-    kube("apply", "-f", "-", content=migration)
-    log("migration Job applied; waiting for a terminal state")
-    outcome = wait_for_job(kube, timeout=migration_timeout, interval=poll_interval)
+    log(f"migration Job slot free (previous: {previous})")
+    # Validated only now: a Job pod template is immutable, so validating the new Job against a
+    # predecessor with the same name would fail on any template change.
+    kube("apply", "--dry-run=server", "-f", "-", content=job_manifest)
+    if supporting:
+        kube("apply", "-f", "-", content=supporting)
+    uid = kube("create", "-f", "-", "-o", "jsonpath={.metadata.uid}", content=job_manifest).strip()
+    log(f"migration Job created (uid={uid}); waiting for a terminal state")
+    outcome = wait_for_job(
+        kube,
+        uid=uid,
+        timeout=migration_timeout,
+        interval=poll_interval,
+        clock=clock,
+        sleep=sleep,
+    )
     log(f"migration {outcome.state} after {outcome.elapsed_seconds:.1f}s")
     if outcome.state != "complete":  # migration-success guard
         raise MigrationFailed(

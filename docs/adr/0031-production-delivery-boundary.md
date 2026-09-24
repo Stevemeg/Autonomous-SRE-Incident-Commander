@@ -23,13 +23,15 @@ the architecture:
 
 - Release is split by authority: an unprivileged `build-validate` job does all repository-controlled
   work and hands checksummed `docker save` archives to a `publish-attest` job that alone holds
-  `packages`/`id-token` write, has no checkout and never rebuilds. The pushed manifest's config digest
-  must equal the scanned image ID.
+  `packages`/`id-token` write, has no checkout and never rebuilds. Each pushed registry digest is bound to
+  the scanned image ID for both single-manifest and OCI-index registry shapes.
 - Deploy verifies attestation repository, signer workflow, source ref (`main` or `v*` tag), source
   revision and subject digest from certificate claims before any cluster credential exists; the
   kubeconfig is scoped to one step and removed afterwards.
 - One orchestrator (`scripts/deploy_release.py`) owns migrate -> guard -> rollout -> automatic smoke
-  for both the workflow and the kind smoke, and fails fast on a `Failed` migration Job.
+  for both the workflow and the kind smoke, and fails fast on a `Failed` migration Job. It replaces
+  a terminal previous migration Job before validating the new one (Job templates are immutable) and
+  refuses to touch an active one.
 - Terraform enforces Pod Security Admission `restricted` (pinned `v1.34`) on the namespace it owns.
 
 No production orchestration worker is shipped until there is a real durable worker entry point. No

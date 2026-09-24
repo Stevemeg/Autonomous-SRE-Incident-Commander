@@ -157,11 +157,8 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Push the exact scanned images and bind registry digests to the scanned image IDs
+      - name: Push the exact scanned images
         id: push
-        env:
-          BACKEND_IMAGE_ID: ${{ needs.build-validate.outputs.backend_image_id }}
-          FRONTEND_IMAGE_ID: ${{ needs.build-validate.outputs.frontend_image_id }}
         run: |
           owner="${GITHUB_REPOSITORY_OWNER,,}"
           for component in backend frontend; do
@@ -169,12 +166,53 @@ jobs:
             docker tag "asic-${component}:phase14-${GITHUB_SHA}" "${name}:${GITHUB_SHA}"
             docker push "${name}:${GITHUB_SHA}"
             digest=$(docker image inspect "${name}:${GITHUB_SHA}" | jq -er --arg repo "${name}@" '.[0].RepoDigests[] | select(startswith($repo)) | split("@")[1]')
-            config=$(docker buildx imagetools inspect --raw "${name}@${digest}" | jq -er '.config.digest')
-            expected_var="${component^^}_IMAGE_ID"
-            test "$config" = "${!expected_var}"
             echo "${component}_name=${name}" >>"$GITHUB_OUTPUT"
             echo "${component}_digest=${digest}" >>"$GITHUB_OUTPUT"
           done
+      # Identity binding (supports both registry shapes, never neither):
+      # - single image manifest (classic Docker store): its config digest is the local image ID;
+      # - OCI index / manifest list (containerd store): the local image ID IS the pushed index
+      #   digest, and the index must hold exactly one linux/amd64 runtime manifest (buildx
+      #   attestation manifests are platform unknown/unknown and are never selected).
+      # A registry digest that equals neither the scanned ID nor a manifest whose config is the
+      # scanned ID is rejected, so nothing but the build-validate image can be attested.
+      - name: Bind pushed registry digests to the scanned image identities
+        env:
+          BACKEND_REF: ${{ steps.push.outputs.backend_name }}@${{ steps.push.outputs.backend_digest }}
+          FRONTEND_REF: ${{ steps.push.outputs.frontend_name }}@${{ steps.push.outputs.frontend_digest }}
+          BACKEND_IMAGE_ID: ${{ needs.build-validate.outputs.backend_image_id }}
+          FRONTEND_IMAGE_ID: ${{ needs.build-validate.outputs.frontend_image_id }}
+          RUNTIME_OS: linux
+          RUNTIME_ARCH: amd64
+        run: |
+          set -euo pipefail
+          bind() {
+            local ref="$1" expected="$2" digest raw media runtime manifest config
+            digest="${ref##*@}"
+            [[ "$expected" =~ ^sha256:[0-9a-f]{64}$ && "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::$ref: malformed identity"; return 1; }
+            raw=$(docker buildx imagetools inspect --raw "$ref")
+            media=$(jq -er '.mediaType' <<<"$raw") || { echo "::error::$ref: manifest has no mediaType"; return 1; }
+            case "$media" in
+              application/vnd.oci.image.index.v1+json|application/vnd.docker.distribution.manifest.list.v2+json)
+                runtime=$(jq -er --arg os "$RUNTIME_OS" --arg arch "$RUNTIME_ARCH" '[.manifests[] | select(.platform.os == $os and .platform.architecture == $arch)] | if length == 1 then .[0].digest else error("expected exactly one runtime manifest, found \(length)") end' <<<"$raw") || { echo "::error::$ref: no unique $RUNTIME_OS/$RUNTIME_ARCH manifest"; return 1; }
+                manifest=$(docker buildx imagetools inspect --raw "${ref%@*}@${runtime}")
+                ;;
+              application/vnd.oci.image.manifest.v1+json|application/vnd.docker.distribution.manifest.v2+json)
+                manifest="$raw"
+                ;;
+              *)
+                echo "::error::$ref: unsupported manifest type $media"; return 1
+                ;;
+            esac
+            config=$(jq -er '.config.digest' <<<"$manifest") || { echo "::error::$ref: runtime manifest has no config"; return 1; }
+            if [[ "$config" == "$expected" || "$digest" == "$expected" ]]; then
+              echo "$ref bound to scanned image $expected ($media, config $config)"
+            else
+              echo "::error::$ref is not the scanned image $expected (config $config)"; return 1
+            fi
+          }
+          bind "$BACKEND_REF" "$BACKEND_IMAGE_ID"
+          bind "$FRONTEND_REF" "$FRONTEND_IMAGE_ID"
       - uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a
         with:
           subject-name: ${{ steps.push.outputs.backend_name }}

@@ -41,12 +41,27 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   migration ordering, dynamic-egress limits, rollback, remote-state/backup expectations and the
   distinction between local validation and unexecuted remote production.
 
+### Fixed — Phase 14 repeatable redeployment (re-review N-1, N-2)
+
+- Redeployment no longer fails with `field is immutable` while a previous `asic-migration` Job is
+  retained (TTL 3600 s). The orchestrator frees the Job name first: a `Complete`/`Failed` Job is
+  recorded (a failed one with its bounded diagnostics), deleted and confirmed absent within 180 s;
+  an active Job fails the deployment closed and is never deleted. The new Job is validated after the
+  old one is gone, created (never adopted) and tracked by UID. Verified on kind with sequential
+  same-release, changed-template, failed and fix-forward deployments, a finalizer-delayed delete and
+  an active-migration collision.
+- The publish job's identity binding supports OCI indexes (containerd image store) as well as single
+  manifests: the index digest or its single `linux/amd64` runtime manifest's config must equal the
+  scanned image ID; anything else fails closed.
+- Long kubectl errors keep their first and last 1500 characters (redacted) instead of only the tail,
+  so causes such as `field is immutable` remain visible.
+
 ### Changed — Phase 14 post-audit hardening (eight LOW findings)
 
 - Release privilege split: `build-validate` (read-only token, no persisted checkout credential) builds
   once, tests, scans, SBOMs and kind-deploys, then hands checksummed image archives to
   `publish-attest`, which alone holds `packages`/`id-token` write, runs no repository code, verifies
-  checksums and image IDs, and binds the registry config digest to the scanned image ID.
+  checksums and image IDs, and binds the registry digest to the scanned image ID.
 - Deploy now verifies each attestation's repository, `release.yml` signer, `main`/`v*` source ref,
   source revision (new required `release_commit` input) and subject digest from certificate claims.
   The kubeconfig exists only inside the one deployment step (0600, removed on exit and in `always()`).

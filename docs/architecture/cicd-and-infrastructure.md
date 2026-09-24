@@ -139,9 +139,15 @@ depends on the reusable quality workflow. It is split by authority:
   image ID as job outputs.
 - `publish-attest` (only `packages`, `id-token` and `attestations: write`, protected environment) has
   no checkout and runs no repository code or build. It downloads the archives, checks them against
-  the recorded checksums, loads them, checks the image IDs, pushes the SHA tags, requires the pushed
-  manifest's config digest to equal the scanned image ID, attests the registry digests and verifies
-  the attestations (source ref and revision included).
+  the recorded checksums, loads them, checks the image IDs, pushes the SHA tags, binds each registry
+  digest to the scanned image ID, attests the registry digests and verifies the attestations (source
+  ref and revision included). The binding supports both registry shapes the Docker image stores
+  produce: a single manifest (classic store) must have config digest == scanned image ID; an OCI
+  index or manifest list (containerd store, where the local image ID is the index digest) must have
+  index digest == scanned image ID, or its single `linux/amd64` runtime manifest's config == scanned
+  image ID. Buildx attestation manifests (`unknown/unknown`) are never selected; a missing or
+  ambiguous runtime manifest, unknown media type or mismatch fails closed. The logic is inline in
+  the workflow (no checkout) and its exact shell is exercised by tests against fixtures.
 
 `deploy.yml` is manual, main-only and serialized with `cancel-in-progress: false`. It takes two image
 digests and the release commit. With no cluster credential present, it validates inputs, verifies
@@ -160,6 +166,13 @@ Scanner absence/output corruption, security/evaluation failure, migration failur
 failure, Terraform validation failure or rollout timeout returns non-zero and prevents dependent
 jobs. Logs are structured stdout/stderr; metrics and OTLP are configured for platform collectors.
 The base deploys no duplicate observability stack.
+
+Before creating the migration Job the orchestrator frees its fixed name: a terminal
+(`Complete`/`Failed`) Job from an earlier release is recorded and deleted, and its absence confirmed
+within 180 s; an active one fails the deployment closed and is left untouched. Only then is the new
+Job (whose pod template is immutable) dry-run validated and created; results are accepted only from
+the created UID. This makes same-release redeploys, new digests and fix-forward after a failed
+migration repeatable.
 
 The migration watcher polls Job conditions and returns as soon as `Failed`/`FailureTarget` or
 `Complete` appears, so a failed migration stops in seconds, not after the 10-minute deadline. It
