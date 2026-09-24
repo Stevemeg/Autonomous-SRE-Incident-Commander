@@ -154,7 +154,14 @@ def redeployment_matrix(kube: Kubectl, migration: str, application: str) -> dict
     def deploy(name: str, manifest: str) -> list[tuple[list[str], str | None]]:
         recorder, calls = recording(kube)
         begun = time.monotonic()
-        outcome = run_deployment(recorder, manifest, application, poll_interval=1)
+        logs: list[str] = []
+        outcome = run_deployment(
+            recorder,
+            manifest,
+            application_variant(application, name),
+            poll_interval=1,
+            log=lambda line: (logs.append(line), print(line, flush=True)),
+        )
         uid, state = job_uid_and_state(kube)
         results[name] = {
             "seconds": round(time.monotonic() - begun, 1),
@@ -162,6 +169,8 @@ def redeployment_matrix(kube: Kubectl, migration: str, application: str) -> dict
             "old_job_deleted": job_deleted(calls),
             "job_uid": uid,
             "job_state": state,
+            "api_rolled": True,
+            "smoke_retries": sum("not converged yet" in line for line in logs),
             "smoke": "passed",
         }
         return calls
@@ -276,7 +285,85 @@ def redeployment_matrix(kube: Kubectl, migration: str, application: str) -> dict
     }
     kube("delete", "job", MIGRATION_JOB, "--cascade=foreground", "--wait=true", timeout=180)
     deploy("G_recovery_after_collision", migration_variant(migration, "release-g"))
+
+    # LOW-2: our migration Job deleted externally while the watcher waits on its UID.
+    def delete_soon(command: object, content: str | None, timeout: float) -> object:
+        result = kube.runner(command, content, timeout)  # type: ignore[arg-type]
+        if "create" in command and "--dry-run=server" not in command:  # type: ignore[operator]
+            threading.Timer(
+                5,
+                lambda: kube.probe("delete", "job", MIGRATION_JOB, "--cascade=foreground"),
+            ).start()
+        return result
+
+    begun = time.monotonic()
+    try:
+        run_deployment(
+            Kubectl(kube.namespace, kube.kubeconfig, kube.binary, delete_soon),  # type: ignore[arg-type]
+            migration_variant(
+                migration, "release-j", [python, "-c", "import time; time.sleep(900)"]
+            ),
+            application,
+            poll_interval=1,
+        )
+    except MigrationFailed as error:
+        if "migration disappeared" not in str(error):
+            raise
+    else:
+        raise RuntimeError("deleted migration Job did not fail the deployment")
+    vanished_after = round(time.monotonic() - begun, 1)
+    if vanished_after > 30:
+        raise RuntimeError(f"deleted Job detected only after {vanished_after}s")
+    results["J_job_deleted_mid_wait"] = {"failed_after_seconds": vanished_after}
+
+    # M-1 non-vacuity: a release whose API never becomes ready must still fail the smoke after
+    # the bounded convergence allowance (rollout passes because readiness is pointed at /livez).
+    broken = [doc for doc in yaml.safe_load_all(application_variant(application, "broken")) if doc]
+    for doc in broken:
+        if doc["kind"] == "Secret" and doc["metadata"]["name"] == "asic-runtime-database":
+            doc.pop("stringData", None)
+            doc["data"] = {
+                "url": base64.b64encode(
+                    b"postgresql+psycopg2://asic_nobody@postgres:5432/asic"
+                ).decode("ascii")
+            }
+        if doc["kind"] == "Deployment" and doc["metadata"]["name"] == "asic-api":
+            doc["spec"]["template"]["spec"]["containers"][0]["readinessProbe"]["httpGet"][
+                "path"
+            ] = "/livez"
+    begun = time.monotonic()
+    try:
+        run_deployment(
+            kube,
+            migration_variant(migration, "release-k"),
+            yaml.safe_dump_all(broken, sort_keys=False),
+            poll_interval=1,
+        )
+    except SmokeFailed as error:
+        if "did not converge within" not in str(error):
+            raise
+        failure = str(error).splitlines()[0][:200]
+    else:
+        raise RuntimeError("never-ready API release passed the post-rollout smoke")
+    results["K_api_never_ready"] = {
+        "failed_after_seconds": round(time.monotonic() - begun, 1),
+        "failure": failure,
+    }
+    deploy("L_recovery_after_broken_release", migration_variant(migration, "release-l"))
     return results
+
+
+def application_variant(application: str, release: str) -> str:
+    """Same application with a changed asic-api pod template, so every redeploy rolls the API
+    (old pods terminate while new ones become ready: the M-1 convergence window)."""
+    documents = [doc for doc in yaml.safe_load_all(application) if doc]
+    for doc in documents:
+        if doc["kind"] == "Deployment" and doc["metadata"]["name"] == "asic-api":
+            template = doc["spec"]["template"]
+            template.setdefault("metadata", {}).setdefault("annotations", {})["asic/release"] = (
+                release
+            )
+    return yaml.safe_dump_all(documents, sort_keys=False)
 
 
 def deployment_exists(kube: Kubectl, name: str) -> bool:

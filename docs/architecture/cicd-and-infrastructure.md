@@ -179,8 +179,10 @@ The migration watcher polls Job conditions and returns as soon as `Failed`/`Fail
 prints bounded, credential-redacted diagnostics (conditions, pod termination reasons, a 40-line log
 tail). After rollout the orchestrator runs an automatic smoke through `kubectl port-forward` (no
 NetworkPolicy exception, no public DNS/TLS): Service endpoints ready, API `/livez` and `/readyz` 200,
-unauthenticated `/api/v1/incidents` 401, frontend `/livez` and `/readyz` 200. Any failure fails the
-workflow.
+unauthenticated `/api/v1/incidents` 401, frontend `/livez` and `/readyz` 200. Checks for each service
+are retried as a unit within a bounded 60 s convergence allowance (rollout completion does not mean
+old pods and endpoints have settled); anything still failing at the deadline fails the workflow. A
+created migration Job that disappears mid-wait fails the deployment immediately.
 
 Rollout or smoke failure stops deployment. A compatible prior-image rollback is an explicit operator action;
 the local smoke exercises Deployment rollback. Database migration is not reversed automatically.

@@ -67,8 +67,13 @@ failure, missing scanner, malformed report, missing image ID or an empty result 
    stop immediately if it fails.
 7. Only then apply the base and wait for both Deployment rollouts and readiness.
 8. Automatic post-rollout smoke: Service endpoints ready; API `/livez`, `/readyz` 200 and
-   unauthenticated `/api/v1/incidents` 401; frontend `/livez`, `/readyz` 200. Optionally also check
-   `/metrics` and one authenticated read-only path with an operator credential.
+   unauthenticated `/api/v1/incidents` 401; frontend `/livez`, `/readyz` 200. Each service's checks
+   are retried as a unit (2 s interval, 5 s per request) within a 60 s **deployment convergence
+   allowance** (`--smoke-deadline`), because `rollout status` returns while old API pods are still
+   terminating and endpoints are settling, and the frontend's `/readyz` legitimately reports the API
+   as briefly unavailable. The allowance tolerates convergence only: a release whose checks do not
+   all pass by the deadline fails, with the last (redacted) error. Optionally also check `/metrics`
+   and one authenticated read-only path with an operator credential.
 9. Record deployed image digests, release commit, migration revision and validation output.
 
 The manual `production-deploy` workflow enforces steps 6-8 through `scripts/deploy_release.py`, the
@@ -138,6 +143,7 @@ therefore handles the previous Job explicitly before it validates the new one:
 | absent | proceed |
 | `Complete` (any earlier release, same or different template) | log its UID/conditions, delete (foreground), wait up to 180 s until it is gone, then create the new Job |
 | `Failed` (e.g. a failed earlier release) | also log its bounded, redacted diagnostics, then delete and recreate as above: this is the fix-forward path |
+| already being deleted (`deletionTimestamp`, no terminal condition) | do not delete; wait (180 s bound) for that deletion to finish, then proceed |
 | active (no terminal condition) | **fail closed**: another migration may be running; it is not deleted, no second Job is created and nothing is applied |
 
 The new Job is validated with a server-side dry-run only after the old one is gone, then created with
@@ -151,7 +157,10 @@ finish or deliberately delete it; the workflow never does that for you.
 If migration fails, stop. The orchestrator detects the Job's `Failed` condition within one poll
 interval (2 s) rather than waiting for the 10-minute deadline, prints the Job conditions, pod
 termination reasons and a bounded, credential-redacted log tail, exits nonzero and never applies the
-application manifests. A migration that neither completes nor fails within 10 minutes is a failure.
+application manifests. A migration that neither completes nor fails within 10 minutes is a failure. If the Job this
+deployment created is deleted (by anyone) before it finishes, or replaced by a different UID, the
+deployment fails immediately instead of waiting for the deadline; transient API errors while
+polling are retried.
 Do not start or describe the application as degraded-success against an unknown schema.
 
 If the post-rollout smoke fails, the workflow fails; the new pods may already be serving, so treat it
@@ -209,8 +218,14 @@ Terraform state and kubeconfig live in a temporary directory, destroyed with the
   forward by re-dispatching a corrected release; the failed Job is replaced automatically.
 - `migration Job asic-migration is still active`: another migration is running (or stuck). Wait for it,
   or inspect and deliberately remove it; the deploy workflow refuses to delete a running migration.
-- Long kubectl errors are shown as their first and last 1500 characters (redacted), so the cause
-  (e.g. `field is immutable`, `forbidden`) stays visible.
+- Long kubectl errors are shown as their first and last 1500 characters, so the cause (e.g.
+  `field is immutable`, `forbidden`) stays visible. Redaction runs first and replaces credential
+  values (keeping the field name) in DSNs (`scheme://user:***@host`, including `DATABASE_URL=`),
+  `key=value`/`key: value`/JSON forms of password, secret, token, api-key and access-key keys (e.g.
+  `PGPASSWORD`), `Authorization: Bearer|Basic|Token`, and `--password`/`--token`-style flags. It is a
+  defensive filter, not a guarantee; do not print secrets into migration output.
+- `<service> did not converge within 60s`: the new release never passed its checks during the
+  convergence allowance; the message carries the last failing check. Treat it as a failed rollout.
 - Frontend not ready but live: the frontend `/readyz` reports the API dependency; fix the API rather
   than restarting the frontend.
 - Pod rejected with `violates PodSecurity`: fix the workload security context. Do not relax the

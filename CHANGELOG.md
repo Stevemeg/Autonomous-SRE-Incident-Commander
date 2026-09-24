@@ -41,6 +41,20 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   migration ordering, dynamic-egress limits, rollback, remote-state/backup expectations and the
   distinction between local validation and unexecuted remote production.
 
+### Fixed — Phase 14 deployment convergence and diagnostics (closure review M-1, LOW-1, LOW-2)
+
+- The post-rollout smoke no longer reports healthy releases as failed while the API rollout
+  converges (old pods terminating, endpoints settling). Each service's checks are retried as a unit
+  within a bounded 60 s convergence allowance (2 s interval, 5 s per request); anything still failing
+  at the deadline fails the deployment with the last redacted error. Readiness semantics are
+  unchanged. Verified on kind with repeated API-rolling redeployments and a never-ready release.
+- Diagnostic redaction also covers `PGPASSWORD`/`api_key`-style assignments, JSON and YAML
+  `password` values, `Authorization: Bearer|Basic|Token`, and `--password`-style flags, keeping the
+  field name and leaving ordinary prose intact.
+- A migration Job created by this deployment that is deleted before finishing now fails the
+  deployment immediately instead of after the 10-minute deadline. A kubectl call that times out is
+  reported as a deployment error rather than a traceback.
+
 ### Fixed — Phase 14 repeatable redeployment (re-review N-1, N-2)
 
 - Redeployment no longer fails with `field is immutable` while a previous `asic-migration` Job is

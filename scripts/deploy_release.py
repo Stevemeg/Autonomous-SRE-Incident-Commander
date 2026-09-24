@@ -7,14 +7,15 @@ tested locally is the ordering that runs in production.
 
 1. server-side dry-run of the application manifest;
 2. clear the migration Job slot: a previous Job that is Complete/Failed is recorded and deleted
-   (foreground) and its absence is confirmed; an ACTIVE previous Job fails the deployment closed
-   and is never touched. Job pod templates are immutable, so the new Job is validated only after
+   (foreground) and its absence is confirmed; one already being deleted is only waited for; an
+   ACTIVE previous Job fails the deployment closed and is never touched. Job pod templates are immutable, so the new Job is validated only after
    the old one is gone;
 3. server-side dry-run, then ``create`` (never adopt) the new Job and bind to its UID;
-4. watch that Job until Complete, Failed or timeout; on anything but Complete record bounded,
-   redacted diagnostics and stop (application manifests are never applied);
+4. watch that Job until Complete, Failed, timeout, or it is replaced/deleted; on anything but
+   Complete record bounded, redacted diagnostics and stop (application manifests never applied);
 5. apply the application manifest and wait for every Deployment rollout;
-6. probe backend and frontend health plus an unauthenticated API refusal through the Services.
+6. probe backend and frontend health plus an unauthenticated API refusal through the Services,
+   retrying within a bounded convergence allowance (rollout completion is not endpoint settling).
 
 A failed rollout or smoke exits nonzero. Nothing here ever downgrades the database.
 """
@@ -42,6 +43,14 @@ import yaml
 MIGRATION_JOB = "asic-migration"
 LOG_TAIL_LINES = 40
 LOG_LIMIT_BYTES = 8000
+# Deployment convergence allowance for the post-rollout smoke: `rollout status` returns when the
+# new pods are available, but old pods may still be terminating and Service endpoints/port-forward
+# targets are still settling, so a dependent readiness check (frontend -> API) can briefly fail on a
+# healthy release. Checks are retried until they all pass or this deadline expires (then the
+# deployment fails). Measured convergence on kind is a few seconds; this is not an app timeout.
+SMOKE_DEADLINE_SECONDS = 60
+SMOKE_RETRY_INTERVAL_SECONDS = 2
+SMOKE_REQUEST_TIMEOUT_SECONDS = 5
 # kubectl errors keep their beginning (the cause, e.g. "field is immutable") and their end.
 ERROR_HEAD_CHARS = 1500
 ERROR_TAIL_CHARS = 1500
@@ -51,8 +60,34 @@ SMOKE_CHECKS: tuple[tuple[str, int, tuple[tuple[str, int], ...]], ...] = (
     ("asic-api", 8000, (("/livez", 200), ("/readyz", 200), ("/api/v1/incidents", 401))),
     ("asic-frontend", 3000, (("/livez", 200), ("/readyz", 200))),
 )
-_USERINFO = re.compile(r"(?i)([a-z][a-z0-9+.-]*://)[^/\s@]+@")
-_SECRET_ASSIGNMENT = re.compile(r"(?i)\b(password|passwd|pwd|secret|token)=\S+")
+# Deployment diagnostics come from kubectl, Postgres, containers and HTTP clients. These rules
+# redact credential VALUES in the forms those tools print while keeping the field name, so the
+# diagnostic stays useful. They are defensive, not a universal secret detector.
+_SECRET_KEY = r"[\w.-]*(?:password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key)"
+_REDACTIONS: tuple[tuple[re.Pattern[str], str], ...] = (
+    # scheme://user:password@host -> scheme://***@host (DSNs, also inside DATABASE_URL=...)
+    (re.compile(r"(?i)([a-z][a-z0-9+.-]*://)[^/\s@]+@"), r"\1***@"),
+    # Authorization: Bearer|Basic|Token <credential>
+    (
+        re.compile(
+            r"(?i)(\bauthorization[\"']?\s*[:=]\s*[\"']?(?:bearer|basic|token)\s+)[^\s\"',;]+"
+        ),
+        r"\1***",
+    ),
+    # --password secret / --password=secret / --api-key "secret"
+    (
+        re.compile(
+            r"(?i)(--(?:password|passwd|token|secret|api[_-]?key|access[_-]?key)(?:=|\s+))"
+            r"(?:\"[^\"]*\"|'[^']*'|\S+)"
+        ),
+        r"\1***",
+    ),
+    # key=value, key: value, "key": "value", PGPASSWORD="value", api_key=value
+    (
+        re.compile(rf"(?i)(\b{_SECRET_KEY}[\"']?\s*[:=]\s*)(?:\"[^\"]*\"|'[^']*'|[^\s,;&}}\]]+)"),
+        r"\1***",
+    ),
+)
 
 
 class DeploymentError(RuntimeError):
@@ -76,8 +111,10 @@ class SmokeFailed(DeploymentError):
 
 
 def redact(text: str) -> str:
-    """Strip URL credentials and ``key=value`` secrets from operator diagnostics."""
-    return _SECRET_ASSIGNMENT.sub(r"\1=***", _USERINFO.sub(r"\1***@", text))
+    """Replace credential values (DSN passwords, key/value secrets, bearer tokens, CLI flags)."""
+    for pattern, replacement in _REDACTIONS:
+        text = pattern.sub(replacement, text)
+    return text
 
 
 def bounded(text: str, head: int = ERROR_HEAD_CHARS, tail: int = ERROR_TAIL_CHARS) -> str:
@@ -123,7 +160,12 @@ class Kubectl:
         return [*command, "-n", self.namespace]
 
     def __call__(self, *args: str, content: str | None = None, timeout: float = 120) -> str:
-        result = self.runner([*self.base(), *args], content, timeout)
+        try:
+            result = self.runner([*self.base(), *args], content, timeout)
+        except subprocess.TimeoutExpired as error:
+            raise DeploymentError(
+                f"kubectl {' '.join(args[:2])} timed out after {timeout:.0f}s"
+            ) from error
         if result.returncode:
             raise DeploymentError(f"kubectl {' '.join(args[:2])} failed: {bounded(result.stderr)}")
         return result.stdout
@@ -138,7 +180,7 @@ class Kubectl:
 
 @dataclass(frozen=True)
 class JobOutcome:
-    state: str  # "complete" | "failed" | "timeout"
+    state: str  # "complete" | "failed" | "timeout" | "replaced" | "disappeared"
     elapsed_seconds: float
     diagnostics: str = ""
 
@@ -223,8 +265,9 @@ def clear_previous_migration(
 ) -> str:
     """Free the fixed Job name for this release, or fail closed.
 
-    Returns "absent", "complete" or "failed" (the previous Job's terminal state). A Job with no
-    terminal condition is ACTIVE: raise MigrationActive and leave it running.
+    Returns "absent", "complete", "failed" (the previous Job's terminal state) or "deleting" (it
+    was already being deleted by someone else; we only wait). A Job with no terminal condition and
+    no deletionTimestamp is ACTIVE: raise MigrationActive and leave it running.
     """
     raw = kube.probe("get", "job", job, "-o", "json")
     if _not_found(raw):
@@ -234,17 +277,26 @@ def clear_previous_migration(
     previous = json.loads(raw.stdout)
     state = job_state(previous)
     summary = _job_summary(previous)
-    if state is None:
+    uid = previous.get("metadata", {}).get("uid")
+    terminating = bool(previous.get("metadata", {}).get("deletionTimestamp"))
+    if state is None and not terminating:
         raise MigrationActive(
             f"migration Job {job} is still active ({summary}); another deployment may be "
             "migrating. Refusing to delete it or start a second migration."
         )
-    uid = previous.get("metadata", {}).get("uid")
-    log(f"previous migration Job is terminal ({state}; {summary}); removing it for this release")
-    if state == "failed":
-        # Keep the earlier failure's evidence in this run's log before the object disappears.
-        log("previous failed migration evidence:\n" + migration_diagnostics(kube, job))
-    kube("delete", "job", job, "--cascade=foreground", "--wait=false", timeout=60)
+    if state is None:
+        # Already being deleted by someone else (e.g. an interrupted deployment): it can never
+        # complete, so wait for that deletion to finish. We never issue a delete for it.
+        state = "deleting"
+        log(f"previous migration Job is already being deleted ({summary}); waiting for it to go")
+    else:
+        log(
+            f"previous migration Job is terminal ({state}; {summary}); removing it for this release"
+        )
+        if state == "failed":
+            # Keep the earlier failure's evidence in this run's log before the object disappears.
+            log("previous failed migration evidence:\n" + migration_diagnostics(kube, job))
+        kube("delete", "job", job, "--cascade=foreground", "--wait=false", timeout=60)
     started = clock()
     while True:
         raw = kube.probe("get", "job", job, "-o", "json")
@@ -285,7 +337,9 @@ def wait_for_job(
 ) -> JobOutcome:
     """Poll until the Job is Complete or Failed; a known failure never waits for the timeout.
 
-    With ``uid`` the result must come from that exact Job object, never a predecessor.
+    With ``uid`` the result must come from that exact Job object, never a predecessor, and the
+    Job vanishing before a terminal condition is itself terminal ("disappeared"). Other kubectl
+    errors (API unavailable, timeouts) are transient and polled until ``timeout``.
     """
     started = clock()
     while True:
@@ -293,12 +347,22 @@ def wait_for_job(
         current = json.loads(raw.stdout) if raw.returncode == 0 else None
         state = job_state(current) if current is not None else None
         elapsed = clock() - started
+        if uid and _not_found(raw):
+            return JobOutcome(
+                "disappeared", elapsed, f"Job {job} (uid={uid}) was deleted before finishing"
+            )
         if current is not None and uid and current.get("metadata", {}).get("uid") != uid:
             return JobOutcome("replaced", elapsed, f"Job {job} is no longer the one created")
         if state == "complete":
             return JobOutcome("complete", elapsed)
         if state == "failed":
             return JobOutcome("failed", elapsed, migration_diagnostics(kube, job))
+        if uid and current is not None and current.get("metadata", {}).get("deletionTimestamp"):
+            # Being deleted (e.g. foreground cascade while pods terminate): it can no longer
+            # complete, so treat it like a vanished Job instead of waiting out the grace period.
+            return JobOutcome(
+                "disappeared", elapsed, f"Job {job} (uid={uid}) is being deleted before finishing"
+            )
         if elapsed >= timeout:
             return JobOutcome("timeout", elapsed, migration_diagnostics(kube, job))
         sleep(min(interval, max(timeout - elapsed, 0)))
@@ -312,7 +376,7 @@ def deployments_in(manifest: str) -> list[str]:
     ]
 
 
-def http_status(url: str, timeout: float = 5) -> int:
+def http_status(url: str, timeout: float = SMOKE_REQUEST_TIMEOUT_SECONDS) -> int:
     request = urllib.request.Request(url, headers={"accept": "application/json"})
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
@@ -377,23 +441,88 @@ def ready_endpoints(kube: Kubectl, service: str) -> int:
 Forwarder = Callable[[Kubectl, str, int], contextlib.AbstractContextManager[int]]
 
 
+def converge(
+    name: str,
+    attempt: Callable[[], None],
+    *,
+    deadline: float = SMOKE_DEADLINE_SECONDS,
+    interval: float = SMOKE_RETRY_INTERVAL_SECONDS,
+    clock: Callable[[], float] = time.monotonic,
+    sleep: Callable[[float], None] = time.sleep,
+    log: Callable[[str], None] = print,
+) -> int:
+    """Run ``attempt`` until it stops raising SmokeFailed or ``deadline`` expires.
+
+    Returns the number of attempts used. Only SmokeFailed is retried (any other error is a real
+    failure); the last failure is reported, redacted, when the deadline expires.
+    """
+    started = clock()
+    attempts = 0
+    while True:
+        attempts += 1
+        try:
+            attempt()
+        except SmokeFailed as error:
+            elapsed = clock() - started
+            if elapsed >= deadline:
+                raise SmokeFailed(
+                    f"{name} did not converge within {deadline:.0f}s after {attempts} attempts; "
+                    f"last error: {bounded(str(error))}"
+                ) from error
+            log(
+                f"smoke {name} not converged yet (attempt {attempts}, {elapsed:.1f}s): "
+                f"{bounded(str(error))}"
+            )
+            sleep(min(interval, max(deadline - elapsed, 0)))
+            continue
+        if attempts > 1:
+            log(f"smoke {name} converged after {attempts} attempts ({clock() - started:.1f}s)")
+        return attempts
+
+
 def post_rollout_smoke(
     kube: Kubectl,
     *,
     forward: Forwarder = port_forward,
     fetch: Callable[[str], int] = http_status,
     log: Callable[[str], None] = print,
+    deadline: float = SMOKE_DEADLINE_SECONDS,
+    interval: float = SMOKE_RETRY_INTERVAL_SECONDS,
+    clock: Callable[[], float] = time.monotonic,
+    sleep: Callable[[float], None] = time.sleep,
 ) -> None:
-    """Every check must pass or the deployment fails. No credential is used."""
+    """Every check must pass within the convergence allowance or the deployment fails.
+
+    Each service is checked as a unit (ready endpoints, then every path through one fresh
+    port-forward) and retried as a unit, so a forward bound to a terminating pod is replaced.
+    No credential is used.
+    """
     for service, port, checks in SMOKE_CHECKS:
-        if ready_endpoints(kube, service) < 1:
-            raise SmokeFailed(f"service {service} has no ready endpoints")
-        with forward(kube, f"svc/{service}", port) as local_port:
+
+        def attempt(service: str = service, port: int = port, checks: tuple = checks) -> None:  # type: ignore[type-arg]
+            try:
+                ready = ready_endpoints(kube, service)
+            except DeploymentError as error:  # transient API error: retry within the allowance
+                raise SmokeFailed(f"service {service} endpoints unavailable: {error}") from error
+            if ready < 1:
+                raise SmokeFailed(f"service {service} has no ready endpoints")
+            with forward(kube, f"svc/{service}", port) as local_port:
+                for path, expected in checks:
+                    status = fetch(f"http://127.0.0.1:{local_port}{path}")
+                    if status != expected:
+                        raise SmokeFailed(f"{service}{path}: expected {expected}, got {status}")
             for path, expected in checks:
-                status = fetch(f"http://127.0.0.1:{local_port}{path}")
-                if status != expected:
-                    raise SmokeFailed(f"{service}{path}: expected {expected}, got {status}")
-                log(f"smoke {service}{path}: {status}")
+                log(f"smoke {service}{path}: {expected}")
+
+        converge(
+            service,
+            attempt,
+            deadline=deadline,
+            interval=interval,
+            clock=clock,
+            sleep=sleep,
+            log=log,
+        )
 
 
 def run_deployment(
@@ -465,6 +594,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--application", type=Path, required=True)
     parser.add_argument("--migration-timeout", type=float, default=600)
     parser.add_argument("--rollout-timeout", type=float, default=600)
+    parser.add_argument(
+        "--smoke-deadline",
+        type=float,
+        default=SMOKE_DEADLINE_SECONDS,
+        help="deployment convergence allowance for the post-rollout smoke (seconds)",
+    )
     args = parser.parse_args(argv)
     kube = Kubectl(args.namespace, args.kubeconfig)
     try:
@@ -474,6 +609,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.application.read_text("utf-8"),
             migration_timeout=args.migration_timeout,
             rollout_timeout=args.rollout_timeout,
+            smoke=lambda kube_: post_rollout_smoke(kube_, deadline=args.smoke_deadline),
         )
     except DeploymentError as error:
         print(f"DEPLOYMENT FAILED: {error}", file=sys.stderr)
