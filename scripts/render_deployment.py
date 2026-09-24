@@ -19,6 +19,21 @@ from urllib.parse import urlsplit
 import yaml
 
 REPO = Path(__file__).resolve().parents[1]
+FULL_SPACE = (ipaddress.ip_network("0.0.0.0/0"), ipaddress.ip_network("::/0"))
+
+
+def _reject_unrestricted_union(cidrs: list[object]) -> None:
+    """Refuse a CIDR set whose effective union is an entire address family.
+
+    Each prefix may look narrow (``0.0.0.0/1`` + ``128.0.0.0/1``), so coverage is judged on
+    the collapsed union per address family, not entry by entry.
+    """
+    networks = [ipaddress.ip_network(str(cidr), strict=True) for cidr in cidrs]
+    for family in FULL_SPACE:
+        members = [net for net in networks if net.version == family.version]
+        collapsed = list(ipaddress.collapse_addresses(members))  # type: ignore[arg-type]
+        if collapsed == [family]:
+            raise ValueError(f"CIDR set collectively permits unrestricted egress ({family})")
 
 
 def validate(config: dict[str, object], backend: str, frontend: str) -> None:
@@ -81,6 +96,9 @@ def validate(config: dict[str, object], backend: str, frontend: str) -> None:
             or str(network).startswith("192.0.2.")
         ):
             raise ValueError("unrestricted or placeholder CIDR is not deployable")
+    # Each egress rule is its own port scope: the database CIDR (5432) and HTTPS set (443).
+    _reject_unrestricted_union([config["db_cidr"]])
+    _reject_unrestricted_union(egress)
 
 
 def render(config: dict[str, object], backend: str, frontend: str, overlay: str) -> str:

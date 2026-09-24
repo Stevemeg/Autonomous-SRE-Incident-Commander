@@ -240,8 +240,10 @@ compliance certification.
 ## Deployment
 
 Phase 14 provides digest-pinned backend/frontend Dockerfiles, Kustomize bases and local overlays,
-provider-neutral Terraform prerequisites, GitHub quality/release/deploy workflows, and a disposable
-kind smoke. Production assumes managed PostgreSQL/pgvector and platform-provisioned secrets; no cloud
+provider-neutral Terraform prerequisites (with Pod Security Admission `restricted`), GitHub
+quality/release/deploy workflows with a build-once unprivileged build separated from a minimal
+publish/attest job, attestation source-ref verification before any cluster credential exists, one
+shared migrate-rollout-smoke orchestrator, and a disposable kind smoke. Production assumes managed PostgreSQL/pgvector and platform-provisioned secrets; no cloud
 provider is fabricated. See the [deployment guide](docs/deployment/PHASE14_DEPLOYMENT.md) and
 [delivery architecture](docs/architecture/cicd-and-infrastructure.md).
 

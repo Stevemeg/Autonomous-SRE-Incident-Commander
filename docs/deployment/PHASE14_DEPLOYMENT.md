@@ -6,8 +6,8 @@ managed PostgreSQL, external secret manager and protected GitHub environment are
 
 ## Prerequisites and ownership
 
-Terraform owns the `asic-system` namespace and the `asic-api`, `asic-frontend` and
-`asic-migration` service accounts. Kustomize owns all workload, Service, Ingress, PDB, ConfigMap and
+Terraform owns the `asic-system` namespace (including its Pod Security Admission labels) and the
+`asic-api`, `asic-frontend` and `asic-migration` service accounts. Kustomize owns all workload, Service, Ingress, PDB, ConfigMap and
 NetworkPolicy resources. Production PostgreSQL must provide pgvector, backups/PITR and separate URLs
 for the schema owner/migration role and `asic_app`-equivalent runtime role.
 
@@ -26,15 +26,27 @@ lifetimes conservatively; maximum JWT lifetime enforcement remains P13-SEC-05.
 
 ## Build, scan and release
 
-The trusted release workflow builds `asic-backend:phase14-$GITHUB_SHA` and
-`asic-frontend:phase14-$GITHUB_SHA`, then runs:
+The trusted release workflow runs only for `main` or a `v*` tag whose commit is reachable from
+protected `main`. It has two jobs with separate authority:
 
 ```text
-security_gate.py --strict --require-container-scan --container-image <backend> --container-image <frontend>
-full golden simulator (18) -> full strict replay (18)
-Trivy CycloneDX SBOM -> validate_sbom.py known-package check
-push GHCR SHA tags -> record digests -> GitHub OIDC build-provenance attestation
+build-validate   (contents: read; checkout without persisted credentials; no packages/id-token)
+  full golden simulator (18) -> full strict replay (18)
+  docker build asic-backend/asic-frontend:phase14-$GITHUB_SHA   (the only build)
+  security_gate.py --strict --require-container-scan --container-image <backend> --container-image <frontend>
+  Trivy CycloneDX SBOM -> validate_sbom.py known-package + image-ID check
+  deployment_smoke.py on disposable kind with the same images
+  docker save -> archive SHA-256 + image ID recorded as job outputs -> upload (1-day retention)
+
+publish-attest   (packages/id-token/attestations: write; production environment; no checkout)
+  download -> sha256sum --check against build outputs -> docker load -> image ID must match
+  push GHCR SHA tags -> registry manifest config digest must equal the scanned image ID
+  GitHub OIDC build-provenance attestation on the registry digests
+  gh attestation verify --signer-workflow release.yml --source-ref <ref> --source-digest <sha>
 ```
+
+The publish job executes no repository code, tests or builds after it receives write authority, so
+the artifact that was scanned, SBOM'd and smoke-deployed is the one pushed and attested.
 
 HIGH or CRITICAL image vulnerabilities block release, including vulnerabilities without a known
 fix. Any temporary acceptance is a reviewed, expiry-bearing repository policy change. Scanner DB
@@ -49,20 +61,36 @@ failure, missing scanner, malformed report, missing image ID or an empty result 
 4. Patch `192.0.2.1/32` to the managed database egress CIDR. Route dynamic vendor egress through the
    approved DNS-aware gateway; do not add unrestricted internet egress.
 5. Patch hostname, ingress class, TLS secret and the two immutable image digests.
-6. Apply the migration Kustomization and wait for `job/asic-migration` to complete.
+6. Apply the migration Job and watch it to a terminal state; stop immediately if it fails.
 7. Only then apply the base and wait for both Deployment rollouts and readiness.
-8. Probe `/livez`, `/readyz`, `/metrics`, the frontend, and one authenticated read-only API path.
-9. Record deployed image digests, migration revision and validation output in the release record.
+8. Automatic post-rollout smoke: Service endpoints ready; API `/livez`, `/readyz` 200 and
+   unauthenticated `/api/v1/incidents` 401; frontend `/livez`, `/readyz` 200. Optionally also check
+   `/metrics` and one authenticated read-only path with an operator credential.
+9. Record deployed image digests, release commit, migration revision and validation output.
 
-The manual `production-deploy` workflow enforces steps 6-7 and serializes deployments. Its generic
-protected kubeconfig secret is the provider-neutral fallback. Once a cloud is selected, replace it
-with short-lived OIDC federation; do not add long-lived cloud keys.
+The manual `production-deploy` workflow enforces steps 6-8 through `scripts/deploy_release.py`, the
+same orchestrator the kind smoke runs, and serializes deployments (`cancel-in-progress: false`, so a
+newer dispatch never cancels one mid-migration). Its sequence is:
+
+```text
+validate inputs (two ghcr.io digests, 40-hex release_commit)          no cluster credential
+verify_release_attestation.py: gh attestation verify --format json    no cluster credential
+  + repository, release.yml signer, main/v* source ref, source revision, subject digest
+pip install + render_deployment.py                                     no cluster credential
+single step: KUBE_CONFIG_DATA -> 0600 temp kubeconfig -> deploy_release.py -> removed on exit
+always(): rm -f kubeconfig
+```
+
+Its generic protected kubeconfig secret is the provider-neutral fallback. Once a cloud is selected,
+replace it with short-lived OIDC federation; do not add long-lived cloud keys.
 
 ## Protected deployment configuration
 
 The protected environment variable `DEPLOYMENT_CONFIG_JSON` supplies the non-secret contract below.
 `scripts/render_deployment.py` validates it and produces temporary manifests, rejecting placeholders,
-mutable images, credential-bearing URLs and unrestricted CIDRs. Do not include secret values.
+mutable images, credential-bearing URLs and unrestricted CIDRs. A set of CIDRs is also rejected when
+its collapsed union covers all IPv4 or all IPv6 space (e.g. `0.0.0.0/1` + `128.0.0.0/1`), even though
+each entry looks narrow. Do not include secret values.
 
 ```json
 {
@@ -87,14 +115,23 @@ Configure the ingress controller to redirect HTTP to HTTPS and confirm certifica
 opening traffic. Neither a local kind run nor an Ingress manifest proves TLS termination.
 
 Protect the `production` GitHub environment with required reviewers and trusted release refs.
-Repository administrators must configure those protections; YAML does not create them. The deploy
-workflow verifies attestations before loading the cluster credential. Prefer short-lived cluster
+Repository administrators must configure those protections; YAML does not create them. Environment
+rules are defense in depth: the deploy workflow independently verifies the attestation's source
+repository, signer workflow, source ref (`refs/heads/main` or `refs/tags/v*`), source revision (the
+`release_commit` input) and subject digest from the signed certificate claims, before the cluster
+credential exists. Prefer short-lived cluster
 identity; the generic protected kubeconfig fallback must be scoped and rotated by the platform.
 
 ## Rollback and failure handling
 
-If migration fails, stop. Do not start or describe the application as degraded-success against an
-unknown schema. If rollout/readiness fails after migration, roll back the Deployments to their prior
+If migration fails, stop. The orchestrator detects the Job's `Failed` condition within one poll
+interval (2 s) rather than waiting for the 10-minute deadline, prints the Job conditions, pod
+termination reasons and a bounded, credential-redacted log tail, exits nonzero and never applies the
+application manifests. A migration that neither completes nor fails within 10 minutes is a failure.
+Do not start or describe the application as degraded-success against an unknown schema.
+
+If the post-rollout smoke fails, the workflow fails; the new pods may already be serving, so treat it
+exactly like a failed rollout below. If rollout/readiness fails after migration, roll back the Deployments to their prior
 image digest. Do **not** automatically run `alembic downgrade`: database rollback may destroy data or
 make the old application less compatible. Choose a forward fix or an explicitly reviewed database
 recovery procedure.
@@ -120,19 +157,35 @@ docker build -t asic-frontend:phase14-local frontend
 python scripts/deployment_smoke.py --backend asic-backend:phase14-local --frontend asic-frontend:phase14-local
 ```
 
-The script consumes both images without rebuilding, creates kind Kubernetes 1.34, applies Terraform prerequisites,
-deploys disposable PostgreSQL/pgvector, runs Alembic, rolls out API/frontend, probes health,
-readiness, metrics and UI, checks non-root/token settings, then destroys the cluster. It uses no
-project or production data. A checksum-pinned Cilium 1.20.2 chart (whose images are digest-pinned)
-provides policy enforcement. A frontend-to-database timeout must be positively observed while
-frontend-to-API and API-to-database succeed. Image IDs are checked before and after the smoke.
+The script consumes both images without rebuilding, creates kind Kubernetes 1.34 with a
+checksum-pinned Cilium 1.20.2 chart (digest-pinned images) for policy enforcement, and uses no
+project or production data. It checks:
+
+- Terraform apply, a no-drift re-plan, `restricted`/`v1.34` PSA labels, and admission rejection of a
+  privileged, root, host-network/PID pod with added capabilities; restricted workloads admitted;
+- the renderer refusing a CIDR set whose union is `0.0.0.0/0`;
+- migration through `deploy_release.run_deployment` with a nonexistent database role: fast `Failed`
+  detection, no application apply recorded, no `asic-api` Deployment; then the same run from an
+  outside-repo copy with the guard mutated away, which must create `asic-api` (non-vacuity);
+- the real migration, rollout and automatic post-rollout smoke through the same function;
+- non-root/tokenless runtime; frontend-to-API, API-to-DB and DNS allowed; frontend-to-DB, internet
+  egress and another namespace to the API denied;
+- API scaled to zero: frontend `/livez` 200, `/readyz` 503 in well under the 3 s probe timeout, no
+  frontend restart after 45 s, frontend removed from endpoints, post-rollout smoke fails;
+- failed application rollout recovery, image IDs unchanged, and Terraform destroy.
+
 Terraform state and kubeconfig live in a temporary directory, destroyed with the cluster.
 
 ## Troubleshooting
 
 - `CreateContainerConfigError`: one of the platform-created Secrets or required OIDC ConfigMap keys
   is absent. Do not replace it with a committed value.
-- Migration timeout: inspect Job logs and DB network policy/role; keep application rollout stopped.
+- Migration failed/timeout: the workflow log already contains the Job conditions, termination reason
+  and a redacted log tail. Check DB network policy/role; keep application rollout stopped.
+- Frontend not ready but live: the frontend `/readyz` reports the API dependency; fix the API rather
+  than restarting the frontend.
+- Pod rejected with `violates PodSecurity`: fix the workload security context. Do not relax the
+  namespace's Terraform-owned PSA labels.
 - API not ready: inspect DB reachability and `alembic_version`; liveness may remain healthy by design.
 - Vendor connector unreachable: confirm the egress gateway policy and connector allowlist. Never
   solve it with blanket `0.0.0.0/0` egress.

@@ -12,6 +12,17 @@ locals {
     var.labels,
   )
 
+  # Pod Security Admission: every workload in the namespace must satisfy "restricted".
+  # Merged last so caller-supplied labels cannot weaken it.
+  pod_security_labels = {
+    "pod-security.kubernetes.io/enforce"         = "restricted"
+    "pod-security.kubernetes.io/enforce-version" = var.pod_security_version
+    "pod-security.kubernetes.io/audit"           = "restricted"
+    "pod-security.kubernetes.io/audit-version"   = var.pod_security_version
+    "pod-security.kubernetes.io/warn"            = "restricted"
+    "pod-security.kubernetes.io/warn-version"    = var.pod_security_version
+  }
+
   service_accounts = toset([
     "asic-api",
     "asic-frontend",
@@ -22,7 +33,7 @@ locals {
 resource "kubernetes_namespace_v1" "asic" {
   metadata {
     name   = var.namespace
-    labels = local.labels
+    labels = merge(local.labels, local.pod_security_labels)
   }
 }
 

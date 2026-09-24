@@ -20,13 +20,16 @@ flowchart LR
     Q --> IMG[Backend and frontend images]
     IMG --> SCAN[Trivy scan plus CycloneDX SBOM]
     SCAN --> KIND[Disposable kind smoke]
-    TAG[Trusted tag or manual release] --> FULL[Full 18 scenario simulator and replay]
-    FULL --> IMG
-    IMG --> GHCR[GHCR immutable SHA tags]
+    TAG[Trusted main or v-tag release] --> BUILD[build-validate: contents read only]
+    BUILD --> ARCH[Checksummed image archives]
+    ARCH --> PUB[publish-attest: packages and id-token write, no checkout]
+    PUB --> GHCR[GHCR digest bound to scanned image ID]
     GHCR --> ATT[GitHub OIDC provenance attestation]
-    ATT --> ENV[Protected production environment]
-    ENV --> MIG[Alembic migration Job]
+    ATT --> VER[Deploy: verify repo, signer, ref, revision, digest]
+    VER --> CRED[Only then: kubeconfig in one step]
+    CRED --> MIG[Alembic migration Job, terminal-state watch]
     MIG --> APP[Kustomize application rollout]
+    APP --> SMOKE[Automatic post-rollout smoke]
 ```
 
 There are two production images: API and Next.js frontend. The API image is also the one-shot
@@ -74,7 +77,14 @@ Each workload has an explicit service account with token automount disabled. No 
 is granted. External Kubernetes connector credentials are tenant connector secrets and are not pod
 identity. Pods are non-root, RuntimeDefault seccomp, capability-free and cannot escalate.
 
-`/livez` tests the process only. `/readyz` gates DB/schema availability. Initial resource values are
+`/livez` tests the process only. `/readyz` gates DB/schema availability. The frontend has its own
+`/livez` (self-only, no API call) and `/readyz` (one API readiness probe bounded by an explicit
+1.5 s deadline, 503 when the API is down or hung). An API outage therefore removes frontend pods
+from Service endpoints instead of restarting them; page renders are also bounded (10 s).
+
+Terraform labels the namespace with Pod Security Admission `restricted` for `enforce`, `audit` and
+`warn`, pinned to policy version `v1.34` (the validated kind version). Caller labels cannot override
+it; raising the version is a deliberate change after validating a newer cluster. Initial resource values are
 deployment defaults, not measured capacity. PDBs and soft topology spreading improve placement but
 are not HA or zero-downtime claims.
 
@@ -94,7 +104,9 @@ contract. Kubernetes NetworkPolicy cannot express arbitrary vendor DNS safely. S
 traffic requires a production DNS-aware firewall/egress gateway, in addition to application SSRF
 checks. The renderer accepts reviewed destination CIDRs for direct HTTPS (including JWKS); operators
 must maintain those ranges or use a transparent platform gateway. Application support for arbitrary
-HTTP proxy configuration is not assumed. The base does not allow `0.0.0.0/0`.
+HTTP proxy configuration is not assumed. The base does not allow `0.0.0.0/0`, and the renderer
+rejects any CIDR set whose collapsed union is all IPv4 or all IPv6 space (for example
+`0.0.0.0/1` + `128.0.0.0/1`). This is address arithmetic, not DNS-aware vendor egress control.
 
 ## 5. Terraform boundary
 
@@ -117,18 +129,30 @@ scans, non-vacuous SBOM checks, Kustomize/Terraform validation and a disposable 
 Actions and tool/container versions are immutable pins; permissions begin at `contents: read`; jobs
 have timeouts and concurrency controls.
 
-`release.yml` is tag/manual only and depends on the reusable quality workflow. It runs the complete 18-scenario simulator and strict replay,
-builds and scans the artifacts, runs the actual strict security gate with container scanning
-required, uploads evidence, pushes SHA-tagged images with short-lived `GITHUB_TOKEN`, then generates
-OIDC provenance attestations and verifies them against both published digests. It first deploys the
-same scanned images to disposable kind, without rebuilding. Its protected environment is an approval
-boundary, not a fake remote deployment.
+`release.yml` accepts `main` or `v*` tags whose commit is reachable from protected `main`, and
+depends on the reusable quality workflow. It is split by authority:
 
-`deploy.yml` is manual and serialized. It accepts only image digests, uses the protected production
-environment, verifies release attestations, validates non-secret platform inputs, runs migration
-first and waits, then rolls out workloads. The generic kubeconfig secret
-is the cloud-neutral contract; a selected platform should replace it with short-lived federated
-cluster identity. PRs never receive registry or deployment write authority.
+- `build-validate` (`contents: read`, checkout without persisted credentials) runs the complete
+  18-scenario simulator and strict replay, builds both images **once**, runs the strict security gate
+  with container scanning required, generates and validates SBOMs against the image IDs, deploys the
+  same images to disposable kind, then `docker save`s them and records each archive's SHA-256 and
+  image ID as job outputs.
+- `publish-attest` (only `packages`, `id-token` and `attestations: write`, protected environment) has
+  no checkout and runs no repository code or build. It downloads the archives, checks them against
+  the recorded checksums, loads them, checks the image IDs, pushes the SHA tags, requires the pushed
+  manifest's config digest to equal the scanned image ID, attests the registry digests and verifies
+  the attestations (source ref and revision included).
+
+`deploy.yml` is manual, main-only and serialized with `cancel-in-progress: false`. It takes two image
+digests and the release commit. With no cluster credential present, it validates inputs, verifies
+each attestation (`gh attestation verify --format json` plus a deterministic policy check of
+repository, `release.yml` signer, `main`/`v*` source ref, source revision and subject digest), then
+installs dependencies and renders. Only the single deployment step receives `KUBE_CONFIG_DATA`; it
+writes a `0600` kubeconfig, removes it on exit and in an `always()` cleanup, and runs
+`scripts/deploy_release.py`. That orchestrator is the one sequencing implementation, also used by the
+kind smoke. The generic kubeconfig secret is the cloud-neutral contract; a selected platform should
+replace it with short-lived federated cluster identity. PRs never receive registry or deployment
+write authority.
 
 ## 7. Failure modes, observability and rollback
 
@@ -137,18 +161,32 @@ failure, Terraform validation failure or rollout timeout returns non-zero and pr
 jobs. Logs are structured stdout/stderr; metrics and OTLP are configured for platform collectors.
 The base deploys no duplicate observability stack.
 
-Rollout failure stops deployment. A compatible prior-image rollback is an explicit operator action;
+The migration watcher polls Job conditions and returns as soon as `Failed`/`FailureTarget` or
+`Complete` appears, so a failed migration stops in seconds, not after the 10-minute deadline. It
+prints bounded, credential-redacted diagnostics (conditions, pod termination reasons, a 40-line log
+tail). After rollout the orchestrator runs an automatic smoke through `kubectl port-forward` (no
+NetworkPolicy exception, no public DNS/TLS): Service endpoints ready, API `/livez` and `/readyz` 200,
+unauthenticated `/api/v1/incidents` 401, frontend `/livez` and `/readyz` 200. Any failure fails the
+workflow.
+
+Rollout or smoke failure stops deployment. A compatible prior-image rollback is an explicit operator action;
 the local smoke exercises Deployment rollback. Database migration is not reversed automatically.
 Current migrations are applied before replacement pods; no zero-downtime expand/contract guarantee
 is claimed, so operators must assess old/new schema overlap before production rollout.
 
 ## 8. Validation, scale and cost
 
-The deployment smoke consumes already-built production images, creates kind Kubernetes 1.34, applies
-Terraform prerequisites, starts disposable pgvector, completes migration, rolls out both services,
-checks live/readiness/metrics/frontend behavior and inspects runtime UID/token policy. It installs
-checksum-pinned Cilium for a representative frontend-to-database denial probe with positive API
-connectivity controls. Helm is used only to install this local test CNI, not to package the product.
+The deployment smoke consumes already-built production images, creates kind Kubernetes 1.34,
+applies Terraform prerequisites (then requires a no-drift re-plan), checks the PSA labels and that a
+privileged/root/host-namespace pod is rejected at admission, checks that the renderer refuses a
+full-space CIDR union, and starts disposable pgvector. Through the shared orchestrator it then runs a
+bad-credential migration (it must fail fast, and the application must never be applied), repeats that
+run with the guard mutated away in an outside-repo copy (the application must then appear, which
+proves the check is not vacuous), and runs the real migration, rollout and automatic smoke. It checks
+runtime UID/token policy and network policy (frontend-to-API, API-to-DB and DNS allowed; frontend-to-DB,
+internet egress and another namespace to the API denied, all on checksum-pinned Cilium). It scales
+the API to zero to show the frontend stays live and is not restarted, and that the smoke then fails.
+It also covers failed-rollout recovery and Terraform destroy. Helm is used only to install this local test CNI, not to package the product.
 Enforcement must still be checked on the production CNI. Remote production, TLS termination, HA, SLOs, scaling, DR and cloud
 cost are **not executed or claimed**.
 

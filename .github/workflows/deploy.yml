@@ -11,6 +11,10 @@ on:
         description: Immutable frontend image (name@sha256:digest)
         required: true
         type: string
+      release_commit:
+        description: Full 40-hex commit SHA the images were released from (attestation source revision)
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -21,67 +25,65 @@ concurrency:
   group: production-deploy
   cancel-in-progress: false
 
+# Trust order: validate inputs -> verify provenance -> render -> ONLY THEN materialize the
+# cluster credential, inside the single step that runs the authoritative deployment sequence.
+# No job-level env carries a credential.
 jobs:
   deploy:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     environment: production
-    env:
-      KUBE_CONFIG_DATA: ${{ secrets.KUBE_CONFIG_DATA }}
-      GH_TOKEN: ${{ github.token }}
-      BACKEND_IMAGE: ${{ inputs.backend_image }}
-      FRONTEND_IMAGE: ${{ inputs.frontend_image }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
           python-version: "3.11"
-      - name: Verify release attestations before accessing the cluster
+      - name: Validate immutable release inputs
+        env:
+          BACKEND_IMAGE: ${{ inputs.backend_image }}
+          FRONTEND_IMAGE: ${{ inputs.frontend_image }}
+          RELEASE_COMMIT: ${{ inputs.release_commit }}
         run: |
-          gh attestation verify "oci://$BACKEND_IMAGE" --repo "$GITHUB_REPOSITORY" --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml"
-          gh attestation verify "oci://$FRONTEND_IMAGE" --repo "$GITHUB_REPOSITORY" --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml"
+          [[ "$BACKEND_IMAGE" =~ ^ghcr\.io/[a-z0-9/._-]+@sha256:[0-9a-f]{64}$ ]]
+          [[ "$FRONTEND_IMAGE" =~ ^ghcr\.io/[a-z0-9/._-]+@sha256:[0-9a-f]{64}$ ]]
+          [[ "$RELEASE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+      - name: Verify release attestations (repository, signer, source ref and revision, digest)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BACKEND_IMAGE: ${{ inputs.backend_image }}
+          FRONTEND_IMAGE: ${{ inputs.frontend_image }}
+          RELEASE_COMMIT: ${{ inputs.release_commit }}
+        run: >-
+          python scripts/verify_release_attestation.py
+          --repository "$GITHUB_REPOSITORY" --revision "$RELEASE_COMMIT"
+          --image "$BACKEND_IMAGE" --image "$FRONTEND_IMAGE"
       - name: Validate and render the protected platform configuration
         env:
           DEPLOYMENT_CONFIG: ${{ vars.DEPLOYMENT_CONFIG_JSON }}
+          BACKEND_IMAGE: ${{ inputs.backend_image }}
+          FRONTEND_IMAGE: ${{ inputs.frontend_image }}
         run: |
           python -m pip install --require-hashes --no-deps -r requirements/dev.lock
           printf '%s' "$DEPLOYMENT_CONFIG" >"$RUNNER_TEMP/platform.json"
           python scripts/render_deployment.py --config "$RUNNER_TEMP/platform.json" --backend "$BACKEND_IMAGE" --frontend "$FRONTEND_IMAGE" --output "$RUNNER_TEMP/rendered"
-      - name: Validate immutable inputs and protected cluster identity
+      - name: Migrate, roll out and smoke-test through the authoritative sequence
+        id: deploy
         env:
-          BACKEND_IMAGE: ${{ inputs.backend_image }}
-          FRONTEND_IMAGE: ${{ inputs.frontend_image }}
+          KUBE_CONFIG_DATA: ${{ secrets.KUBE_CONFIG_DATA }}
         run: |
-          [[ "$BACKEND_IMAGE" =~ @sha256:[0-9a-f]{64}$ ]]
-          [[ "$FRONTEND_IMAGE" =~ @sha256:[0-9a-f]{64}$ ]]
+          kubeconfig="$RUNNER_TEMP/kubeconfig"
+          trap 'rm -f "$kubeconfig"' EXIT
           test -n "$KUBE_CONFIG_DATA"
-          umask 077
-          printf '%s' "$KUBE_CONFIG_DATA" | base64 --decode >"$RUNNER_TEMP/kubeconfig"
-      - name: Run migration before rollout
-        env:
-          KUBECONFIG: ${{ runner.temp }}/kubeconfig
-          BACKEND_IMAGE: ${{ inputs.backend_image }}
+          (umask 077 && printf '%s' "$KUBE_CONFIG_DATA" | base64 --decode >"$kubeconfig")
+          unset KUBE_CONFIG_DATA
+          python scripts/deploy_release.py --kubeconfig "$kubeconfig" --namespace asic-system --migration "$RUNNER_TEMP/rendered/migration.yaml" --application "$RUNNER_TEMP/rendered/base.yaml"
+      - name: Stop on failed deployment; require an explicit compatible application rollback
+        if: failure() && steps.deploy.outcome == 'failure'
         run: |
-          kubectl apply --dry-run=server -f "$RUNNER_TEMP/rendered/base.yaml"
-          kubectl delete job asic-migration -n asic-system --ignore-not-found
-          kubectl apply --dry-run=server -f "$RUNNER_TEMP/rendered/migration.yaml"
-          kubectl apply -f "$RUNNER_TEMP/rendered/migration.yaml"
-          kubectl wait --for=condition=complete job/asic-migration -n asic-system --timeout=10m
-      - name: Roll out exact attested image identities
-        id: rollout
-        env:
-          KUBECONFIG: ${{ runner.temp }}/kubeconfig
-          BACKEND_IMAGE: ${{ inputs.backend_image }}
-          FRONTEND_IMAGE: ${{ inputs.frontend_image }}
-        run: |
-          kubectl apply -f "$RUNNER_TEMP/rendered/base.yaml"
-          kubectl rollout status deployment/asic-api -n asic-system --timeout=10m
-          kubectl rollout status deployment/asic-frontend -n asic-system --timeout=10m
-      - name: Stop on failed rollout; require an explicit compatible application rollback
-        if: failure() && steps.rollout.outcome == 'failure'
-        run: |
-          echo 'Deployment failed. Use the documented previous-digest rollback after checking schema compatibility. Database downgrade is never automatic.'
+          echo 'Deployment failed (migration, rollout or post-rollout smoke). Use the documented previous-digest rollback after checking schema compatibility. Database downgrade is never automatic.'
           exit 1
       - name: Remove ephemeral cluster credentials
         if: always()

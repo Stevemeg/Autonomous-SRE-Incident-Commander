@@ -41,6 +41,26 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   migration ordering, dynamic-egress limits, rollback, remote-state/backup expectations and the
   distinction between local validation and unexecuted remote production.
 
+### Changed — Phase 14 post-audit hardening (eight LOW findings)
+
+- Release privilege split: `build-validate` (read-only token, no persisted checkout credential) builds
+  once, tests, scans, SBOMs and kind-deploys, then hands checksummed image archives to
+  `publish-attest`, which alone holds `packages`/`id-token` write, runs no repository code, verifies
+  checksums and image IDs, and binds the registry config digest to the scanned image ID.
+- Deploy now verifies each attestation's repository, `release.yml` signer, `main`/`v*` source ref,
+  source revision (new required `release_commit` input) and subject digest from certificate claims.
+  The kubeconfig exists only inside the one deployment step (0600, removed on exit and in `always()`).
+- One deployment orchestrator (`scripts/deploy_release.py`) is shared by the workflow and the kind
+  smoke. It fails fast on a `Failed` migration Job with bounded, redacted diagnostics, never applies
+  the application after a failed migration, and runs an automatic post-rollout smoke (API
+  `/livez`/`/readyz`/401, frontend `/livez`/`/readyz`). The kind smoke proves the guard is not vacuous
+  by mutating it away in an outside-repo copy.
+- Frontend `/livez` (self-only) and `/readyz` (API probe with an explicit 1.5 s deadline) replace `/`
+  as probe targets; an API outage no longer restarts the frontend. Data requests are bounded (10 s).
+- Terraform enforces Pod Security Admission `restricted` (`v1.34`) on the namespace; privileged pods
+  are rejected at admission.
+- The renderer rejects CIDR sets whose collapsed union is all IPv4 or IPv6 space.
+
 ### Deferred after Phase 14
 
 - A retention execution Job remains absent because no safe bounded deletion/receipt primitive exists.

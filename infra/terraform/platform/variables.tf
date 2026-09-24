@@ -34,8 +34,24 @@ variable "namespace" {
   }
 }
 
+variable "pod_security_version" {
+  description = "Pod Security Standards version pinned for enforce/audit/warn. v1.34 matches the validated Kubernetes 1.34 smoke cluster; raise it deliberately after validating a newer cluster."
+  type        = string
+  default     = "v1.34"
+
+  validation {
+    condition     = can(regex("^v1[.][0-9]+$", var.pod_security_version))
+    error_message = "pod_security_version must be an explicit v1.<minor> policy version, not latest."
+  }
+}
+
 variable "labels" {
-  description = "Additional non-secret platform labels."
+  description = "Additional non-secret platform labels. Pod Security Admission labels are owned by this module."
   type        = map(string)
   default     = {}
+
+  validation {
+    condition     = alltrue([for key in keys(var.labels) : !startswith(key, "pod-security.kubernetes.io/")])
+    error_message = "labels must not set pod-security.kubernetes.io/* keys; the restricted profile is fixed."
+  }
 }

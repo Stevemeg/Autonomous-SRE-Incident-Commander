@@ -130,28 +130,64 @@ def test_release_cannot_publish_before_quality_scan_and_same_image_smoke() -> No
     text = (REPO / ".github/workflows/release.yml").read_text("utf-8")
     workflow = yaml.safe_load(text)
     jobs = workflow["jobs"]
-    assert jobs["release"]["needs"] == "quality"
+    assert jobs["build-validate"]["needs"] == "quality"
+    assert jobs["publish-attest"]["needs"] == "build-validate"
     assert jobs["quality"]["uses"] == "./.github/workflows/quality.yml"
     assert jobs["quality"]["with"]["skip_image_checks"] is True
     assert text.count("docker build ") == 2
     assert (
         text.index("--require-container-scan")
         < text.index("scripts/deployment_smoke.py")
+        < text.index("docker save")
         < text.index("docker/login-action")
     )
     assert "--image-id" in text
     assert "gh attestation verify" in text
     assert "--signer-workflow" in text
+    assert "--source-ref" in text and "--source-digest" in text
 
 
 def test_deployment_checks_provenance_and_migration_before_rollout() -> None:
     text = (REPO / ".github/workflows/deploy.yml").read_text("utf-8")
-    assert text.index("gh attestation verify") < text.index("base64 --decode")
-    assert text.index("--for=condition=complete") < text.index("id: rollout")
+    assert text.index("verify_release_attestation.py") < text.index("base64 --decode")
+    assert text.index("base64 --decode") < text.index("scripts/deploy_release.py")
     assert "environment: production" in text
     assert "github.ref == 'refs/heads/main'" in text
-    assert "steps.rollout.outcome == 'failure'" in text
+    assert "steps.deploy.outcome == 'failure'" in text
     assert "alembic downgrade" not in text
+
+
+def test_terraform_namespace_enforces_restricted_pod_security() -> None:
+    main = (REPO / "infra/terraform/platform/main.tf").read_text("utf-8")
+    for mode in ("enforce", "audit", "warn"):
+        assert re.search(rf'"pod-security\.kubernetes\.io/{mode}"\s+= "restricted"', main)
+        assert re.search(
+            rf'"pod-security\.kubernetes\.io/{mode}-version"\s+= var\.pod_security_version', main
+        )
+    assert "merge(local.labels, local.pod_security_labels)" in main
+    variables = (REPO / "infra/terraform/platform/variables.tf").read_text("utf-8")
+    assert 'default     = "v1.34"' in variables
+    # Kustomize must not co-own the Terraform-owned namespace.
+    for path in K8S.rglob("*.yaml"):
+        for doc in yaml.safe_load_all(path.read_text("utf-8")):
+            assert not (doc and doc.get("kind") == "Namespace"), path
+
+
+def test_frontend_probes_use_dedicated_health_endpoints() -> None:
+    frontend = next(
+        doc
+        for doc in _documents("base")
+        if doc["kind"] == "Deployment" and doc["metadata"]["name"] == "asic-frontend"  # type: ignore[index]
+    )
+    container = frontend["spec"]["template"]["spec"]["containers"][0]  # type: ignore[index]
+    assert container["livenessProbe"]["httpGet"]["path"] == "/livez"
+    assert container["readinessProbe"]["httpGet"]["path"] == "/readyz"
+    livez = (REPO / "frontend/app/livez/route.ts").read_text("utf-8")
+    assert "import" not in livez and "fetch" not in livez  # self-only
+    health = (REPO / "frontend/lib/health.ts").read_text("utf-8")
+    assert "AbortSignal.timeout" in health
+    probe_ms = int(re.search(r"API_PROBE_TIMEOUT_MS = (\d+)", health)[1])  # type: ignore[index]
+    assert probe_ms < container["readinessProbe"]["timeoutSeconds"] * 1000
 
 
 def test_workflow_actions_are_commit_pinned_and_permissions_are_declared() -> None:

@@ -3,20 +3,38 @@
 
 No image is rebuilt here. Terraform state, kubeconfigs and rendered manifests live
 in a temporary directory. The cluster is destroyed even when a validation fails.
+
+Migration and rollout go through ``deploy_release.run_deployment``: the same authoritative
+sequence the production workflow runs, not a parallel copy of it.
 """
 
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
+import importlib.util
 import json
 import shutil
 import subprocess
+import sys
 import tempfile
+import time
 import urllib.request
 from pathlib import Path
+from types import ModuleType
 
 import yaml
+from deploy_release import (
+    Kubectl,
+    MigrationFailed,
+    SmokeFailed,
+    http_status,
+    port_forward,
+    post_rollout_smoke,
+    ready_endpoints,
+    run_deployment,
+)
 
 REPO = Path(__file__).resolve().parents[1]
 HELM = "alpine/helm@sha256:aef9b56f64e866207d9591d0abd8f6d767b36aadd12edf68f8a719716d9d29c9"
@@ -25,10 +43,15 @@ NODE = "kindest/node@sha256:7416a61b42b1662ca6ca89f02028ac133a309a2a30ba309614e8
 TERRAFORM = (
     "hashicorp/terraform@sha256:dfb1889a8ee74ada3ddacc48f89b8a0d69f3e114de3d8a2ce15f6a8d3dbfdbe2"
 )
+NAMESPACE = "asic-system"
+GUARD = 'if outcome.state != "complete":  # migration-success guard'
+FAST_FAILURE_SECONDS = 180  # far below the 600s migration deadline
 
 
-def run(*command: str, timeout: int = 600, content: str | None = None) -> str:
-    result = subprocess.run(
+def run_process(
+    *command: str, timeout: int = 600, content: str | None = None
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
         command,
         cwd=REPO,
         input=content,
@@ -39,11 +62,60 @@ def run(*command: str, timeout: int = 600, content: str | None = None) -> str:
         timeout=timeout,
         check=False,
     )
+
+
+def run(*command: str, timeout: int = 600, content: str | None = None) -> str:
+    result = run_process(*command, timeout=timeout, content=content)
     if result.returncode:
         raise RuntimeError(
             f"{command[0]} {command[1:3]} failed: {result.stderr[-4000:]} {result.stdout[-4000:]}"
         )
     return result.stdout
+
+
+def step(message: str) -> None:
+    print(f"== {message}", flush=True)
+
+
+def mutated_orchestrator(scratch: Path) -> ModuleType:
+    """Outside-repo copy of deploy_release with the migration-success guard disabled."""
+    source = (REPO / "scripts/deploy_release.py").read_text("utf-8")
+    if source.count(GUARD) != 1:
+        raise RuntimeError("migration-success guard marker not found exactly once")
+    path = scratch / "deploy_release_mutated.py"
+    path.write_text(source.replace(GUARD, "if False:  # MUTATED: guard bypassed"), "utf-8")
+    spec = importlib.util.spec_from_file_location("deploy_release_mutated", path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError("cannot load mutated orchestrator")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module  # dataclass annotation resolution needs the module
+    spec.loader.exec_module(module)
+    return module
+
+
+def recording(kube: Kubectl) -> tuple[Kubectl, list[tuple[list[str], str | None]]]:
+    """Same kubectl, but every command (and stdin manifest) is recorded for evidence."""
+    calls: list[tuple[list[str], str | None]] = []
+    inner = kube.runner
+
+    def runner(
+        command: object, content: str | None, timeout: float
+    ) -> subprocess.CompletedProcess[str]:
+        calls.append((list(command), content))  # type: ignore[call-overload]
+        return inner(command, content, timeout)  # type: ignore[arg-type]
+
+    return Kubectl(kube.namespace, kube.kubeconfig, kube.binary, runner), calls
+
+
+def applied(calls: list[tuple[list[str], str | None]], manifest: str) -> bool:
+    return any(
+        "apply" in args and "--dry-run=server" not in args and content == manifest
+        for args, content in calls
+    )
+
+
+def deployment_exists(kube: Kubectl, name: str) -> bool:
+    return kube.probe("get", "deployment", name).returncode == 0
 
 
 def main() -> int:
@@ -62,6 +134,7 @@ def main() -> int:
         image: run("docker", "image", "inspect", image, "--format", "{{.Id}}").strip()
         for image in (args.backend, args.frontend)
     }
+    evidence: dict[str, object] = {}
     with tempfile.TemporaryDirectory(prefix="asic-deployment-") as directory:
         scratch = Path(directory)
         config = scratch / "kubeconfig"
@@ -77,16 +150,33 @@ def main() -> int:
             ),
             "utf-8",
         )
-        kube = ["kubectl", "--kubeconfig", str(config)]
+        kube = Kubectl(NAMESPACE, str(config))
+        kubectl = ["kubectl", "--kubeconfig", str(config)]
         platform = scratch / "platform"
         platform.mkdir()
         for path in (REPO / "infra/terraform/platform").iterdir():
             if path.suffix == ".tf" or path.name == ".terraform.lock.hcl":
                 shutil.copy2(path, platform / path.name)
+        terraform = [
+            "docker",
+            "run",
+            "--rm",
+            "--network",
+            "kind",
+            "-v",
+            f"{scratch}:/work",
+            "-w",
+            "/work/platform",
+            TERRAFORM,
+        ]
+        tf_vars = [
+            "-var=kubeconfig_path=/work/internal-kubeconfig",
+            f"-var=kube_context=kind-{args.name}",
+        ]
         created = False
         try:
             created = True
-            print("Creating disposable Kubernetes 1.34.0 cluster", flush=True)
+            step("Creating disposable Kubernetes 1.34.0 cluster")
             run(
                 args.kind,
                 "create",
@@ -116,7 +206,7 @@ def main() -> int:
             if hashlib.sha256(chart).hexdigest() != CILIUM_SHA256:
                 raise RuntimeError("Cilium chart checksum mismatch")
             (scratch / "cilium.tgz").write_bytes(chart)
-            print("Installing checksum-pinned Cilium 1.20.2 for policy enforcement", flush=True)
+            step("Installing checksum-pinned Cilium 1.20.2 for policy enforcement")
             run(
                 "docker",
                 "run",
@@ -143,105 +233,198 @@ def main() -> int:
                 "--timeout",
                 "5m",
             )
-            terraform = [
-                "docker",
-                "run",
-                "--rm",
-                "--network",
-                "kind",
-                "-v",
-                f"{scratch}:/work",
-                "-w",
-                "/work/platform",
-                TERRAFORM,
-            ]
+
+            step("Terraform: namespace, Pod Security Admission labels, service accounts")
             run(*terraform, "init", "-backend=false", "-lockfile=readonly")
             run(*terraform, "validate")
-            print(
-                run(
-                    *terraform,
-                    "apply",
-                    "-auto-approve",
-                    "-var=kubeconfig_path=/work/internal-kubeconfig",
-                    f"-var=kube_context=kind-{args.name}",
+            print(run(*terraform, "apply", "-auto-approve", *tf_vars), flush=True)
+            # -detailed-exitcode returns 2 on drift, which run() treats as failure.
+            run(*terraform, "plan", "-detailed-exitcode", *tf_vars)
+            labels = json.loads(run(*kubectl, "get", "namespace", NAMESPACE, "-o", "json"))[
+                "metadata"
+            ]["labels"]
+            psa = {k: v for k, v in labels.items() if k.startswith("pod-security.kubernetes.io/")}
+            expected_psa = {
+                f"pod-security.kubernetes.io/{mode}{suffix}": value
+                for mode in ("enforce", "audit", "warn")
+                for suffix, value in (("", "restricted"), ("-version", "v1.34"))
+            }
+            if psa != expected_psa:
+                raise RuntimeError(f"namespace PSA labels are not restricted/v1.34: {psa}")
+            evidence["psa_labels"] = psa
+            print(run(*kubectl, "get", "namespace", NAMESPACE, "--show-labels"), flush=True)
+
+            step("PSA: a privileged, root, host-namespace pod must be rejected at admission")
+            privileged = {
+                "apiVersion": "v1",
+                "kind": "Pod",
+                "metadata": {"name": "psa-privileged-probe", "namespace": NAMESPACE},
+                "spec": {
+                    "hostNetwork": True,
+                    "hostPID": True,
+                    "containers": [
+                        {
+                            "name": "probe",
+                            "image": args.backend,
+                            "securityContext": {
+                                "privileged": True,
+                                "runAsUser": 0,
+                                "capabilities": {"add": ["NET_ADMIN", "SYS_ADMIN"]},
+                            },
+                        }
+                    ],
+                },
+            }
+            rejected = run_process(*kubectl, "apply", "-f", "-", content=yaml.safe_dump(privileged))
+            if rejected.returncode == 0 or "violates PodSecurity" not in rejected.stderr:
+                raise RuntimeError(f"privileged pod was not rejected: {rejected.stderr}")
+            if kube.probe("get", "pod", "psa-privileged-probe").returncode == 0:
+                raise RuntimeError("rejected privileged pod exists")
+            evidence["privileged_pod"] = rejected.stderr.strip().splitlines()[-1][:300]
+            print(evidence["privileged_pod"], flush=True)
+
+            step("Renderer: CIDRs that collectively cover 0.0.0.0/0 are refused pre-deploy")
+            bad_config = scratch / "full-egress.json"
+            bad_config.write_text(
+                json.dumps(
+                    {
+                        "hostname": "asic.example.com",
+                        "ingress_class": "nginx",
+                        "ingress_namespace": "ingress-nginx",
+                        "tls_secret": "asic-tls",
+                        "db_cidr": "10.20.0.12/32",
+                        "issuer": "https://id.example.com",
+                        "audience": "asic",
+                        "jwks_url": "https://id.example.com/jwks",
+                        "otlp_endpoint": "https://collector.example.com",
+                        "https_egress_cidrs": ["0.0.0.0/1", "128.0.0.0/1"],
+                    }
                 ),
-                flush=True,
+                "utf-8",
             )
+            digest = "@sha256:" + "a" * 64
+            refused = run_process(
+                sys.executable,
+                "scripts/render_deployment.py",
+                "--config",
+                str(bad_config),
+                "--backend",
+                "ghcr.io/example/asic-backend" + digest,
+                "--frontend",
+                "ghcr.io/example/asic-frontend" + digest,
+                "--output",
+                str(scratch / "never-rendered"),
+            )
+            if refused.returncode == 0 or "collectively permits unrestricted" not in refused.stderr:
+                raise RuntimeError("combined full-egress CIDR set was not refused")
+            if (scratch / "never-rendered").exists():
+                raise RuntimeError("refused configuration still produced manifests")
+            evidence["cidr_union"] = "refused_before_render"
+
             for image in (args.backend, args.frontend):
                 run(args.kind, "load", "docker-image", "--name", args.name, image)
 
             def render(overlay: str) -> str:
-                text = run(*kube, "kustomize", f"deploy/kubernetes/{overlay}")
+                text = run(*kubectl, "kustomize", f"deploy/kubernetes/{overlay}")
                 return text.replace("asic-backend:phase14-local", args.backend).replace(
                     "asic-frontend:phase14-local", args.frontend
                 )
 
-            def apply(overlay: str) -> None:
-                manifest = render(overlay)
-                run(*kube, "apply", "--dry-run=server", "-f", "-", content=manifest)
-                run(*kube, "apply", "-f", "-", content=manifest)
-
-            apply("overlays/local-database")
-            run(
-                *kube,
-                "rollout",
-                "status",
-                "deployment/postgres",
-                "-n",
-                "asic-system",
-                "--timeout=180s",
-            )
-            # A failed migration Job must be an observed failure before any API rollout.
-            failed_job = next(
-                doc
-                for doc in yaml.safe_load_all(render("overlays/local-migration"))
-                if doc["kind"] == "Job"
-            )
-            failed_job["metadata"]["name"] = "asic-migration-negative-control"
-            failed_job["spec"]["template"]["spec"]["containers"][0]["command"] = [
-                "/usr/local/bin/python",
-                "-c",
-                "raise SystemExit(42)",
-            ]
-            failed_job["spec"]["template"]["spec"]["containers"][0]["env"] = []
-            run(*kube, "apply", "-f", "-", content=yaml.safe_dump(failed_job))
-            run(
-                *kube,
-                "wait",
-                "--for=condition=failed",
-                "job/asic-migration-negative-control",
-                "-n",
-                "asic-system",
-                "--timeout=90s",
-            )
-            deployments = json.loads(
-                run(*kube, "get", "deployments", "-n", "asic-system", "-o", "json")
-            )
-            if any(item["metadata"]["name"] == "asic-api" for item in deployments["items"]):
-                raise RuntimeError("application appeared before migration success")
-            run(*kube, "delete", "job", "asic-migration-negative-control", "-n", "asic-system")
-            apply("overlays/local-migration")
-            run(
-                *kube,
-                "wait",
-                "--for=condition=complete",
-                "job/asic-migration",
-                "-n",
-                "asic-system",
-                "--timeout=600s",
-            )
-            print("Migration complete; rolling out the supplied image identities", flush=True)
-            apply("overlays/local")
-            for name in ("asic-api", "asic-frontend"):
-                run(
-                    *kube,
-                    "rollout",
-                    "status",
-                    f"deployment/{name}",
-                    "-n",
-                    "asic-system",
-                    "--timeout=300s",
+            database = render("overlays/local-database")
+            run(*kubectl, "apply", "-f", "-", content=database)
+            kube("rollout", "status", "deployment/postgres", "--timeout=180s", timeout=240)
+            migration = render("overlays/local-migration")
+            application = render("overlays/local")
+            for manifest in (migration, application):
+                dry = run_process(
+                    *kubectl, "apply", "--dry-run=server", "-f", "-", content=manifest
                 )
+                if dry.returncode or "PodSecurity" in dry.stderr:
+                    raise RuntimeError(f"workloads not admitted under restricted: {dry.stderr}")
+            evidence["restricted_workloads_admitted"] = True
+
+            # Bad credential: the real migration Job, pointed at a role that does not exist.
+            documents = list(yaml.safe_load_all(migration))
+            secrets = [
+                doc
+                for doc in documents
+                if doc
+                and doc["kind"] == "Secret"
+                and doc["metadata"]["name"] == "asic-migration-database"
+            ]
+            if len(secrets) != 1:
+                raise RuntimeError("could not construct the bad-credential migration")
+            secrets[0]["data"]["url"] = base64.b64encode(
+                b"postgresql+psycopg2://asic_nobody@postgres:5432/asic"
+            ).decode("ascii")
+            bad_migration = yaml.safe_dump_all(documents, sort_keys=False)
+
+            step("Authoritative sequence with a failing migration (real orchestrator)")
+            recorder, calls = recording(kube)
+            started = time.monotonic()
+            try:
+                run_deployment(recorder, bad_migration, application, poll_interval=1)
+            except MigrationFailed as error:
+                failed_after = time.monotonic() - started
+                print(str(error)[:3000], flush=True)
+            else:
+                raise RuntimeError("failing migration did not stop the deployment")
+            if failed_after >= FAST_FAILURE_SECONDS:
+                raise RuntimeError(f"migration failure took {failed_after:.0f}s to detect")
+            if not applied(calls, bad_migration):
+                raise RuntimeError("migration Job was never applied")
+            if applied(calls, application):
+                raise RuntimeError("application manifest was applied after a failed migration")
+            job = json.loads(kube("get", "job", "asic-migration", "-o", "json"))
+            if not any(
+                c["type"] == "Failed" and c["status"] == "True"
+                for c in job["status"].get("conditions", [])
+            ):
+                raise RuntimeError("migration Job is not in the Failed state")
+            if deployment_exists(kube, "asic-api"):
+                raise RuntimeError("asic-api exists after a failed migration")
+            evidence["failed_migration"] = {
+                "detected_seconds": round(failed_after, 1),
+                "job_failed": True,
+                "application_apply_executed": False,
+                "api_deployment_present": False,
+            }
+
+            step("Non-vacuity: the same run with the guard mutated away DOES apply the app")
+            mutated = mutated_orchestrator(scratch)
+            mutant_recorder, mutant_calls = recording(kube)
+            mutant_kube = mutated.Kubectl(NAMESPACE, str(config), "kubectl", mutant_recorder.runner)
+            try:
+                mutated.run_deployment(
+                    mutant_kube,
+                    bad_migration,
+                    application,
+                    poll_interval=1,
+                    rollout_timeout=30,
+                    smoke=lambda _kube: None,
+                )
+            except mutated.DeploymentError as error:
+                print(f"mutant outcome: {type(error).__name__}", flush=True)
+            if not applied(mutant_calls, application) or not deployment_exists(kube, "asic-api"):
+                raise RuntimeError("mutation was not detected: guard check is vacuous")
+            evidence["guard_mutation_detected"] = True
+            kube("delete", "deployment", "asic-api", "asic-frontend", "--wait=true", timeout=180)
+            if deployment_exists(kube, "asic-api"):
+                raise RuntimeError("mutant application was not cleaned up")
+
+            step("Authoritative sequence with a good migration: migrate, roll out, auto-smoke")
+            recorder, calls = recording(kube)
+            outcome = run_deployment(recorder, migration, application, poll_interval=1)
+            order = [
+                "migration" if content == migration else "application"
+                for args_, content in calls
+                if "apply" in args_ and "--dry-run=server" not in args_ and content
+            ]
+            if order != ["migration", "application"]:
+                raise RuntimeError(f"unexpected apply order: {order}")
+            evidence["successful_migration_seconds"] = round(outcome.elapsed_seconds, 1)
+            evidence["post_rollout_smoke"] = "passed_automatically"
+
             python = "/usr/local/bin/python"
             probe = (
                 "import json,os,pathlib,urllib.request,urllib.error; "
@@ -252,127 +435,212 @@ def main() -> int:
                 "assert b'# HELP' in urllib.request.urlopen('http://127.0.0.1:8000/metrics',timeout=5).read(); "
                 "print('non-root, tokenless, live, ready, metrics: passed')"
             )
-            print(
-                run(
-                    *kube,
-                    "exec",
-                    "-n",
-                    "asic-system",
-                    "deployment/asic-api",
-                    "--",
-                    python,
-                    "-c",
-                    probe,
-                )
-            )
+            print(kube("exec", "deployment/asic-api", "--", python, "-c", probe), flush=True)
+
+            step("Network policy regression")
             frontend_probe = (
                 "(async()=>{if(process.getuid()!==10001)throw Error('root');"
-                "for(const [url,status] of [['http://127.0.0.1:3000/',200],"
+                "for(const [url,status] of [['http://127.0.0.1:3000/livez',200],['http://127.0.0.1:3000/readyz',200],"
                 "[new URL('/livez',process.env.ASIC_API_BASE_URL),200],"
                 "[new URL('/api/v1/incidents',process.env.ASIC_API_BASE_URL),401]]){"
                 "const r=await fetch(url,{signal:AbortSignal.timeout(5000)});if(r.status!==status)throw Error(url+': '+r.status)}"
-                "console.log('frontend, API discovery, unauthenticated refusal: passed')})().catch(e=>{console.error(e);process.exit(1)})"
+                "console.log('frontend health, frontend->API (DNS), unauthenticated refusal: passed')})().catch(e=>{console.error(e);process.exit(1)})"
             )
             print(
-                run(
-                    *kube,
+                kube(
                     "exec",
-                    "-n",
-                    "asic-system",
                     "deployment/asic-frontend",
                     "--",
                     "/nodejs/bin/node",
                     "-e",
                     frontend_probe,
+                ),
+                flush=True,
+            )
+
+            def node_denied(host: str, port: int) -> bool:
+                code = (
+                    "const net=require('node:net');"
+                    f"const s=net.connect({{host:'{host}',port:{port}}});"
+                    "s.setTimeout(3000);s.on('connect',()=>{console.log('CONNECTED');process.exit(0)});"
+                    "s.on('timeout',()=>{console.log('DENIED_BY_POLICY');s.destroy()});"
+                    "s.on('error',e=>{console.log('ERROR '+e.code)})"
                 )
-            )
-            # Positive API connectivity above plus a forbidden frontend -> DB path.
-            denial_probe = (
-                "const net=require('node:net');const s=net.connect({host:'postgres',port:5432});"
-                "s.setTimeout(3000);s.on('connect',()=>{console.error('UNEXPECTED_DB_ACCESS');process.exit(1)});"
-                "s.on('timeout',()=>{console.log('DENIED_BY_POLICY');s.destroy()});"
-                "s.on('error',e=>{console.error(e.code);process.exit(2)})"
-            )
-            denial = run(
-                *kube,
-                "exec",
-                "-n",
-                "asic-system",
-                "deployment/asic-frontend",
-                "--",
-                "/nodejs/bin/node",
-                "-e",
-                denial_probe,
-            )
-            if "DENIED_BY_POLICY" not in denial:
-                raise RuntimeError("network denial probe produced no positive marker")
+                out = kube("exec", "deployment/asic-frontend", "--", "/nodejs/bin/node", "-e", code)
+                return "DENIED_BY_POLICY" in out
+
+            def python_denied(host: str, port: int) -> bool:
+                code = (
+                    "import socket\n"
+                    "try:\n"
+                    f"    socket.create_connection(('{host}',{port}),timeout=3); print('CONNECTED')\n"
+                    "except TimeoutError: print('DENIED_BY_POLICY')\n"
+                    "except OSError as e: print('ERROR', e)\n"
+                )
+                out = kube("exec", "deployment/asic-api", "--", python, "-c", code)
+                return "DENIED_BY_POLICY" in out
+
             role_probe = (
                 "import os,sqlalchemy as s; e=s.create_engine(os.environ['ASIC_DATABASE_URL']); "
                 "c=e.connect(); assert c.execute(s.text('SELECT rolsuper OR rolbypassrls FROM pg_roles WHERE rolname=current_user')).scalar() is False; "
                 "assert not c.execute(s.text(\"SELECT has_table_privilege(current_user,'alembic_version','UPDATE')\")).scalar(); "
-                "print('runtime role is non-owner/non-BYPASSRLS: passed')"
+                "print('API->DB allowed; runtime role is non-owner/non-BYPASSRLS: passed')"
             )
-            print(
-                run(
-                    *kube,
-                    "exec",
-                    "-n",
-                    "asic-system",
-                    "deployment/asic-api",
-                    "--",
-                    python,
-                    "-c",
-                    role_probe,
-                )
-            )
-            # Exercise a failed application rollout and recovery, never a DB downgrade.
+            print(kube("exec", "deployment/asic-api", "--", python, "-c", role_probe), flush=True)
+            if not node_denied("postgres", 5432):
+                raise RuntimeError("frontend -> database was not denied")
+            if not node_denied("1.1.1.1", 443) or not python_denied("1.1.1.1", 443):
+                raise RuntimeError("unexpected internet egress was not denied")
+            outsider = {
+                "apiVersion": "v1",
+                "kind": "Pod",
+                "metadata": {"name": "outsider", "namespace": "asic-outsider"},
+                "spec": {
+                    "restartPolicy": "Never",
+                    "automountServiceAccountToken": False,
+                    "securityContext": {
+                        "runAsNonRoot": True,
+                        "runAsUser": 10001,
+                        "seccompProfile": {"type": "RuntimeDefault"},
+                    },
+                    "containers": [
+                        {
+                            "name": "probe",
+                            "image": args.backend,
+                            "imagePullPolicy": "Never",
+                            "command": [
+                                python,
+                                "-c",
+                                "import socket\ntry:\n"
+                                "    socket.create_connection(('asic-api.asic-system.svc.cluster.local',8000),timeout=4); print('CONNECTED')\n"
+                                "except TimeoutError: print('DENIED_BY_POLICY')\n",
+                            ],
+                            "securityContext": {
+                                "allowPrivilegeEscalation": False,
+                                "readOnlyRootFilesystem": True,
+                                "capabilities": {"drop": ["ALL"]},
+                            },
+                        }
+                    ],
+                },
+            }
+            run(*kubectl, "create", "namespace", "asic-outsider")
+            run(*kubectl, "apply", "-f", "-", content=yaml.safe_dump(outsider))
             run(
-                *kube,
-                "set",
-                "image",
-                "deployment/asic-api",
-                "api=asic-invalid:phase14-missing",
+                *kubectl,
+                "wait",
                 "-n",
-                "asic-system",
+                "asic-outsider",
+                "--for=jsonpath={.status.phase}=Succeeded",
+                "pod/outsider",
+                "--timeout=120s",
             )
+            if "DENIED_BY_POLICY" not in run(*kubectl, "logs", "-n", "asic-outsider", "outsider"):
+                raise RuntimeError("unexpected namespace -> API was not denied")
+            run(*kubectl, "delete", "namespace", "asic-outsider", "--wait=false")
+            evidence["network_policy"] = {
+                "frontend_to_api": "allowed",
+                "api_to_db": "allowed",
+                "dns": "allowed",
+                "frontend_to_db": "denied",
+                "internet_egress": "denied",
+                "other_namespace_to_api": "denied",
+            }
+
+            step("API outage: frontend stays live, leaves endpoints, is not restarted")
+
+            def frontend_pod() -> dict[str, object]:
+                pods = json.loads(
+                    kube("get", "pods", "-l", "app.kubernetes.io/name=asic-frontend", "-o", "json")
+                )["items"]
+                if len(pods) != 1:
+                    raise RuntimeError(f"expected one frontend pod, found {len(pods)}")
+                return pods[0]  # type: ignore[no-any-return]
+
+            def restarts(pod: dict[str, object]) -> int:
+                return sum(c["restartCount"] for c in pod["status"]["containerStatuses"])  # type: ignore[index]
+
+            pod = frontend_pod()
+            pod_name = pod["metadata"]["name"]  # type: ignore[index]
+            before = restarts(pod)
+            kube("scale", "deployment/asic-api", "--replicas=0")
+            kube(
+                "wait",
+                "--for=delete",
+                "pod",
+                "-l",
+                "app.kubernetes.io/name=asic-api",
+                "--timeout=120s",
+                timeout=150,
+            )
+            with port_forward(kube, f"pod/{pod_name}", 3000) as local:
+                timings = {}
+                for path, expected in (("/livez", 200), ("/readyz", 503)):
+                    begun = time.monotonic()
+                    status = http_status(f"http://127.0.0.1:{local}{path}", timeout=5)
+                    timings[path] = round(time.monotonic() - begun, 2)
+                    if status != expected:
+                        raise RuntimeError(f"API down: frontend {path} returned {status}")
+                if timings["/readyz"] >= 3:
+                    raise RuntimeError(f"frontend readiness not bounded: {timings}")
+                # Longer than liveness initialDelay + failureThreshold x period (10 + 3x10s).
+                time.sleep(45)
+                if http_status(f"http://127.0.0.1:{local}/livez", timeout=5) != 200:
+                    raise RuntimeError("frontend liveness failed during API outage")
+            pod = frontend_pod()
+            if pod["metadata"]["name"] != pod_name or restarts(pod) != before:  # type: ignore[index]
+                raise RuntimeError("frontend was restarted because the API was down")
+            if ready_endpoints(kube, "asic-frontend") != 0:
+                raise RuntimeError("unready frontend was not removed from Service endpoints")
             try:
-                run(
-                    *kube,
-                    "rollout",
-                    "status",
-                    "deployment/asic-api",
-                    "-n",
-                    "asic-system",
-                    "--timeout=15s",
-                )
-            except RuntimeError:
-                pass
+                post_rollout_smoke(kube)
+            except SmokeFailed as error:
+                smoke_during_outage = str(error)
             else:
+                raise RuntimeError("post-rollout smoke passed with the API scaled to zero")
+            evidence["api_outage"] = {
+                "frontend_probe_seconds": timings,
+                "frontend_restarts_before": before,
+                "frontend_restarts_after": restarts(pod),
+                "frontend_ready_endpoints": 0,
+                "post_rollout_smoke": f"failed as required: {smoke_during_outage}",
+            }
+            kube("scale", "deployment/asic-api", "--replicas=1")
+            for name in ("asic-api", "asic-frontend"):
+                kube("rollout", "status", f"deployment/{name}", "--timeout=180s", timeout=240)
+            kube("wait", "--for=condition=Ready", f"pod/{pod_name}", "--timeout=60s", timeout=90)
+            post_rollout_smoke(kube)
+
+            step("Failed application rollout and recovery (never a DB downgrade)")
+            kube("set", "image", "deployment/asic-api", "api=asic-invalid:phase14-missing")
+            if (
+                kube.probe("rollout", "status", "deployment/asic-api", "--timeout=15s").returncode
+                == 0
+            ):
                 raise RuntimeError("deliberately invalid rollout unexpectedly passed")
-            run(*kube, "rollout", "undo", "deployment/asic-api", "-n", "asic-system")
-            run(
-                *kube,
-                "rollout",
-                "status",
-                "deployment/asic-api",
-                "-n",
-                "asic-system",
-                "--timeout=180s",
-            )
+            kube("rollout", "undo", "deployment/asic-api")
+            kube("rollout", "status", "deployment/asic-api", "--timeout=180s", timeout=240)
+            post_rollout_smoke(kube)
+            evidence["rollback"] = "passed"
+
             for image, expected in image_ids.items():
                 if (
                     run("docker", "image", "inspect", image, "--format", "{{.Id}}").strip()
                     != expected
                 ):
                     raise RuntimeError("supplied image tag changed during smoke")
+
+            step("Terraform destroy")
+            run(*terraform, "destroy", "-auto-approve", *tf_vars, timeout=900)
+            evidence["terraform"] = "apply, no-drift re-plan, destroy"
             print(
                 json.dumps(
                     {
                         "result": "passed",
                         "image_ids": image_ids,
                         "kubernetes": "1.34.0",
-                        "network_policy_enforcement": "cilium_1.20.2_frontend_to_database_denied",
-                        "rollback": "passed",
+                        "cni": "cilium_1.20.2",
+                        **evidence,
                         "remote_production": "not_executed",
                     },
                     indent=2,

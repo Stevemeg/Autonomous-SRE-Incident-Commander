@@ -476,8 +476,8 @@ are traced to process rather than to product components.
 | V3 boundary | Implementation | Acceptance evidence |
 |---|---|---|
 | Sections 13, 18: reproducible builds | Root/frontend Dockerfiles, hash locks, standalone Next.js | Actual image builds; UID/runtime checks; Trivy final-image scans and bound SBOMs |
-| Sections 15, 18: release security | `scripts/security_gate.py`, pinned Actions/tools, release attestations | Required container scan; malformed/missing/wrong-image mutation tests; repository security suite |
-| Sections 11, 12, 18: deployment | Kustomize base/local overlays, migration Job, probes, network policies | Disposable kind migration/rollout/probes and failed-rollout recovery; Cilium denial probe |
+| Sections 15, 18: release security | `scripts/security_gate.py`, pinned Actions/tools, unprivileged build vs minimal publish/attest jobs, checksummed artifact hand-off, `scripts/verify_release_attestation.py`, step-scoped kubeconfig | Required container scan; malformed/missing/wrong-image mutation tests; workflow trust-graph tests; attestation policy tests (repo/workflow/ref/revision/digest, real `gh` 2.98 JSON); repository security suite |
+| Sections 11, 12, 18: deployment | Kustomize base/local overlays, migration Job, probes, network policies, Terraform PSA `restricted`, CIDR-union validation, `scripts/deploy_release.py` | Disposable kind: PSA rejection, fail-fast migration through the shared orchestrator with guard-mutation control, automatic post-rollout smoke, API-outage frontend probe behavior, failed-rollout recovery; Cilium allow/deny probes; frontend health contract |
 | Sections 16, 19: infrastructure ownership | Terraform namespace and tokenless identities; ADR-0031 | fmt/init/validate and local apply; no cloud or raw-secret state claims |
 | Sections 17, 18: quality/evaluation | Reusable quality workflow plus trusted release | Full pytest; golden 18-scenario simulator and strict replay; frontend and observability checks |
 | Sections 20, 24: truthful operating boundary | Deployment guide and CI/CD architecture | Remote production, TLS, cloud capacity and disaster recovery remain unmeasured |

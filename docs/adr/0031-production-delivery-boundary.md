@@ -18,6 +18,20 @@ to GHCR, scan them with one fail-closed Trivy policy, emit CycloneDX SBOMs, and 
 provenance attestations. Release and deployment are separate manual/trusted boundaries; migrations
 finish before rollout, and application rollback never auto-downgrades the database.
 
+Post-audit hardening (Phase 14 LOW findings) tightens the trust boundaries without changing
+the architecture:
+
+- Release is split by authority: an unprivileged `build-validate` job does all repository-controlled
+  work and hands checksummed `docker save` archives to a `publish-attest` job that alone holds
+  `packages`/`id-token` write, has no checkout and never rebuilds. The pushed manifest's config digest
+  must equal the scanned image ID.
+- Deploy verifies attestation repository, signer workflow, source ref (`main` or `v*` tag), source
+  revision and subject digest from certificate claims before any cluster credential exists; the
+  kubeconfig is scoped to one step and removed afterwards.
+- One orchestrator (`scripts/deploy_release.py`) owns migrate -> guard -> rollout -> automatic smoke
+  for both the workflow and the kind smoke, and fails fast on a `Failed` migration Job.
+- Terraform enforces Pod Security Admission `restricted` (pinned `v1.34`) on the namespace it owns.
+
 No production orchestration worker is shipped until there is a real durable worker entry point. No
 retention Job is shipped until a bounded executor and durable receipt exist. Dynamic vendor egress
 uses a platform egress gateway contract because NetworkPolicy cannot authorize DNS names reliably.
@@ -32,4 +46,7 @@ resources and replica counts are defaults, not capacity evidence.
 ## Evidence
 
 Docker builds/scans/SBOM validation; Kustomize renders; Terraform fmt/init/validate/plan/apply;
-packaging contract tests; and `scripts/local_deployment_smoke.sh` against disposable kind.
+packaging contract tests, workflow trust-graph tests, attestation policy tests, orchestrator behavior
+tests and the frontend health contract; and `scripts/local_deployment_smoke.sh` against disposable
+kind (PSA rejection, fail-fast migration with mutation control, API-outage probe behavior, network
+policy and automatic smoke).
