@@ -8,8 +8,10 @@ tested locally is the ordering that runs in production.
 1. server-side dry-run of the application manifest;
 2. clear the migration Job slot: a previous Job that is Complete/Failed is recorded and deleted
    (foreground) and its absence is confirmed; one already being deleted is only waited for; an
-   ACTIVE previous Job fails the deployment closed and is never touched. Job pod templates are immutable, so the new Job is validated only after
-   the old one is gone;
+   ACTIVE previous Job fails the deployment closed and is never touched. Job pod templates are
+   immutable, so the new Job is validated only after the old one is gone;
+2b. wait (bounded, fail closed) until no pod of any previous migration Job is still running:
+   a Job object can disappear while its pod is still terminating (Phase 15);
 3. server-side dry-run, then ``create`` (never adopt) the new Job and bind to its UID;
 4. watch that Job until Complete, Failed, timeout, or it is replaced/deleted; on anything but
    Complete record bounded, redacted diagnostics and stop (application manifests never applied);
@@ -63,10 +65,19 @@ SMOKE_CHECKS: tuple[tuple[str, int, tuple[tuple[str, int], ...]], ...] = (
 # Deployment diagnostics come from kubectl, Postgres, containers and HTTP clients. These rules
 # redact credential VALUES in the forms those tools print while keeping the field name, so the
 # diagnostic stays useful. They are defensive, not a universal secret detector.
-_SECRET_KEY = r"[\w.-]*(?:password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key)"
+#
+# Linear time (Phase 15): a scheme or key-name run may only START where the run starts
+# (negative lookbehind), and runs are consumed possessively. Without that, every position
+# inside a long unbroken run (``a.a.a...``, 20 KB of letters) restarted a scan to the end of
+# the run: 7 s (DSN rule) and 51 s (key rule) for 20 KB were measured. Any match starting
+# mid-run is also a match from the run start, so the redacted output is unchanged.
+_SECRET_KEY = r"(?<![\w.-])[\w.-]*?(?:password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key)"
 _REDACTIONS: tuple[tuple[re.Pattern[str], str], ...] = (
     # scheme://user:password@host -> scheme://***@host (DSNs, also inside DATABASE_URL=...)
-    (re.compile(r"(?i)([a-z][a-z0-9+.-]*://)[^/\s@]+@"), r"\1***@"),
+    (
+        re.compile(r"(?i)((?<![a-z0-9+.-])(?>[a-z0-9+.-]*?[a-z][a-z0-9+.-]*+)://)[^/\s@]++@"),
+        r"\1***@",
+    ),
     # Authorization: Bearer|Basic|Token <credential>
     (
         re.compile(
@@ -84,10 +95,40 @@ _REDACTIONS: tuple[tuple[re.Pattern[str], str], ...] = (
     ),
     # key=value, key: value, "key": "value", PGPASSWORD="value", api_key=value
     (
-        re.compile(rf"(?i)(\b{_SECRET_KEY}[\"']?\s*[:=]\s*)(?:\"[^\"]*\"|'[^']*'|[^\s,;&}}\]]+)"),
+        re.compile(rf"(?i)({_SECRET_KEY}[\"']?\s*[:=]\s*)(?:\"[^\"]*\"|'[^']*'|[^\s,;&}}\]]+)"),
         r"\1***",
     ),
+    # Bare credential shapes that CLIs sometimes echo without any key name (Phase 15): JWTs
+    # (the first eyJ at a word boundary in a base64url run - the same linear construction as
+    # the telemetry redaction), cloud access keys, API keys, chat and code-host tokens.
+    (
+        re.compile(
+            r"(?<![A-Za-z0-9_-])(?>([A-Za-z0-9_-]*?)\beyJ[A-Za-z0-9_-]{10,}+)"
+            r"\.[A-Za-z0-9_-]{10,}+\.[A-Za-z0-9_-]{10,}+"
+        ),
+        r"\1***",
+    ),
+    (re.compile(r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b"), "***"),
+    (re.compile(r"\b(?:sk|rk)-[A-Za-z0-9_-]{16,}+"), "***"),
+    (re.compile(r"\bxox[abposr]-[A-Za-z0-9-]{10,}+"), "***"),
+    (re.compile(r"\b(?:gh[pousr]_[A-Za-z0-9]{20,}+|github_pat_[A-Za-z0-9_]{20,}+)"), "***"),
+    (re.compile(r"\bAIza[0-9A-Za-z_-]{30,}+"), "***"),
 )
+
+
+def _monotonic() -> float:
+    """Default clock, resolved at CALL time (N-4).
+
+    A default of ``time.monotonic`` would bind the real clock when this module is imported, so
+    a test or mutant that forgets to inject a clock would wait out real deadlines (up to the
+    600 s migration deadline). Looking ``time`` up per call lets a test replace ``time.sleep``
+    once and turn any accidental real wait into an immediate failure.
+    """
+    return time.monotonic()
+
+
+def _sleep(seconds: float) -> None:
+    time.sleep(seconds)
 
 
 class DeploymentError(RuntimeError):
@@ -259,8 +300,8 @@ def clear_previous_migration(
     *,
     timeout: float = 180,
     interval: float = 2,
-    clock: Callable[[], float] = time.monotonic,
-    sleep: Callable[[float], None] = time.sleep,
+    clock: Callable[[], float] = _monotonic,
+    sleep: Callable[[float], None] = _sleep,
     log: Callable[[str], None] = print,
 ) -> str:
     """Free the fixed Job name for this release, or fail closed.
@@ -314,6 +355,74 @@ def clear_previous_migration(
         sleep(interval)
 
 
+def _running_migration_pods(pods: dict[str, Any]) -> list[str]:
+    """Pods still able to run a migration: any phase other than Succeeded/Failed.
+
+    A pod in a terminal phase runs no container, so it cannot overlap with a new migration;
+    an orphaned finished pod therefore does not block (it would never disappear on its own).
+    A pod that is terminating (``deletionTimestamp``) but still Running DOES block: its
+    container may be inside a migration transaction for the whole grace period.
+    """
+    running: list[str] = []
+    for pod in pods.get("items") or []:
+        metadata = pod.get("metadata") or {}
+        phase = (pod.get("status") or {}).get("phase")
+        if phase in ("Succeeded", "Failed"):
+            continue
+        owner = next(
+            (
+                ref.get("uid")
+                for ref in metadata.get("ownerReferences") or []
+                if ref.get("kind") == "Job"
+            ),
+            None,
+        )
+        labels = metadata.get("labels") or {}
+        controller = owner or labels.get("batch.kubernetes.io/controller-uid") or "orphaned"
+        running.append(f"{metadata.get('name')} phase={phase} controller-uid={controller}")
+    return running
+
+
+def wait_for_migration_pods(
+    kube: Kubectl,
+    job: str = MIGRATION_JOB,
+    *,
+    timeout: float = 180,
+    interval: float = 2,
+    clock: Callable[[], float] = _monotonic,
+    sleep: Callable[[float], None] = _sleep,
+    log: Callable[[str], None] = print,
+) -> None:
+    """Block until no pod of ANY previous ``job`` is still running, or fail closed.
+
+    The Job object disappearing does not mean its pods have stopped: a Job deleted with
+    background propagation (or orphaned) vanishes at once while its pod is still inside the
+    termination grace period, possibly mid-migration. Pods keep the ``job-name`` label (and
+    their controller UID) after the Job is gone, so the check does not need the old UID and
+    also covers a Job that was already absent when this deployment started. If a running
+    pod remains after ``timeout`` the replacement is NOT created. A pod listing that fails is
+    retried until the deadline and then also fails closed.
+    """
+    started = clock()
+    last = "pod listing never succeeded"
+    while True:
+        raw = kube.probe("get", "pods", "-l", f"job-name={job}", "-o", "json")
+        if raw.returncode == 0:
+            running = _running_migration_pods(json.loads(raw.stdout))
+            if not running:
+                return
+            last = "; ".join(running)
+            log(f"waiting for previous migration pod(s) to stop: {last}")
+        else:
+            last = f"cannot list migration pods: {bounded(raw.stderr)}"
+        if clock() - started >= timeout:
+            raise DeploymentError(
+                f"previous migration pod(s) still running {timeout:.0f}s after the Job slot was "
+                f"freed ({last}); the replacement was NOT created"
+            )
+        sleep(interval)
+
+
 def split_migration(manifest: str) -> tuple[str, str]:
     """Separate the one migration Job from its supporting objects (policies, secrets)."""
     documents = [doc for doc in yaml.safe_load_all(manifest) if isinstance(doc, dict)]
@@ -332,8 +441,8 @@ def wait_for_job(
     uid: str | None = None,
     timeout: float = 600,
     interval: float = 2,
-    clock: Callable[[], float] = time.monotonic,
-    sleep: Callable[[float], None] = time.sleep,
+    clock: Callable[[], float] = _monotonic,
+    sleep: Callable[[float], None] = _sleep,
 ) -> JobOutcome:
     """Poll until the Job is Complete or Failed; a known failure never waits for the timeout.
 
@@ -447,8 +556,8 @@ def converge(
     *,
     deadline: float = SMOKE_DEADLINE_SECONDS,
     interval: float = SMOKE_RETRY_INTERVAL_SECONDS,
-    clock: Callable[[], float] = time.monotonic,
-    sleep: Callable[[float], None] = time.sleep,
+    clock: Callable[[], float] = _monotonic,
+    sleep: Callable[[float], None] = _sleep,
     log: Callable[[str], None] = print,
 ) -> int:
     """Run ``attempt`` until it stops raising SmokeFailed or ``deadline`` expires.
@@ -488,8 +597,8 @@ def post_rollout_smoke(
     log: Callable[[str], None] = print,
     deadline: float = SMOKE_DEADLINE_SECONDS,
     interval: float = SMOKE_RETRY_INTERVAL_SECONDS,
-    clock: Callable[[], float] = time.monotonic,
-    sleep: Callable[[float], None] = time.sleep,
+    clock: Callable[[], float] = _monotonic,
+    sleep: Callable[[float], None] = _sleep,
 ) -> None:
     """Every check must pass within the convergence allowance or the deployment fails.
 
@@ -532,11 +641,12 @@ def run_deployment(
     *,
     migration_timeout: float = 600,
     rollout_timeout: float = 600,
+    pod_timeout: float = 180,
     poll_interval: float = 2,
     smoke: Callable[[Kubectl], None] = post_rollout_smoke,
     log: Callable[[str], None] = print,
-    clock: Callable[[], float] = time.monotonic,
-    sleep: Callable[[float], None] = time.sleep,
+    clock: Callable[[], float] = _monotonic,
+    sleep: Callable[[float], None] = _sleep,
 ) -> JobOutcome:
     """Run the one authoritative migrate-then-rollout sequence. Raises on any failure."""
     job_manifest, supporting = split_migration(migration)
@@ -547,6 +657,10 @@ def run_deployment(
         kube, interval=poll_interval, clock=clock, sleep=sleep, log=log
     )
     log(f"migration Job slot free (previous: {previous})")
+    # The Job object being gone is not enough: its pods may still be terminating (Phase 15).
+    wait_for_migration_pods(
+        kube, timeout=pod_timeout, interval=poll_interval, clock=clock, sleep=sleep, log=log
+    )
     # Validated only now: a Job pod template is immutable, so validating the new Job against a
     # predecessor with the same name would fail on any template change.
     kube("apply", "--dry-run=server", "-f", "-", content=job_manifest)

@@ -419,12 +419,16 @@ class TestFailureScenarios:
         )
         assert provider.call_count == 2
         assert len(reservations) == 2
-        assert reservations[0].status == "completed"
-        assert reservations[0].actual_input_tokens is not None
-        assert reservations[1].status == "reserved"  # unknown usage stays charged
+        # Both rows can carry the same timestamp, so identify them by state, not by order.
+        (completed,) = [r for r in reservations if r.status == "completed"]
+        (charged,) = [
+            r for r in reservations if r.status == "reserved"
+        ]  # unknown usage stays charged
+        assert completed.actual_input_tokens is not None
+        assert charged.actual_input_tokens is None
         run = kernel_session.get(WorkflowRun, outcome.workflow_run_id)
         assert run is not None
-        assert run.budget_consumed["ledger"]["tokens"] >= reservations[0].reserved_tokens
+        assert run.budget_consumed["ledger"]["tokens"] >= completed.reserved_tokens
 
     def test_a_transient_error_clears_on_retry(
         self,

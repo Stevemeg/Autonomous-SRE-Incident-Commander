@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
+import functools
 import hashlib
+import inspect
 import json
 import logging
 import re
 import uuid
-from collections.abc import Iterator, MutableMapping
+import weakref
+from collections.abc import AsyncIterator, Iterator, MutableMapping
 from contextlib import asynccontextmanager
 from datetime import datetime
 from time import perf_counter
@@ -17,11 +21,15 @@ from typing import Annotated, Any, cast
 import sqlalchemy as sa
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.concurrency import run_in_threadpool
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.routing import APIRoute
 from opentelemetry import metrics as otel_metrics
 from opentelemetry import trace
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field
+from sqlalchemy import exc as sa_exc
 from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm import exc as orm_exc
 
 from asic.api.auth import (
     ApiSettings,
@@ -62,6 +70,7 @@ from asic.db.projections import append_incident_event, apply_transition
 from asic.db.session import (
     apply_statement_timeouts,
     bind_tenant,
+    bind_tenant_on_begin,
     create_app_engine,
     session_factory,
 )
@@ -83,6 +92,7 @@ from asic.ingestion.service import IngestionService
 from asic.observability.audit import AuditWriter
 from asic.observability.health import ReadinessCache, check_database, evaluate_readiness
 from asic.observability.logging import log_event
+from asic.observability.redaction import looks_like_secret, scrub_text
 from asic.observability.setup import render_prometheus
 from asic.remediation.approval_service import decide
 
@@ -244,9 +254,11 @@ def _page(items: list[dict[str, Any]], limit: int) -> dict[str, Any]:
 def _session(request: Request, principal: CurrentPrincipal) -> Iterator[Session]:
     factory: sessionmaker[Session] = request.app.state.session_factory
     with factory() as session:
+        # Bound lazily, per transaction, in the thread that first uses the session - never here,
+        # where holding a connection while waiting for an endpoint thread deadlocked the pool
+        # under a burst (Phase 15; see ``bind_tenant_on_begin``).
+        bind_tenant_on_begin(session, principal.tenant_id)
         try:
-            bind_tenant(session, principal.tenant_id)
-            apply_statement_timeouts(session)
             yield session
             session.commit()
         except Exception:
@@ -283,11 +295,44 @@ def _incident_json(item: Incident) -> dict[str, Any]:
     )
 
 
-incidents = APIRouter(prefix="/incidents", tags=["incidents"])
-approvals = APIRouter(prefix="/approvals", tags=["approvals"])
-ingestion = APIRouter(prefix="/ingest", tags=["ingestion"])
-evaluation = APIRouter(prefix="/evaluation", tags=["evaluation"])
-admin = APIRouter(prefix="/admin", tags=["administration"])
+def _releasing_session(endpoint: Any) -> Any:
+    """Finish the request transaction in the endpoint's own thread (Phase 15).
+
+    A sync endpoint runs in one threadpool call, but FastAPI validates its return value in
+    *another* before the session dependency's teardown returns the connection. A request that
+    had finished its database work therefore held a pooled connection while it waited for a
+    thread; with more requests in flight than threads plus connections, every thread waited on
+    the pool and every connection on a thread, and the API answered nothing until the pool
+    timeout (found by the load harness's burst profile). Committing and closing here returns
+    the connection before the thread is released. On an exception nothing is committed: the
+    dependency's teardown rolls back as before.
+    """
+    if inspect.iscoroutinefunction(endpoint) or getattr(endpoint, "_releases_session", False):
+        return endpoint
+
+    @functools.wraps(endpoint)
+    def call(*args: Any, **kwargs: Any) -> Any:
+        result = endpoint(*args, **kwargs)
+        for value in kwargs.values():
+            if isinstance(value, Session):
+                value.commit()
+                value.close()
+        return result
+
+    call._releases_session = True  # type: ignore[attr-defined]
+    return call
+
+
+class _ReleasingRoute(APIRoute):
+    def __init__(self, path: str, endpoint: Any, **kwargs: Any) -> None:
+        super().__init__(path, _releasing_session(endpoint), **kwargs)
+
+
+incidents = APIRouter(prefix="/incidents", tags=["incidents"], route_class=_ReleasingRoute)
+approvals = APIRouter(prefix="/approvals", tags=["approvals"], route_class=_ReleasingRoute)
+ingestion = APIRouter(prefix="/ingest", tags=["ingestion"], route_class=_ReleasingRoute)
+evaluation = APIRouter(prefix="/evaluation", tags=["evaluation"], route_class=_ReleasingRoute)
+admin = APIRouter(prefix="/admin", tags=["administration"], route_class=_ReleasingRoute)
 
 
 @incidents.get("")
@@ -755,11 +800,116 @@ def decide_approval(
     return _remember(session, principal, idempotency_key, operation, body, response)
 
 
+def _check_connector_scope(
+    factory: sessionmaker[Session],
+    principal: Principal,
+    environment_id: uuid.UUID,
+    service_id: uuid.UUID,
+) -> None:
+    """The connector's signed scope must name an active service/environment it is bound to.
+
+    Runs in the threadpool with its own short transaction, closed before ingestion starts
+    (Phase 15). The handler previously held the request's pooled connection - with an open
+    transaction - while ``IngestionService`` checked out a second one: once concurrent ingests
+    reached the pool size every request held one connection idle-in-transaction and waited for
+    another, and the API stalled until the pool timeout (found by the load harness at 50
+    alerts/s). One connection per request at a time cannot deadlock the pool.
+    """
+    with factory() as session:
+        bind_tenant(session, principal.tenant_id)
+        apply_statement_timeouts(session)
+        environment = session.scalar(
+            sa.select(Environment).where(
+                Environment.tenant_id == principal.tenant_id,
+                Environment.id == environment_id,
+            )
+        )
+        service = session.scalar(
+            sa.select(Service).where(
+                Service.tenant_id == principal.tenant_id,
+                Service.id == service_id,
+            )
+        )
+        if environment is None or service is None or not service.is_active:
+            raise HTTPException(
+                404, detail={"code": "not_found", "message": "connector target not found"}
+            )
+        binding_id = session.scalar(
+            sa.select(ConnectorScopeBinding.id).where(
+                ConnectorScopeBinding.tenant_id == principal.tenant_id,
+                ConnectorScopeBinding.connector_id == principal.connector_id,
+                ConnectorScopeBinding.source == principal.source,
+                ConnectorScopeBinding.service_id == service_id,
+                ConnectorScopeBinding.environment_id == environment_id,
+                ConnectorScopeBinding.is_enabled.is_(True),
+                ConnectorScopeBinding.revoked_at.is_(None),
+            )
+        )
+        session.rollback()  # read-only: end the transaction before the connection is returned
+    if binding_id is None:
+        raise HTTPException(
+            403,
+            detail={
+                "code": "connector_scope_denied",
+                "message": "connector is not authorized for the requested service/environment",
+            },
+        )
+
+
+#: Ingestion bulkhead (Phase 15). At most this many alerts are validated and correlated at once
+#: per process; further ingests wait *without* holding a database connection, so a burst of
+#: alerts cannot take the connection pool (15 by default) away from reads and approvals. A
+#: request that cannot start within ``INGEST_SLOT_WAIT_SECONDS`` gets a classified 503 with
+#: ``Retry-After``; a sender's redelivery of the same event is deduplicated (FR-ING-03).
+INGEST_CONCURRENCY = 4
+INGEST_SLOT_WAIT_SECONDS = 5.0
+
+
+class IngestSlots:
+    """The ingestion bulkhead: ``limit`` concurrent ingests per event loop.
+
+    An ``asyncio.Semaphore`` belongs to the loop it is first used on; a server runs one loop,
+    but in-process clients may run each request on its own. Keeping one semaphore per running
+    loop (held weakly) is exact for the server and safe for everything else.
+    """
+
+    def __init__(self, limit: int) -> None:
+        if limit < 0:
+            raise ValueError("ingestion concurrency must be non-negative")
+        self.limit = limit
+        self._by_loop: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Semaphore] = (
+            weakref.WeakKeyDictionary()
+        )
+
+    def current(self) -> asyncio.Semaphore:
+        loop = asyncio.get_running_loop()
+        slots = self._by_loop.get(loop)
+        if slots is None:
+            slots = self._by_loop[loop] = asyncio.Semaphore(self.limit)
+        return slots
+
+
+@asynccontextmanager
+async def _ingest_slot(request: Request) -> AsyncIterator[None]:
+    slots = cast(IngestSlots, request.app.state.ingest_slots).current()
+    try:
+        await asyncio.wait_for(slots.acquire(), timeout=INGEST_SLOT_WAIT_SECONDS)
+    except TimeoutError:
+        raise HTTPException(
+            503,
+            detail={"code": "ingestion_busy", "message": "ingestion is at capacity; retry"},
+            headers={"Retry-After": str(DATABASE_RETRY_AFTER_SECONDS)},
+        ) from None
+    try:
+        yield
+    finally:
+        slots.release()
+
+
 @ingestion.post("/alerts")
 async def ingest_alert(
     request: Request,
     principal: CurrentPrincipal,
-    session: DbSession,
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
 ) -> dict[str, Any]:
     require_any_environment(principal, INGEST_WRITE)
@@ -787,58 +937,31 @@ async def ingest_alert(
     environment_id = cast(uuid.UUID, principal.environment_id)
     service_id = cast(uuid.UUID, principal.service_id)
     require_environment(principal, INGEST_WRITE, environment_id)
-    environment = session.scalar(
-        sa.select(Environment).where(
-            Environment.tenant_id == principal.tenant_id,
-            Environment.id == environment_id,
+    async with _ingest_slot(request):
+        await run_in_threadpool(
+            _check_connector_scope,
+            request.app.state.session_factory,
+            principal,
+            environment_id,
+            service_id,
         )
-    )
-    service = session.scalar(
-        sa.select(Service).where(
-            Service.tenant_id == principal.tenant_id,
-            Service.id == service_id,
-        )
-    )
-    if environment is None or service is None or not service.is_active:
-        raise HTTPException(
-            404, detail={"code": "not_found", "message": "connector target not found"}
-        )
-    binding_id = session.scalar(
-        sa.select(ConnectorScopeBinding.id).where(
-            ConnectorScopeBinding.tenant_id == principal.tenant_id,
-            ConnectorScopeBinding.connector_id == principal.connector_id,
-            ConnectorScopeBinding.source == principal.source,
-            ConnectorScopeBinding.service_id == service_id,
-            ConnectorScopeBinding.environment_id == environment_id,
-            ConnectorScopeBinding.is_enabled.is_(True),
-            ConnectorScopeBinding.revoked_at.is_(None),
-        )
-    )
-    if binding_id is None:
-        raise HTTPException(
-            403,
-            detail={
-                "code": "connector_scope_denied",
-                "message": "connector is not authorized for the requested service/environment",
-            },
-        )
-    raw = await request.body()
-    try:
-        result = await run_in_threadpool(
-            IngestionService(request.app.state.session_factory).ingest,
-            ConnectorContext(
-                tenant_id=principal.tenant_id,
-                connector_id=cast(str, principal.connector_id),
-                source=cast(str, principal.source),
-                service_id=cast(uuid.UUID, principal.service_id),
-                environment_id=cast(uuid.UUID, principal.environment_id),
-            ),
-            raw,
-        )
-    except IngestionRejected as exc:
-        raise HTTPException(
-            400, detail={"code": exc.code, "message": "invalid alert envelope"}
-        ) from exc
+        raw = await request.body()
+        try:
+            result = await run_in_threadpool(
+                IngestionService(request.app.state.session_factory).ingest,
+                ConnectorContext(
+                    tenant_id=principal.tenant_id,
+                    connector_id=cast(str, principal.connector_id),
+                    source=cast(str, principal.source),
+                    service_id=cast(uuid.UUID, principal.service_id),
+                    environment_id=cast(uuid.UUID, principal.environment_id),
+                ),
+                raw,
+            )
+        except IngestionRejected as exc:
+            raise HTTPException(
+                400, detail={"code": exc.code, "message": "invalid alert envelope"}
+            ) from exc
     return _row(
         receipt_id=result.receipt_id,
         incident_id=result.incident_id,
@@ -855,14 +978,13 @@ async def ingest_webhook(
     source: str,
     request: Request,
     principal: CurrentPrincipal,
-    session: DbSession,
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
 ) -> dict[str, Any]:
     if principal.source != source:
         raise HTTPException(
             404, detail={"code": "not_found", "message": "webhook source not found"}
         )
-    return await ingest_alert(request, principal, session, idempotency_key)
+    return await ingest_alert(request, principal, idempotency_key)
 
 
 def _suite_run_json(item: EvaluationSuiteRun) -> dict[str, Any]:
@@ -1213,6 +1335,7 @@ def create_app(
     app.state.session_factory = resolved_factory
     app.state.token_verifier = verifier
     app.state.rate_limiter = RateLimiter(resolved_settings.rate_limit_per_minute)
+    app.state.ingest_slots = IngestSlots(INGEST_CONCURRENCY)
     #: Failed-authentication attempts per peer address; deliberately small.
     app.state.auth_failure_limiter = RateLimiter(30)
     readiness = ReadinessCache(lambda: evaluate_readiness([check_database(resolved_factory)]))
@@ -1278,6 +1401,42 @@ def create_app(
                         correlation_id=correlation_id,
                     )
 
+    @app.exception_handler(RequestValidationError)
+    async def invalid_request(request: Request, exc: RequestValidationError) -> Response:
+        # Phase 15: FastAPI's default 422 echoes the offending *input* back. That leaks what
+        # a client sent into responses and logs, and an input such as NaN cannot even be
+        # serialised (it surfaced as a 500). Only the location, error type and our own
+        # message are returned, each bounded.
+        return Response(
+            content=json.dumps({"detail": _validation_detail(exc)}),
+            status_code=422,
+            media_type="application/json",
+        )
+
+    @app.exception_handler(sa_exc.SQLAlchemyError)
+    async def database_error(request: Request, exc: sa_exc.SQLAlchemyError) -> Response:
+        # Phase 15: a transient database failure is a bounded, classified 503 with a retry
+        # hint, never an opaque 500. Anything unclassified (a real defect) stays a 500. The
+        # response and the log carry the class and SQLSTATE only - never SQL or row data.
+        status, code, sqlstate = classify_database_error(exc)
+        log_event(
+            _logger,
+            "api.database_error",
+            level=logging.WARNING if status == 503 else logging.ERROR,
+            error_class=type(exc).__name__,
+            sqlstate=sqlstate,
+            code=code,
+            route=_route_template(request.scope),
+            correlation_id=getattr(request.state, "correlation_id", None),
+        )
+        headers = {"Retry-After": str(DATABASE_RETRY_AFTER_SECONDS)} if status == 503 else {}
+        return Response(
+            content=json.dumps({"detail": {"code": code, "message": _DB_MESSAGES[code]}}),
+            status_code=status,
+            media_type="application/json",
+            headers=headers,
+        )
+
     @app.exception_handler(PermissionDenied)
     async def permission_denied(request: Request, exc: PermissionDenied) -> Response:
         await run_in_threadpool(_record_denial, resolved_factory, request, exc)
@@ -1319,6 +1478,84 @@ def create_app(
 
 _PROBE_ROUTES = frozenset({"/livez", "/healthz", "/readyz", "/metrics"})
 
+
+#: A field location is echoed only when it is one of *our* identifier-shaped names. A client
+#: controls unexpected key names (``extra="forbid"`` reports them), so anything else - a token
+#: sent as a key, arbitrary Unicode - is replaced rather than reflected (Phase 15).
+_SAFE_LOC = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,63}")
+
+
+def _loc_part(part: object) -> object:
+    if isinstance(part, int):
+        return part
+    text = str(part)
+    return text if _SAFE_LOC.fullmatch(text) and not looks_like_secret(text) else "<field>"
+
+
+def _validation_detail(exc: RequestValidationError) -> dict[str, Any]:
+    errors = [
+        {
+            "loc": [_loc_part(part) for part in error.get("loc", ())][:8],
+            "type": str(error.get("type", "invalid"))[:64],
+            "msg": scrub_text(str(error.get("msg", "invalid value")), limit=200),
+        }
+        for error in exc.errors()[:20]
+    ]
+    return {"code": "invalid_request", "message": "request validation failed", "errors": errors}
+
+
+#: Seconds a client should wait before retrying a request refused for a transient database
+#: condition. Deliberately short: the pool and statement deadlines are seconds, not minutes.
+DATABASE_RETRY_AFTER_SECONDS = 2
+
+#: SQLSTATE -> response code for conditions that are transient by nature.
+_TRANSIENT_SQLSTATES: dict[str, str] = {
+    "57014": "database_timeout",  # query_canceled: statement_timeout fired
+    "25P03": "database_timeout",  # idle_in_transaction_session_timeout
+    "55P03": "database_contention",  # lock_not_available (lock_timeout)
+    "40001": "database_contention",  # serialization_failure
+    "40P01": "database_contention",  # deadlock_detected
+    "53300": "database_unavailable",  # too_many_connections
+    "57P01": "database_unavailable",  # admin_shutdown
+    "57P02": "database_unavailable",  # crash_shutdown
+    "57P03": "database_unavailable",  # cannot_connect_now
+}
+_DB_MESSAGES: dict[str, str] = {
+    "database_busy": "the service is at database capacity; retry shortly",
+    "database_timeout": "the database did not answer within its deadline; retry shortly",
+    "database_contention": "the request conflicted with concurrent work; retry shortly",
+    "database_unavailable": "the database is unavailable; retry shortly",
+    "concurrent_modification": "the resource was changed by a concurrent request; re-read it",
+    "internal_error": "internal error",
+}
+
+
+def classify_database_error(exc: BaseException) -> tuple[int, str, str | None]:
+    """``(http status, code, sqlstate)`` for a database exception.
+
+    Pool exhaustion, lost/refused connections and the server's own deadline, lock and
+    serialization failures are transient (503). A lost optimistic-locking race is a conflict
+    (409). Anything else - an integrity violation or a programming error that escaped its
+    handler - is a defect and stays 500.
+    """
+    if isinstance(exc, sa_exc.TimeoutError):  # QueuePool checkout deadline
+        return 503, "database_busy", None
+    if isinstance(exc, orm_exc.StaleDataError):
+        # Optimistic locking (``incident.version_id``): a concurrent request changed the row
+        # first. Nothing was written; the caller re-reads and decides again.
+        return 409, "concurrent_modification", None
+    original = getattr(exc, "orig", None)
+    sqlstate = getattr(original, "pgcode", None)
+    if isinstance(sqlstate, str) and sqlstate in _TRANSIENT_SQLSTATES:
+        return 503, _TRANSIENT_SQLSTATES[sqlstate], sqlstate
+    if isinstance(exc, sa_exc.DBAPIError) and exc.connection_invalidated:
+        return 503, "database_unavailable", sqlstate
+    if isinstance(exc, sa_exc.OperationalError):
+        # Connection refused/reset/closed, DNS failure, server gone: no SQLSTATE at all.
+        return 503, "database_unavailable", sqlstate
+    return 500, "internal_error", sqlstate if isinstance(sqlstate, str) else None
+
+
 #: The request method is caller-supplied: HTTP permits any token, so an unknown method is
 #: reported as ``OTHER`` rather than becoming a new label value per request.
 _METHODS = frozenset({"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"})
@@ -1343,4 +1580,4 @@ def _route_template(scope: MutableMapping[str, Any]) -> str:
     return "/".join(f"{{{names[part]}}}" if part in names else part for part in path.split("/"))
 
 
-__all__ = ["ApiSettings", "create_app"]
+__all__ = ["ApiSettings", "classify_database_error", "create_app"]

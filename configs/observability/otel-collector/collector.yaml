@@ -5,6 +5,12 @@
 # Loki promotes service.name and deployment.environment.name to stream labels; every other
 # field - tenant_id, incident_id, trace_id - stays in the log body, so identifiers never add
 # stream cardinality. Paths, endpoints and TLS are local defaults; deployment is Phase 14.
+#
+# Environment identity (Phase 15, F-17): application log lines do not carry the deployment
+# environment, so without the resource processor below every log stream from local, staging and
+# production collectors looked identical in Loki. One collector serves one environment, so the
+# value comes from the collector's own ASIC_DEPLOYMENT_ENVIRONMENT (one value per collector: no
+# cardinality growth). `insert` never overwrites the value a traced process already set.
 receivers:
   otlp:
     protocols:
@@ -37,6 +43,11 @@ processors:
     limit_percentage: 80
     spike_limit_percentage: 20
   batch: {}
+  resource/environment:
+    attributes:
+      - key: deployment.environment.name
+        value: ${env:ASIC_DEPLOYMENT_ENVIRONMENT:-unspecified}
+        action: insert
 
 exporters:
   otlphttp/loki:
@@ -50,9 +61,9 @@ service:
   pipelines:
     traces:
       receivers: [otlp]
-      processors: [memory_limiter, batch]
+      processors: [memory_limiter, resource/environment, batch]
       exporters: [otlp/tempo]
     logs:
       receivers: [filelog]
-      processors: [memory_limiter, batch]
+      processors: [memory_limiter, resource/environment, batch]
       exporters: [otlphttp/loki]

@@ -38,6 +38,10 @@ class RateLimiter:
         self._max_keys = max_keys
         self._hits: dict[str, deque[float]] = {}
         self._lock = threading.Lock()
+        #: While the table is full, no key can expire before this instant, so a new key
+        #: arriving earlier is refused in O(1) instead of rescanning the whole table under
+        #: the lock (Phase 15: a stream of unique keys made every refusal an O(n) scan).
+        self._prune_not_before = float("-inf")
 
     def admit(self, key: str) -> bool:
         now = self._clock()
@@ -46,7 +50,8 @@ class RateLimiter:
             hits = self._hits.get(key)
             if hits is None:
                 if len(self._hits) >= self._max_keys:
-                    self._prune(cutoff)
+                    if now >= self._prune_not_before:
+                        self._prune(cutoff)
                     if len(self._hits) >= self._max_keys:
                         return False  # fail closed for a new key when the table is full
                 hits = self._hits[key] = deque()
@@ -60,6 +65,11 @@ class RateLimiter:
     def _prune(self, cutoff: float) -> None:
         for key in [k for k, h in self._hits.items() if not h or h[-1] <= cutoff]:
             del self._hits[key]
+        if len(self._hits) >= self._max_keys:
+            # Still full: the earliest a slot can free is when the least recently used key's
+            # newest hit leaves the window. Until then there is nothing to prune.
+            oldest = min(h[-1] for h in self._hits.values())
+            self._prune_not_before = oldest + self._window
 
     def tracked_keys(self) -> int:
         with self._lock:

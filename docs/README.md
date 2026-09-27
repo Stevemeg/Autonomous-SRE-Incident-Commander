@@ -39,6 +39,8 @@ area and points to the document that owns the detail.
 | [`evaluation/`](./evaluation/) | Evaluation harness architecture (§I) and Phase 11 implementation status | **Implemented (simulator/replay) and tested** |
 | [`observability/SLOS.md`](./observability/SLOS.md) | SLOs, error budgets, burn-rate and invariant alerts | **Implemented as rules; targets not measured** |
 | [`runbooks/`](./runbooks/README.md) | One runbook per alert | **Authored and linked from every alert** |
+| [`testing/`](./testing/README.md) | Phase 15 load/performance, resilience and chaos, security campaigns, end-to-end scenarios, measured results and raw evidence | **Executed locally; results labelled LOCAL** |
+| [`deployment/`](./deployment/PHASE14_DEPLOYMENT.md) | Delivery, migration ordering, rollback, retention maintenance, local kind smoke | **Validated on local kind only** |
 
 ## Reading order for a new reviewer
 

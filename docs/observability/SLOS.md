@@ -54,7 +54,7 @@ would license the failure. They alert on the **first** occurrence:
 |---|---|
 | A run that cannot be resumed is surfaced, never silently lost | `AsicWorkflowRunDeadLettered` |
 | An effect with an unknown outcome is reconciled, never retried | `AsicToolUnknownOutcome` |
-| A rollback that fails is escalated immediately | `AsicCompensationFailed` |
+| A partially applied remediation is escalated to a human immediately | `AsicRemediationPartialEffect` |
 | Success is claimed only with independent verification | `AsicVerificationNotVerified` |
 | Unevaluated or regressed behaviour is not released | `AsicEvaluationGateNotPassing` |
 

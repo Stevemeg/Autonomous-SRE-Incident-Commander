@@ -34,6 +34,7 @@ plausible-looking payload in place of one that did not arrive.
 from __future__ import annotations
 
 import logging
+import random
 import time
 import uuid
 from collections.abc import Callable, Mapping, Sequence
@@ -192,6 +193,7 @@ class ToolBroker:
         "_claim_session_factory",
         "_clock",
         "_executor",
+        "_jitter",
         "_menus",
         "_providers",
         "_resolver",
@@ -211,6 +213,7 @@ class ToolBroker:
         clock: Clock,
         claim_session_factory: Callable[[], Session] | None = None,
         sleep: Any = time.sleep,
+        jitter: Callable[[], float] = random.random,
     ) -> None:
         if not providers:
             raise ValueError("a broker with no provider can refuse but never answer")
@@ -223,6 +226,7 @@ class ToolBroker:
         self._clock = clock
         self._claim_session_factory = claim_session_factory
         self._sleep = sleep
+        self._jitter = jitter
         self._menus: dict[NodeId, CapabilityMenu] = {}
         self._executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="asic-tool")
 
@@ -717,7 +721,11 @@ class ToolBroker:
 
             if not (failure and failure.retryable and attempts < descriptor.max_attempts):
                 break
-            delay = descriptor.retry_backoff_seconds * attempts
+            # Linear backoff with "equal jitter" (Phase 15): the delay is drawn from
+            # [base/2, base], so runs that failed together do not retry in lockstep, while the
+            # documented upper bound (backoff x attempt) and a floor are both kept.
+            base = descriptor.retry_backoff_seconds * attempts
+            delay = base / 2 + (base / 2) * min(max(self._jitter(), 0.0), 1.0)
             if failure.retry_after_seconds is not None:
                 delay = max(delay, min(failure.retry_after_seconds, MAX_RETRY_AFTER_SECONDS))
             self._sleep(delay)

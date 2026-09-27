@@ -4,7 +4,7 @@ One runbook per alert in [`configs/observability/prometheus/rules/asic-alerts.ru
 
 - [API availability error budget burning](./api-availability-burn.md) - `AsicApiAvailabilityFastBurn` / `AsicApiAvailabilitySlowBurn`
 - [API latency objective burning](./api-latency-burn.md) - `AsicApiLatencyBurn`
-- [Remediation rollback failed](./compensation-failed.md) - `AsicCompensationFailed`
+- [Remediation left a partial effect](./remediation-partial-effect.md) - `AsicRemediationPartialEffect`
 - [Database not ready](./database-not-ready.md) - `AsicDatabaseNotReady`
 - [Evaluation gate not passing](./evaluation-gate-not-passing.md) - `AsicEvaluationGateNotPassing`
 - [Integration calls failing](./integration-failing.md) - `AsicIntegrationFailing`

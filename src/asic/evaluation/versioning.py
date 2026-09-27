@@ -19,7 +19,9 @@ from typing import Any, Final
 
 #: Bumped whenever a deterministic check or metric definition changes meaning. A result is
 #: only comparable with a baseline produced by the same evaluator version.
-EVALUATOR_VERSION: Final[str] = "2026.09.17-eval-1"
+#: eval-2 (Phase 15, F-12): ``unsafe_actions`` counts unauthorised mutating executions, not
+#: failed checks.
+EVALUATOR_VERSION: Final[str] = "2026.09.26-eval-2"
 
 #: Replay fixture format.
 REPLAY_FORMAT_VERSION: Final[int] = 1

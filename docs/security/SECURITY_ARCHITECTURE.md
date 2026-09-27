@@ -151,9 +151,10 @@ accounts, separate runtime/migration database references and CI wiring of `scrip
 
 The selected platform still owns actual TLS termination, encrypted database storage, backups/PITR,
 key management, external secret delivery, ingress/egress controllers and any shared gateway rate
-limit. No remote production environment has been executed. A retention Job is intentionally absent:
-the current application has a safe dry-run planner but no bounded deletion executor or durable
-receipt, and deploying arbitrary owner SQL would weaken the Phase 13 boundary.
+limit. No remote production environment has been executed. Phase 15 added the retention executor for the
+API idempotency cache only, under a separate `asic_maintenance` role with immutable `retention_run`
+receipts, delivered as a suspended dry-run CronJob; no owner SQL is deployed
+([DATA_RETENTION.md](DATA_RETENTION.md) section 5).
 
 ## 12. Carry-forward findings addressed in Phase 13
 
@@ -166,4 +167,5 @@ receipt, and deploying arbitrary owner SQL would weaken the Phase 13 boundary.
 | F-14 | dependency version policy | fixed; locks, bounds, prerelease policy |
 | F-15 | readiness deadline / abuse | fixed (security-relevant part); metric freshness deferred |
 | F-16 | redaction limits | strengthened; limits documented |
-| F-07, F-09, F-10, F-12, F-17 | metric, evaluation, traceback, semantics and label items | not security-related; carried forward unchanged |
+| F-07, F-09, F-10, F-12, F-17 | metric, evaluation, traceback, semantics and label items | not security-related; closed in Phase 15 (see CHANGELOG) |
+| P13-SEC-05 | no maximum token lifetime | closed in Phase 15: `iat` required, lifetime bounded in both verifiers |

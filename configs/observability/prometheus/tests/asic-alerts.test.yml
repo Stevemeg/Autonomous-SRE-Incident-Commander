@@ -226,3 +226,27 @@ tests:
       - eval_time: 20m
         alertname: AsicApiLatencyBurn
         exp_alerts: []
+
+  - name: a partially applied remediation pages; clean failures and successes do not
+    interval: 1m
+    input_series:
+      - series: 'asic_remediation_action_transitions_total{status="failed_partial", risk_tier="r1"}'
+        values: "0 0 0 1 1 1 1 1 1 1"
+      - series: 'asic_remediation_action_transitions_total{status="failed_clean", risk_tier="r1"}'
+        values: "0+1x9"
+      - series: 'asic_remediation_action_transitions_total{status="succeeded", risk_tier="r2"}'
+        values: "0+1x9"
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: AsicRemediationPartialEffect
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: AsicRemediationPartialEffect
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              invariant: rollback-integrity
+            exp_annotations:
+              summary: A remediation left its target partially changed
+              description: A remediation action ended failed_partial; automated compensation is not implemented, so a human must restore the target.
+              runbook_url: docs/runbooks/remediation-partial-effect.md

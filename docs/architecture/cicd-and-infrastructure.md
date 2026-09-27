@@ -96,8 +96,9 @@ an automatic Alembic downgrade; schema rollback is an explicit operator/data-saf
 Non-secret values use ConfigMap data. Database/auth material is referenced from Kubernetes Secrets
 that a platform secret manager must provision; committed production secret values do not exist.
 Production OIDC values are deliberately absent from the base, so an unconfigured pod fails closed.
-Recommended IdP access-token lifetime is an operator expectation; P13-SEC-05 remains open because the
-application does not impose a maximum lifetime.
+The application enforces a maximum access-token lifetime (P13-SEC-05, closed in Phase 15): `iat` is
+required and `exp - iat` may not exceed `ASIC_JWT_MAX_LIFETIME_SECONDS` (default 3600 s, allowed
+300-5400 s). Configure the IdP's token lifetime at or below it.
 
 Default-deny ingress/egress allows DNS, frontend-to-API, database, OTLP, ingress and an egress-gateway
 contract. Kubernetes NetworkPolicy cannot express arbitrary vendor DNS safely. Slack/Jira/PagerDuty

@@ -84,6 +84,8 @@ TABLE_CLASSIFICATION: Final[Mapping[str, RetentionClass]] = MappingProxyType(
         "tool_execution": _C.PROTECTED_EVIDENCE,
         "model_call_reservation": _C.PROTECTED_EVIDENCE,
         "connector_scope_binding": _C.PROTECTED_EVIDENCE,
+        # the lifecycle executor's own receipts (Phase 15) are evidence of every deletion
+        "retention_run": _C.PROTECTED_EVIDENCE,
         # ---- incident record
         "incident": _C.INCIDENT_RECORD,
         "incident_event": _C.INCIDENT_RECORD,

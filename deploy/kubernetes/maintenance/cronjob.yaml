@@ -1,0 +1,75 @@
+# Retention lifecycle maintenance (Phase 15, NFR-SEC-14). Deliberately conservative defaults:
+#   * suspend: true   - nothing runs until an operator enables the schedule;
+#   * dry run         - the command has no --execute; add it only after reviewing dry-run receipts;
+#   * separate identity - its own tokenless service account and database Secret for a login that
+#     holds only the asic_maintenance role (never the runtime or migration credentials);
+#   * one run at a time, bounded batches, bounded runtime, no retries of a partial run.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: asic-retention
+spec:
+  schedule: "17 3 * * *"
+  suspend: true
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 3600
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      activeDeadlineSeconds: 1800
+      ttlSecondsAfterFinished: 86400
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: asic-retention
+            app.kubernetes.io/component: maintenance
+        spec:
+          restartPolicy: Never
+          serviceAccountName: asic-maintenance
+          automountServiceAccountToken: false
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            runAsGroup: 10001
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: retention
+              image: ghcr.io/stevemeg/asic-backend@sha256:0000000000000000000000000000000000000000000000000000000000000000
+              imagePullPolicy: IfNotPresent
+              command:
+                - /usr/local/bin/python
+                - -m
+                - asic.retention
+                - --all-tenants
+                - --batch-limit=1000
+                - --max-batches=10
+              env:
+                - name: ASIC_MAINTENANCE_DATABASE_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: asic-maintenance-database
+                      key: url
+                - name: ASIC_MAINTENANCE_IDENTITY
+                  value: asic-maintenance
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 128Mi
+                limits:
+                  cpu: 250m
+                  memory: 256Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+              volumeMounts:
+                - name: tmp
+                  mountPath: /tmp
+          volumes:
+            - name: tmp
+              emptyDir:
+                sizeLimit: 16Mi

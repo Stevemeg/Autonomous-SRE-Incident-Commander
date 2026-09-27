@@ -44,12 +44,14 @@ def test_runtime_docker_context_excludes_secrets_and_build_junk() -> None:
 def test_workloads_enforce_the_pod_security_baseline() -> None:
     workloads = [
         doc
-        for doc in _documents("base") + _documents("migration")
-        if doc["kind"] in {"Deployment", "Job"}
+        for doc in _documents("base") + _documents("migration") + _documents("maintenance")
+        if doc["kind"] in {"Deployment", "Job", "CronJob"}
     ]
-    assert {doc["kind"] for doc in workloads} == {"Deployment", "Job"}
+    assert {doc["kind"] for doc in workloads} == {"Deployment", "Job", "CronJob"}
     for workload in workloads:
         spec = workload["spec"]  # type: ignore[index]
+        if workload["kind"] == "CronJob":
+            spec = spec["jobTemplate"]["spec"]  # type: ignore[index]
         pod = spec["template"]["spec"]  # type: ignore[index]
         assert pod["automountServiceAccountToken"] is False
         assert pod["securityContext"]["runAsNonRoot"] is True
@@ -201,3 +203,32 @@ def test_workflow_actions_are_commit_pinned_and_permissions_are_declared() -> No
             assert use == "./.github/workflows/quality.yml" or re.search(r"@[0-9a-f]{40}$", use), (
                 f"{path}: {use}"
             )
+
+
+def test_retention_maintenance_is_suspended_dry_run_and_separately_identified() -> None:
+    """Phase 15: the retention executor is scheduled as controlled maintenance - off until an
+    operator enables it, dry run until --execute is deliberately added, one run at a time,
+    under its own tokenless identity and database credential."""
+    documents = _documents("maintenance")
+    cronjob = next(doc for doc in documents if doc["kind"] == "CronJob")
+    spec = cronjob["spec"]  # type: ignore[index]
+    assert spec["suspend"] is True
+    assert spec["concurrencyPolicy"] == "Forbid"
+    job = spec["jobTemplate"]["spec"]
+    assert job["backoffLimit"] == 0 and job["activeDeadlineSeconds"] <= 3600
+    pod = job["template"]["spec"]
+    assert pod["serviceAccountName"] == "asic-maintenance"
+    assert pod["automountServiceAccountToken"] is False
+    command = pod["containers"][0]["command"]
+    assert command[:3] == ["/usr/local/bin/python", "-m", "asic.retention"]
+    assert "--execute" not in command  # dry run by default
+    env = {item["name"]: item for item in pod["containers"][0]["env"]}
+    assert env["ASIC_MAINTENANCE_DATABASE_URL"]["valueFrom"]["secretKeyRef"]["name"] == (
+        "asic-maintenance-database"
+    )
+    rendered = yaml.safe_dump_all(documents)
+    assert "asic-runtime-database" not in rendered and "asic-migration-database" not in rendered
+    policy = next(doc for doc in documents if doc["kind"] == "NetworkPolicy")
+    assert "0.0.0.0/0" not in yaml.safe_dump(policy)
+    terraform = (REPO / "infra" / "terraform" / "platform" / "main.tf").read_text("utf-8")
+    assert '"asic-maintenance"' in terraform

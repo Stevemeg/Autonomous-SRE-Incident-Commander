@@ -164,6 +164,8 @@ jobs:
           kubectl kustomize deploy/kubernetes/migration >/tmp/migration.yaml
           kubectl kustomize deploy/kubernetes/overlays/local >/tmp/local.yaml
           kubectl kustomize deploy/kubernetes/overlays/local-migration >/tmp/local-migration.yaml
+          kubectl kustomize deploy/kubernetes/maintenance >/tmp/maintenance.yaml
+          kubectl kustomize deploy/kubernetes/overlays/local-maintenance >/tmp/local-maintenance.yaml
       - name: Observability configuration and alert behavior
         run: bash scripts/check_observability.sh
       - name: Validate workflow syntax and expressions

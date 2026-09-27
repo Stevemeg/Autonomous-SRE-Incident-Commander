@@ -65,6 +65,7 @@ def _token(tenant_id: uuid.UUID, subject: str, **claims: object) -> str:
         "tenant_id": str(tenant_id),
         "iss": SETTINGS.jwt_issuer,
         "aud": SETTINGS.jwt_audience,
+        "iat": int(time.time()),
         "exp": int(time.time()) + 300,
         **claims,
     }

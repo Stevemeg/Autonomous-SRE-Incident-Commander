@@ -28,7 +28,7 @@ from opentelemetry.metrics import CallbackOptions, Observation
 from sqlalchemy.orm import Session
 
 #: The migration head this build expects. A test pins it to the Alembic script head.
-EXPECTED_SCHEMA_REVISION: Final[str] = "0018_security_hardening"
+EXPECTED_SCHEMA_REVISION: Final[str] = "0019_retention_maintenance"
 READINESS_STATEMENT_TIMEOUT_MS: Final[int] = 1000
 
 

@@ -25,9 +25,9 @@ approval, verifies outcomes, and preserves operational memory.
 >
 > | | |
 > |---|---|
-> | **Completed** | Phase 0 bootstrap · Phase 1 requirements · Phase 2 architecture · Phase 3 persistence · Phase 4 orchestration · Phase 5 telemetry ingestion and correlation · Phase 6 operational knowledge, RAG and governed memory · Phase 7 bounded investigation · Phase 8 bounded remediation · Phase 9 authenticated API, RBAC and dashboard · Phase 10 external integrations · Phase 11 evaluation, replay and regression harness · Phase 12 observability and SLO instrumentation · **Phase 13 security and governance** |
-> | **In progress** | Phase 14 delivery milestone; implementation and validation, pending independent review |
-> | **Next** | Independent Phase 14 review; Phase 15 has not begun |
+> | **Completed** | Phase 0 bootstrap · Phase 1 requirements · Phase 2 architecture · Phase 3 persistence · Phase 4 orchestration · Phase 5 telemetry ingestion and correlation · Phase 6 operational knowledge, RAG and governed memory · Phase 7 bounded investigation · Phase 8 bounded remediation · Phase 9 authenticated API, RBAC and dashboard · Phase 10 external integrations · Phase 11 evaluation, replay and regression harness · Phase 12 observability and SLO instrumentation · Phase 13 security and governance · Phase 14 delivery · **Phase 15 resilience, security campaigns and end-to-end validation** |
+> | **In progress** | Phase 16 production-readiness review and project closeout |
+> | **Testing evidence** | Load, chaos, security campaigns and E2E scenarios with LOCAL measurements only ([docs/testing](docs/testing/README.md)) |
 > | **Observability** | OpenTelemetry traces sharing the persisted trace id, catalogued bounded-label metrics counted from committed records, redacted JSON logs, `/livez` and `/readyz`, seven Grafana dashboards, SLO burn-rate alerts with runbooks. Objectives are **INITIAL ENGINEERING TARGETs**; configurations are validated with `promtool` and `otelcol-contrib`, **not deployed** ([SLOs](docs/observability/SLOS.md)) |
 > | **Evaluation** | Versioned 18-scenario golden corpus, strict replay at the provider seams, regression comparison and an executable gate. Results are **simulator/replay runs with a scripted model provider only** — they validate the pipeline and safety invariants, not reasoning quality; LLM judges are not measured ([evaluation harness](docs/evaluation/EVALUATION_ARCHITECTURE.md#11-phase-11-implementation-status)) |
 > | **External integrations** | Native Prometheus, Loki, Kubernetes, Slack, Teams, PagerDuty, Jira and Grafana adapters behind the broker, validated against **local deterministic servers only** — no live vendor system has been exercised ([integrations](docs/architecture/integrations.md)) |
@@ -66,8 +66,9 @@ approval, verifies outcomes, and preserves operational memory.
 >
 > Section 20 of the specification forbids fake integrations, fabricated metrics and
 > placeholder production logic. This README states that a capability exists only once it
-> exists and has been validated. **No performance has been measured, and no claim is made
-> about the quality of the system's reasoning** — the Phase 11 harness exists, but the only
+> exists and has been validated. **No production performance has been measured, and no claim is made
+> about the quality of the system's reasoning** beyond the LOCAL benchmarks in
+> [docs/testing](docs/testing/README.md) — the Phase 11 harness exists, but the only
 > model provider wired today is a deterministic one, so its runs validate the pipeline rather
 > than measure reasoning.
 

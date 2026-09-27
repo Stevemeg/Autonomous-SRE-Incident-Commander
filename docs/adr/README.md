@@ -192,6 +192,12 @@ during implementation become ADRs rather than being made silently:
 |---|---|---|
 | [0031](./0031-production-delivery-boundary.md) | Deployable artifacts needed a cloud-neutral ownership split, immutable release identity, migration ordering and an honest boundary for nonexistent workers/retention execution | `Dockerfile`, `frontend/Dockerfile`, `.github/workflows/`, `deploy/kubernetes/`, `infra/terraform/platform/` |
 
+## Decisions raised by Phase 15
+
+| ADR | Discovered because | Evidence |
+|---|---|---|
+| [0032](./0032-bounded-retention-executor.md) | The idempotency replay cache grew without bound and nothing could delete it; every other class carries evidence or lineage that time-based deletion could break | migration `0019_retention_maintenance`, `src/asic/retention/executor.py`, `deploy/kubernetes/maintenance/`, `tests/security/test_retention_executor.py` |
+
 ## Candidate decisions still to be written
 
 Identified during the Architecture Package but not yet ADRs, because the evidence to decide

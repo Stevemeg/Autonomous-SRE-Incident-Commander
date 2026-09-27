@@ -209,7 +209,12 @@ class TestPlanner:
         direct = owner_session.scalar(
             sa.select(sa.func.count())
             .select_from(ApiIdempotencyRecord)
-            .where(ApiIdempotencyRecord.created_at < cutoff)
+            # The owner bypasses row-level security, so the tenant is filtered explicitly:
+            # other tenants' old cache rows must not leak into this count.
+            .where(
+                ApiIdempotencyRecord.tenant_id == tenant.id,
+                ApiIdempotencyRecord.created_at < cutoff,
+            )
         )
         assert row.eligible_rows == direct == 2
         assert row.cutoff == cutoff and row.action is RetentionAction.PREVIEW_ELIGIBLE

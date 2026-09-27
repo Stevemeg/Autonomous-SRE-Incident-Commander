@@ -129,6 +129,8 @@ BASE_CLOCK: Final[datetime] = datetime(2026, 9, 1, 10, 0, tzinfo=UTC)
 REMEDIATION_POLICY_VERSION: Final[str] = "2026.09.14-1"
 _SETTLING_ADVANCE_SECONDS: Final[int] = 90
 _MAX_REMEDIATION_STEPS: Final[int] = 6
+#: How many recent passed runs ``latest`` inspects for a full-selection baseline.
+_BASELINE_CANDIDATES: Final[int] = 50
 
 
 class HarnessRefused(RuntimeError):
@@ -141,7 +143,9 @@ class HarnessConfig:
     suite: str = SUITE_KEY
     keys: tuple[str, ...] | None = None
     mode: ExecutionMode = ExecutionMode.SIMULATOR
-    #: ``latest`` (latest passed suite run of this suite and mode), ``none``, or a suite run id.
+    #: ``latest`` (latest passed FULL-selection suite run of this suite and mode), ``none``,
+    #: or a suite run id. An id that is malformed or names no suite run of this tenant and
+    #: suite is refused (``HarnessRefused``); it never degrades to "no baseline".
     baseline: str = "latest"
 
 
@@ -242,6 +246,8 @@ class EvaluationHarness:
             ),
             judge_set_version=None,
         )
+        # Resolved before any scenario runs: a bad explicit baseline fails fast.
+        baseline = self._baseline(tenant_id, config)
         replay_fixtures: dict[str, ReplayFixture] = {}
         refusals: dict[str, str] = self._unversioned_changes(tenant_id, scenarios)
         if config.mode is ExecutionMode.REPLAY:
@@ -264,7 +270,6 @@ class EvaluationHarness:
                 )
             )
 
-        baseline = self._baseline(tenant_id, config)
         suite_run_id = uuid.uuid4()
         report: dict[str, Any] = {
             "suite_run_id": str(suite_run_id),
@@ -273,6 +278,9 @@ class EvaluationHarness:
             "corpus_digest": corpus_digest(scenarios),
             "evaluator_version": EVALUATOR_VERSION,
             "execution_mode": config.mode.value,
+            # A --scenario restricted run is a visible subset: it never becomes a "latest"
+            # baseline, and baseline scenarios it did not select are listed, not dropped.
+            "scenario_selection": "subset" if config.keys else "full",
             "evidence_label": "SIMULATED / REPLAY EVALUATION - not production results",
             "behaviour_version_id": str(behaviour_id),
             "repetitions": 1,
@@ -1020,21 +1028,48 @@ class EvaluationHarness:
     ) -> tuple[uuid.UUID, Mapping[str, Any]] | None:
         if config.baseline == "none":
             return None
+        explicit: uuid.UUID | None = None
+        if config.baseline != "latest":
+            try:
+                explicit = uuid.UUID(config.baseline)
+            except ValueError:
+                raise HarnessRefused(
+                    "baseline must be 'latest', 'none' or a suite run id"
+                ) from None
         with self._app() as session:
             bind_tenant(session, tenant_id)
             query = sa.select(EvaluationSuiteRun).where(
                 EvaluationSuiteRun.tenant_id == tenant_id,
                 EvaluationSuiteRun.suite_key == config.suite,
             )
-            if config.baseline == "latest":
-                query = query.where(EvaluationSuiteRun.gate_status == "passed").order_by(
-                    EvaluationSuiteRun.completed_at.desc()
-                )
+            if explicit is not None:
+                row = session.scalars(query.where(EvaluationSuiteRun.id == explicit)).one_or_none()
+                if row is None:
+                    # F-09 INFO: an explicit id the operator typed must not quietly become
+                    # "no baseline" and pass a gate that was meant to compare.
+                    raise HarnessRefused(
+                        f"baseline suite run {explicit} does not exist for suite {config.suite}"
+                    )
             else:
-                query = query.where(EvaluationSuiteRun.id == uuid.UUID(config.baseline))
-            row = session.scalars(query.limit(1)).one_or_none()
-            if row is None:
-                return None
+                # Latest PASSED run of the same mode whose selection was the full suite; a
+                # subset run or another mode is never silently a baseline.
+                full = {golden.key for golden in select(None, suite=config.suite)}
+                row = None
+                candidates = session.scalars(
+                    query.where(
+                        EvaluationSuiteRun.gate_status == "passed",
+                        EvaluationSuiteRun.execution_mode == config.mode,
+                    )
+                    .order_by(EvaluationSuiteRun.completed_at.desc())
+                    .limit(_BASELINE_CANDIDATES)
+                )
+                for candidate in candidates:
+                    keys = {s.get("key") for s in (candidate.report or {}).get("scenarios", [])}
+                    if keys == full:
+                        row = candidate
+                        break
+                if row is None:
+                    return None
             if digest(dict(row.report)) != row.report_digest:
                 raise HarnessRefused("baseline suite report does not match its digest")
             return row.id, dict(row.report)

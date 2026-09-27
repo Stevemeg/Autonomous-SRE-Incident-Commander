@@ -22,6 +22,68 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added — Phase 15 resilience, security campaigns and end-to-end validation
+
+- Reproducible load harness (`scripts/load_harness.py`) with smoke, capacity, steady, burst,
+  concurrency and soak-lite profiles against the real API and PostgreSQL; every figure is labelled
+  LOCAL BENCHMARK with its environment (`docs/testing/LOAD_AND_PERFORMANCE.md`).
+- Resilience suites (`tests/resilience`): database stress through a TCP fault proxy, a dependency
+  fault matrix over every native adapter, model-provider failure and forged-authority output,
+  crash/resume at every node boundary with lease takeover, duplicate/out-of-order/retry storms over
+  HTTP, retry non-amplification and a per-run bulkhead, bounded resources, OTLP collector outage.
+- Declared chaos experiments on kind (`scripts/chaos_experiments.py`, `deployment_smoke.py --chaos`):
+  API/frontend pod kill, Postgres restart, sustained database-access loss, unreachable collector,
+  and a live migration-pod overlap proof (`docs/testing/RESILIENCE_AND_CHAOS.md`).
+- Adversarial campaigns: a versioned 40-case prompt-injection corpus across every vector, tool
+  abuse, schema-wide tenant attacks, authentication, SSRF/egress, seeded API fuzzing with abuse
+  cost, and canary-credential leak tracing (`docs/testing/SECURITY_HARDENING.md`).
+- End-to-end scenarios A–H asserting recorded evidence, approvals, executions, verification, audit,
+  traces, metrics and evaluation (`docs/testing/E2E_VALIDATION.md`).
+- Retention lifecycle executor for the API idempotency cache only: separate `asic_maintenance`
+  role and immutable `retention_run` receipts (migration 0019), bounded tenant-scoped batches, dry
+  run by default, delivered as a suspended dry-run CronJob.
+
+### Fixed — Phase 15 (found by the campaigns, or carried forward)
+
+- Alert ingestion could stall the whole API under concurrency: the handler kept the request's pooled
+  connection in an open transaction while ingestion checked out a second one, so once concurrent
+  ingests reached the pool size every request waited on the pool timeout (found by the load harness
+  at 50 alerts/s: 96 % client timeouts, 15 connections idle in transaction). The connector scope is
+  now checked in its own short transaction, closed before ingestion; a regression test drives 24
+  concurrent ingests through a two-connection pool.
+- A burst of concurrent requests could also stall every endpoint: the request session was bound
+  (a connection checked out) in the dependency's own threadpool call, and FastAPI validates a sync
+  endpoint's result in another one before the dependency returns the connection, so requests held
+  connections while waiting for threads (found by the burst profile: 96 concurrent requests, 99 %
+  client timeouts). The tenant binding and statement timeouts are now applied at transaction begin
+  in the thread that uses the session, and the request transaction is committed and the connection
+  returned inside the endpoint's own thread. A regression test drives 32 concurrent reads and
+  ingests through three worker threads and two connections.
+- Ingestion now has a per-process bulkhead: at most 4 alerts are validated and correlated at once;
+  further ingests wait without holding a database connection and, after 5 s, receive a classified
+  503 `ingestion_busy` with `Retry-After`. An alert burst can no longer take the connection pool
+  away from reads and approvals.
+- Four redaction patterns were quadratic (measured 7 s and 51 s on 20 KB before the fix); all are
+  linear now with detection proven identical to the originals.
+- Database failures return classified 503s with `Retry-After` instead of opaque 500s; a lost optimistic-
+  locking race is a 409 `concurrent_modification`, not a 500; the default 422 no longer echoes client
+  input (a `NaN` input had surfaced as a 500).
+- Secrets can no longer persist through checkpoint failure messages, planner rationale or trace
+  failure events; deployment diagnostics also redact bare tokens.
+- The planner ends a run cleanly when the model budget is exhausted; broker retries carry equal
+  jitter; the rate limiter prunes in bounded time; percent-encoded egress hosts are refused.
+- N-3: the deployment renderer refuses public egress prefixes broader than /24 or /48, more than 64
+  entries and special-purpose ranges. N-4: the guard-mutation smoke can no longer spend the real
+  600 s migration deadline.
+- Migration overlap: the orchestrator waits (bounded, fail-closed) until no pod of a previous
+  migration Job is still running before it creates the next one.
+- P13-SEC-05: `iat` is required and token lifetime is bounded (default 3600 s, range 300–5400 s).
+- F-07 alert/panel on an unreachable status replaced by `AsicRemediationPartialEffect`; F-09
+  comparisons never omit scenarios or metrics silently; F-10 unwritable gate output is a controlled
+  exit; F-12 `unsafe_actions` is the exact count; F-17 the collector stamps the deployment
+  environment; an explicit nonexistent baseline id is refused.
+- Database connections use TCP keepalives so a silently dead peer is detected.
+
 ### Added — Phase 14 CI/CD, Docker, Kubernetes and Terraform
 
 - Digest-pinned multi-stage backend and Next.js standalone images run as UID/GID 10001 and contain
@@ -95,6 +157,7 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - A retention execution Job remains absent because no safe bounded deletion/receipt primitive exists.
   Production TLS, cloud identity, managed database/PITR, scale/HA/DR and remote
   deployment are not claimed. P13-SEC-05 and F-07/F-09/F-10/F-12/F-17 remain open.
+  (Superseded in Phase 15: the retention executor, P13-SEC-05 and the F-items are closed above.)
 
 ### Added — Phase 13 security, RBAC, tenant isolation and supply-chain controls
 

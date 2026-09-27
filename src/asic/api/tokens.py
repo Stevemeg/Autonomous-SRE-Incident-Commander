@@ -20,8 +20,10 @@ Properties enforced here rather than trusted to a library default:
 * ``kid`` is mandatory and must select exactly one key; duplicate ``kid`` values make the
   whole key set ambiguous and it is refused;
 * ``jku``/``x5u``/``jwk`` headers (token-supplied key material or key location) are refused;
-* issuer, audience, expiry and ``sub`` are required; ``nbf``/``iat`` are checked with a
-  small, bounded clock-skew leeway;
+* issuer, audience, expiry, issued-at and ``sub`` are required; ``nbf``/``iat`` are checked
+  with a small, bounded clock-skew leeway;
+* the token's total lifetime (``exp - iat``) must not exceed a configured maximum (P13-SEC-05,
+  see :data:`DEFAULT_MAX_TOKEN_LIFETIME_SECONDS`);
 * the JWKS fetch is bounded (HTTPS only outside loopback tests, no redirects, timeout,
   response-size ceiling, key-count ceiling) and the cache is bounded in age and size;
 * every failure is a closed reason code. Token contents, key material and library
@@ -44,6 +46,7 @@ from jwt.exceptions import (
     ExpiredSignatureError,
     ImmatureSignatureError,
     InvalidAudienceError,
+    InvalidIssuedAtError,
     InvalidIssuerError,
     InvalidSignatureError,
     MissingRequiredClaimError,
@@ -64,7 +67,26 @@ MAX_TOKEN_CHARS: Final[int] = 8192
 #: Accepted clock skew between the issuer and this process, in seconds.
 CLOCK_LEEWAY_SECONDS: Final[int] = 30
 
-REQUIRED_CLAIMS: Final[tuple[str, ...]] = ("sub", "tenant_id", "iss", "aud", "exp")
+REQUIRED_CLAIMS: Final[tuple[str, ...]] = ("sub", "tenant_id", "iss", "aud", "exp", "iat")
+
+#: Maximum accepted bearer-token lifetime, ``exp - iat`` (Phase 15, P13-SEC-05).
+#:
+#: Why an application-side bound at all: permissions, user status and tenant membership are
+#: reloaded from the database on every request, so a disabled user or revoked role loses
+#: authority immediately. What a token's lifetime still governs is how long a *stolen* bearer
+#: token can be replayed, and the IdP is a separate trust domain whose configuration can drift.
+#: The bound uses the token's own ``iat``/``exp`` (both issuer-signed), so it needs no clock
+#: agreement beyond the existing leeway; an ``iat`` in the future is already refused by the
+#: library (same leeway), so the remaining lifetime ``exp - now`` is bounded as well.
+#:
+#: Why these numbers: OAuth 2.0 security best current practice (RFC 9700) recommends
+#: short-lived access tokens. One hour is the default access-token lifetime of common
+#: enterprise identity providers (e.g. Okta, Google); Microsoft Entra ID issues 60-90 minutes
+#: by default, so the platform ceiling is 90 minutes and an Entra deployment on its default
+#: raises the configured value to that ceiling. Anything longer must be shortened at the IdP.
+DEFAULT_MAX_TOKEN_LIFETIME_SECONDS: Final[int] = 3600
+MIN_MAX_TOKEN_LIFETIME_SECONDS: Final[int] = 300
+CEILING_MAX_TOKEN_LIFETIME_SECONDS: Final[int] = 5400
 
 #: Asymmetric algorithms this system will ever accept. HS* and ``none`` are absent on
 #: purpose: they are not "disabled by configuration", they cannot be named.
@@ -117,6 +139,7 @@ class RejectReason(StrEnum):
     ISSUER = "issuer_invalid"
     AUDIENCE = "audience_invalid"
     CLAIMS = "claims_invalid"
+    LIFETIME = "lifetime_exceeded"
 
 
 class TokenRejected(Exception):
@@ -147,6 +170,34 @@ def _bounded(token: str) -> None:
         raise TokenRejected(RejectReason.TOO_LARGE)
 
 
+def validate_max_lifetime(seconds: int) -> int:
+    """Refuse a configured maximum outside the platform bounds (a misconfiguration is fatal)."""
+    if isinstance(seconds, bool) or not isinstance(seconds, int):
+        raise ValueError("maximum token lifetime must be an integer number of seconds")
+    if not MIN_MAX_TOKEN_LIFETIME_SECONDS <= seconds <= CEILING_MAX_TOKEN_LIFETIME_SECONDS:
+        raise ValueError(
+            "maximum token lifetime must be between "
+            f"{MIN_MAX_TOKEN_LIFETIME_SECONDS} and {CEILING_MAX_TOKEN_LIFETIME_SECONDS} seconds"
+        )
+    return seconds
+
+
+def _enforce_lifetime(claims: Mapping[str, Any], max_lifetime: int) -> None:
+    """``exp - iat`` must be positive and within the configured maximum.
+
+    Both are NumericDate claims the library has already type-checked; booleans are refused
+    explicitly because ``True`` is an ``int`` in Python.
+    """
+    issued, expires = claims.get("iat"), claims.get("exp")
+    if any(isinstance(v, bool) or not isinstance(v, (int, float)) for v in (issued, expires)):
+        raise TokenRejected(RejectReason.CLAIMS)
+    lifetime = float(expires) - float(issued)  # type: ignore[arg-type]
+    if lifetime <= 0:
+        raise TokenRejected(RejectReason.CLAIMS)
+    if lifetime > max_lifetime:
+        raise TokenRejected(RejectReason.LIFETIME)
+
+
 def _translate(exc: Exception) -> TokenRejected:
     if isinstance(exc, ExpiredSignatureError):
         return TokenRejected(RejectReason.EXPIRED)
@@ -158,7 +209,7 @@ def _translate(exc: Exception) -> TokenRejected:
         return TokenRejected(RejectReason.AUDIENCE)
     if isinstance(exc, InvalidSignatureError):
         return TokenRejected(RejectReason.SIGNATURE)
-    if isinstance(exc, MissingRequiredClaimError):
+    if isinstance(exc, (MissingRequiredClaimError, InvalidIssuedAtError)):
         return TokenRejected(RejectReason.CLAIMS)
     return TokenRejected(RejectReason.MALFORMED)
 
@@ -166,14 +217,22 @@ def _translate(exc: Exception) -> TokenRejected:
 class Hs256DevelopmentVerifier:
     """Shared-secret verifier for local development and tests only."""
 
-    __slots__ = ("_audience", "_issuer", "_secret")
+    __slots__ = ("_audience", "_issuer", "_max_lifetime", "_secret")
 
-    def __init__(self, *, secret: str, issuer: str, audience: str) -> None:
+    def __init__(
+        self,
+        *,
+        secret: str,
+        issuer: str,
+        audience: str,
+        max_lifetime_seconds: int = DEFAULT_MAX_TOKEN_LIFETIME_SECONDS,
+    ) -> None:
         if not secret or len(secret) < 32:
             raise ValueError("the development signing secret must contain at least 32 characters")
         self._secret = secret
         self._issuer = issuer
         self._audience = audience
+        self._max_lifetime = validate_max_lifetime(max_lifetime_seconds)
 
     @property
     def is_development(self) -> bool:
@@ -193,6 +252,7 @@ class Hs256DevelopmentVerifier:
             )
         except Exception as exc:
             raise _translate(exc) from None
+        _enforce_lifetime(claims, self._max_lifetime)
         return claims
 
 
@@ -334,7 +394,7 @@ class JwksClient:
 class OidcJwksVerifier:
     """Asymmetric verifier bound to one issuer and one audience."""
 
-    __slots__ = ("_algorithms", "_audience", "_issuer", "_keys")
+    __slots__ = ("_algorithms", "_audience", "_issuer", "_keys", "_max_lifetime")
 
     def __init__(
         self,
@@ -343,6 +403,7 @@ class OidcJwksVerifier:
         issuer: str,
         audience: str,
         algorithms: Iterable[str] = DEFAULT_ALGORITHMS,
+        max_lifetime_seconds: int = DEFAULT_MAX_TOKEN_LIFETIME_SECONDS,
     ) -> None:
         chosen = tuple(algorithms)
         if not chosen or not set(chosen) <= PERMITTED_ASYMMETRIC_ALGORITHMS:
@@ -353,6 +414,7 @@ class OidcJwksVerifier:
         self._issuer = issuer
         self._audience = audience
         self._algorithms = frozenset(chosen)
+        self._max_lifetime = validate_max_lifetime(max_lifetime_seconds)
 
     @property
     def is_development(self) -> bool:
@@ -387,13 +449,17 @@ class OidcJwksVerifier:
             )
         except Exception as exc:
             raise _translate(exc) from None
+        _enforce_lifetime(claims, self._max_lifetime)
         return claims
 
 
 __all__ = [
+    "CEILING_MAX_TOKEN_LIFETIME_SECONDS",
     "CLOCK_LEEWAY_SECONDS",
     "DEFAULT_ALGORITHMS",
+    "DEFAULT_MAX_TOKEN_LIFETIME_SECONDS",
     "MAX_TOKEN_CHARS",
+    "MIN_MAX_TOKEN_LIFETIME_SECONDS",
     "PERMITTED_ASYMMETRIC_ALGORITHMS",
     "AuthMode",
     "Hs256DevelopmentVerifier",
@@ -403,4 +469,5 @@ __all__ = [
     "RejectReason",
     "TokenRejected",
     "TokenVerifier",
+    "validate_max_lifetime",
 ]

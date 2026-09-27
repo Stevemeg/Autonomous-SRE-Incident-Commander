@@ -27,6 +27,7 @@ locals {
     "asic-api",
     "asic-frontend",
     "asic-migration",
+    "asic-maintenance",
   ])
 }
 

@@ -6,6 +6,8 @@ new table cannot quietly opt out of tenancy, auditability or the safety guards.
 
 from __future__ import annotations
 
+from typing import ClassVar
+
 import pytest
 import sqlalchemy as sa
 from sqlalchemy.exc import ProgrammingError
@@ -120,14 +122,26 @@ class TestAppendOnlyEnforcement:
             assert not can_update, f"{table} is append-only but the app role may UPDATE it"
             assert not can_delete, f"{table} is append-only but the app role may DELETE it"
 
+    #: Append-only tables whose history a *different* role writes, and which the application
+    #: role therefore must not be able to insert into (Phase 15, migration 0019).
+    WRITTEN_BY_ANOTHER_ROLE: ClassVar[dict[str, str]] = {"retention_run": "asic_maintenance"}
+
     def test_application_role_can_still_insert_history(self, app_session: Session) -> None:
-        """Append-only must not mean unwritable."""
+        """Append-only must not mean unwritable - by the role that owns the history."""
         for table in sorted(append_only_tables()):
-            can_insert = app_session.execute(
+            writer = self.WRITTEN_BY_ANOTHER_ROLE.get(table)
+            app_can_insert = app_session.execute(
                 sa.text("SELECT has_table_privilege(current_user, :t, 'INSERT')"),
                 {"t": table},
             ).scalar_one()
-            assert can_insert, f"{table} is append-only but the app role cannot INSERT"
+            if writer is None:
+                assert app_can_insert, f"{table} is append-only but the app role cannot INSERT"
+                continue
+            assert not app_can_insert, f"{table} must be written only by {writer}"
+            assert app_session.execute(
+                sa.text("SELECT has_table_privilege(:r, :t, 'INSERT')"),
+                {"r": writer, "t": table},
+            ).scalar_one(), f"{table} is append-only but {writer} cannot INSERT"
 
     def test_the_audit_trail_is_append_only(self) -> None:
         assert "audit_record" in append_only_tables()

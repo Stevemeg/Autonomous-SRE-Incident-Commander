@@ -64,6 +64,15 @@ CONDITIONS = {
     "running": [],
 }
 NOT_FOUND = 'Error from server (NotFound): jobs.batch "asic-migration" not found'
+#: A previous migration's pod: its Job is gone, but it is still terminating (grace period).
+OLD_RUNNING_POD = {
+    "metadata": {
+        "name": "asic-migration-old",
+        "deletionTimestamp": "2026-09-26T12:00:00Z",
+        "labels": {"job-name": "asic-migration", "batch.kubernetes.io/controller-uid": "uid-old"},
+    },
+    "status": {"phase": "Running"},
+}
 IMMUTABLE = (
     'The Job "asic-migration" is invalid: spec.template: Invalid value: '
     + '{"Spec":{"Containers":[' * 200
@@ -91,6 +100,8 @@ class FakeCluster:
         vanish_after: int | None = None,
         transient_get_errors: int = 0,
         terminate_after: int | None = None,
+        old_pod_polls: int = 0,
+        pod_list_errors: int = 0,
     ) -> None:
         self.new_job_states = list(new_job_states)
         self.job: dict[str, Any] | None = None
@@ -104,6 +115,10 @@ class FakeCluster:
         self.vanish_after = vanish_after  # created Job is deleted externally after N polls
         self.transient_get_errors = transient_get_errors
         self.terminate_after = terminate_after  # created Job gets a deletionTimestamp after N polls
+        # A previous migration pod still Running (terminating) for N pod listings, although its
+        # Job object is already gone (background/orphan deletion).
+        self.old_pod_polls = old_pod_polls
+        self.pod_list_errors = pod_list_errors
         self.calls: list[tuple[list[str], str | None]] = []
         self.events: list[str] = []
         self.created = 0
@@ -190,6 +205,15 @@ class FakeCluster:
                 "states": list(self.new_job_states),
             }
             return self._result(command, uid)
+        if args[:2] == ["get", "pods"] and not self.created:
+            if self.pod_list_errors:
+                self.pod_list_errors -= 1
+                return self._result(command, code=1, err="Unable to connect to the server: EOF")
+            if self.old_pod_polls:
+                self.old_pod_polls -= 1
+                if not self.old_pod_polls:
+                    self.events.append("old pods gone")
+                return self._result(command, json.dumps({"items": [OLD_RUNNING_POD]}))
         if args[:2] == ["get", "pods"]:
             return self._result(
                 command,
@@ -835,3 +859,112 @@ def test_cli_reports_an_active_migration_collision(
     assert code == 1
     assert "still active" in capsys.readouterr().err
     assert cluster.kinds() == []
+
+
+# ------------------------------------------- Phase 15: migration pod overlap (controller UID)
+def test_job_gone_but_pod_still_running_delays_the_replacement() -> None:
+    """The Job object can vanish (background/orphan deletion) while its pod is still inside the
+    termination grace period. The new Job must wait until that pod has stopped."""
+    cluster = FakeCluster(
+        ["complete"], previous=("complete", MIGRATION), delete_polls=1, old_pod_polls=4
+    )
+    logs: list[str] = []
+    _deploy(cluster, manifest=migration("release-b"), log=logs.append)
+    events = cluster.events
+    assert (
+        events.index("old job gone")
+        < events.index("old pods gone")
+        < events.index("create uid-new-1")
+    )
+    assert any("controller-uid=uid-old" in line for line in logs)
+
+
+def test_absent_job_with_a_running_orphan_pod_is_also_awaited() -> None:
+    """No previous Job at all (already deleted by someone else), but its pod still runs."""
+    cluster = FakeCluster(["complete"], old_pod_polls=3)
+    _deploy(cluster)
+    assert cluster.events == ["old pods gone", "create uid-new-1", "application"]
+    assert cluster.now == pytest.approx(6)  # three running listings, 2 s apart, bounded
+
+
+def test_running_old_pod_past_the_bound_fails_closed_without_creating() -> None:
+    cluster = FakeCluster(["complete"], old_pod_polls=10_000)
+    with pytest.raises(DeploymentError, match="still running 180s") as raised:
+        _deploy(cluster, manifest=migration("release-b"))
+    assert "asic-migration-old phase=Running controller-uid=uid-old" in str(raised.value)
+    assert cluster.created == 0 and "application" not in cluster.events
+    assert cluster.now == pytest.approx(180)
+
+
+def test_pod_listing_errors_are_retried_then_fail_closed() -> None:
+    cluster = FakeCluster(["complete"], pod_list_errors=2)
+    _deploy(cluster)  # two transient errors, then an empty-of-running listing
+    assert cluster.created == 1
+    stuck = FakeCluster(["complete"], pod_list_errors=10_000)
+    with pytest.raises(DeploymentError, match="cannot list migration pods"):
+        _deploy(stuck)
+    assert stuck.created == 0
+
+
+def test_finished_orphan_pods_do_not_block() -> None:
+    """A Succeeded/Failed pod runs no container; an orphaned one never disappears by itself."""
+    from scripts.deploy_release import _running_migration_pods
+
+    pods = {
+        "items": [
+            {"metadata": {"name": "done"}, "status": {"phase": "Succeeded"}},
+            {"metadata": {"name": "failed"}, "status": {"phase": "Failed"}},
+            {"metadata": {"name": "pending"}, "status": {"phase": "Pending"}},
+            {"metadata": {"name": "unknown"}, "status": {}},
+        ]
+    }
+    running = _running_migration_pods(pods)
+    assert [line.split()[0] for line in running] == ["pending", "unknown"]
+
+
+def test_pod_wait_mutation_recreates_the_overlap(tmp_path: Path) -> None:
+    """Non-vacuity: without the pod wait, the replacement Job is created while the old
+    migration pod is still running (concurrent migrations)."""
+    mutant = _mutant(
+        tmp_path,
+        "    wait_for_migration_pods(\n        kube, timeout=pod_timeout,",
+        "    (lambda *a, **k: None)(\n        kube, timeout=pod_timeout,",
+    )
+    cluster = FakeCluster(["complete"], old_pod_polls=3)
+    _deploy(cluster, module=mutant)
+    assert cluster.events[0] == "create uid-new-1"  # created while the old pod still ran
+    assert cluster.old_pod_polls == 3
+
+
+# ------------------------------------------------ N-4: deadlines never consume real time
+@pytest.fixture(autouse=True)
+def _no_real_sleep(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Any real ``time.sleep`` in these tests is a bug: a forgotten clock injection would
+    otherwise wait out real deadlines (up to the 600 s migration deadline). The orchestrator
+    resolves its default clock at call time, so this also covers mutants and defaults."""
+
+    def forbidden(seconds: float) -> None:
+        raise AssertionError(f"real time.sleep({seconds}) in a deployment unit test")
+
+    monkeypatch.setattr("time.sleep", forbidden)
+
+
+def test_the_600s_migration_deadline_is_proven_in_simulated_time() -> None:
+    import time as real_time
+
+    started = real_time.perf_counter()
+    cluster = FakeCluster(["running"])
+    with pytest.raises(MigrationFailed, match="migration timeout"):
+        _deploy(cluster)
+    assert cluster.now >= 600  # the real runtime deadline was reached...
+    assert real_time.perf_counter() - started < 5  # ...without spending real time on it
+
+
+def test_a_forgotten_clock_fails_immediately_instead_of_waiting(tmp_path: Path) -> None:
+    cluster = FakeCluster(["running"])
+    kube = Kubectl("asic-system", runner=cluster)
+    with pytest.raises(AssertionError, match=r"real time.sleep"):
+        deploy_release.run_deployment(kube, MIGRATION, APPLICATION, smoke=lambda _k: None)
+    mutant = _mutant(tmp_path, "def _sleep(seconds: float) -> None:", "def _sleep(seconds):")
+    with pytest.raises(AssertionError, match=r"real time.sleep"):
+        mutant.wait_for_job(mutant.Kubectl("asic-system", runner=FakeCluster(["running"])))

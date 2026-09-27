@@ -7,18 +7,24 @@ a real obligation configures a longer tenant value.
 
 ## 1. What is built, and what deliberately is not
 
-**Built:** a complete classification of every table into a retention class
+**Built (Phase 13):** a complete classification of every table into a retention class
 (`asic.retention.TABLE_CLASSIFICATION`, asserted equal to the live schema), a tenant policy schema
 with platform minimums and per-class holds (`validate_retention_policy`), and a deterministic,
 tenant-bound, batch-bounded **dry-run planner** (`plan_retention`) that says, for every table, what a
 lifecycle job would do and why.
 
-**Not built: a deletion engine.** The application role holds no `DELETE` on any table (migration
-0018), so the runtime cannot erase anything even if this module were wrong. Deleting aged rows
-without breaking audit immutability, replay reproducibility, verification lineage, active incident
-references or memory governance needs an owner-role lifecycle job with its own change control and an
-audit receipt per run. That is a deployment concern (Phase 14 schedules and privileges it). A generic
-`DELETE ... WHERE created_at < X` in the application would have been the unsafe option.
+**Built (Phase 15): the smallest safe executor** (`asic.retention.executor`, `python -m
+asic.retention`) for the one class whose value genuinely expires and whose deletion cannot break
+evidence, replay, verification lineage or memory governance: the API idempotency replay cache
+(`operational_cache` / `api_idempotency_record`). Section 5 describes it.
+
+**Deliberately not built: deletion of any other class.** The application role still holds no
+`DELETE` on any table (migrations 0018/0019), so the runtime cannot erase anything even if a module
+were wrong. Deleting incident records, traces or evaluation history without breaking audit
+immutability, replay reproducibility, verification lineage, active incident references or memory
+governance needs lineage-aware cascades, backup/PITR coordination and legal-hold integration first
+(production gap register). A generic `DELETE ... WHERE created_at < X` would have been the unsafe
+option.
 
 ## 2. Classes
 
@@ -54,26 +60,53 @@ tenant configuration. The planner never recommends removing them and the databas
 application role if it tried. Aging them out is an explicit owner decision recorded outside this
 module.
 
-## 5. Deployment boundary after Phase 14
+## 5. The lifecycle executor (Phase 15)
 
-Phase 14 does **not** schedule a privileged lifecycle Job. The only application primitive is
-`plan_retention`; there is no bounded deletion executor or durable `data.deleted` receipt. Inventing
-owner-role SQL in a CronJob would bypass the reviewed policy boundary. A future implementation must:
+Decision: early enterprise operation needs a working lifecycle for data that is *meant* to expire
+(an idempotency replay window kept forever is a slow leak of request bodies), but nothing more.
+The executor therefore acts on exactly one class and has each property enforced twice - in code
+and by the database:
 
-1. Consume `plan_retention`, delete in bounded tenant-scoped batches inside one transaction per
-   batch, and write an audit receipt per run: tenant, class, cutoff, counts and reason.
-2. Refuse protected classes, honour holds, and skip active-incident, open-promotion and verification
-   lineage rows. It must support dry-run and expose no arbitrary SQL input.
-3. Use a maintenance identity never mounted into API pods.
-4. Coordinate infrastructure lifecycle for what the database cannot express: backup/snapshot expiry,
-   log and trace retention in Loki/Tempo and the OTLP collector, object-store lifecycle rules, and
-   erasure requests, which are a separate process from time-based retention.
-5. Keep telemetry/cache lifecycle in the observability stack; metric labels contain no tenant or
+| Property | Code | Database |
+|---|---|---|
+| Separate identity | refuses to run without `ASIC_MAINTENANCE_DATABASE_URL` | migration 0019: `asic_maintenance` (`NOLOGIN NOBYPASSRLS`) may `SELECT, DELETE` only `api_idempotency_record`, read `tenant(id, slug, status, retention_policy)` and `SELECT, INSERT` `retention_run`; a deployment grants it to a maintenance login never mounted into API pods |
+| Tenant-bound | one tenant per transaction, bound like the runtime | the `tenant_isolation` RLS policies apply to the role |
+| Policy and holds | the tenant policy is validated with the planner's rules; a hold or missing policy deletes nothing | receipt check constraints: a held or dry-run batch has `deleted_rows = 0` |
+| Bounded, oldest first, restartable | `batch_limit` 1-10 000, `max_batches` 1-1 000; stops when a batch is short | `deleted_rows <= batch_limit` |
+| Receipted | each batch commits together with its `retention_run` row; a crash before the receipt rolls the deletion back | `retention_run` is append-only evidence: the runtime and auditor may read it; nobody may update or delete it; the downgrade refuses to drop receipts |
+| Dry run by default | `--execute` is required to delete | - |
+| No arbitrary SQL | table and predicate fixed in code | the role cannot touch any other table |
+
+**Delivery.** `deploy/kubernetes/maintenance` ships a `CronJob` that is **suspended** and runs a
+**dry run** (`--all-tenants --batch-limit=1000 --max-batches=10`, no `--execute`), with
+`concurrencyPolicy: Forbid`, `backoffLimit: 0`, a 30-minute deadline, its own tokenless
+`asic-maintenance` service account (Terraform) and its own database Secret, and an egress policy
+limited to DNS and the database. An operator enables the schedule and adds `--execute` only after
+reviewing dry-run receipts.
+
+**Verified.** `tests/security/test_retention_executor.py` (20 tests, real `asic_maintenance`
+login): dry run default; bounded oldest-first batches; another tenant untouched; holds and longer
+policies respected; a failure before the receipt rolls the deletion back; the application role
+cannot run it; the maintenance role can do nothing else (8 forbidden statements); receipts readable
+by the runtime but immutable; the CLI refuses cleanly without leaking a credential. On kind
+(`scripts/deployment_smoke.py`): the CronJob is admitted under `restricted` and stays suspended;
+its Job template, run in-cluster as a login holding only `asic_maintenance`, performs a dry run
+(3 eligible, 0 deleted) and then an `--execute` run (3 deleted, the recent row kept) with receipts.
+
+**Still required before any other class is deleted** (gap register):
+
+1. Lineage-aware cascades that skip active-incident, open-promotion and verification-lineage rows.
+2. Backup/snapshot expiry and PITR coordination, so a restore cannot resurrect deleted data
+   unnoticed.
+3. Legal-hold integration beyond the per-class `hold` flag, and a separate erasure-request process.
+4. Infrastructure lifecycle the database cannot express: log and trace retention in Loki/Tempo and
+   the OTLP collector, object-store lifecycle rules.
+5. Telemetry/cache lifecycle stays in the observability stack; metric labels contain no tenant or
    incident identifiers by construction.
 
 ## 6. Tests
 
-`tests/security/test_retention.py`: classification equals the live schema; protected evidence is
+`tests/security/test_retention_executor.py` (section 5) and `tests/security/test_retention.py`: classification equals the live schema; protected evidence is
 never time-eligible; policy validation against hostile input; the preview equals a direct count,
 is deterministic, batch-bounded, honours holds, and is tenant-bound through row-level security under
 the unprivileged application role.

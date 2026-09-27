@@ -24,12 +24,14 @@ from sqlalchemy.orm import Session, sessionmaker
 from asic.api.rate_limit import RateLimiter
 from asic.api.tokens import (
     DEFAULT_ALGORITHMS,
+    DEFAULT_MAX_TOKEN_LIFETIME_SECONDS,
     AuthMode,
     Hs256DevelopmentVerifier,
     JwksClient,
     OidcJwksVerifier,
     TokenRejected,
     TokenVerifier,
+    validate_max_lifetime,
 )
 from asic.db.models import Permission, RolePermission, User, UserRoleAssignment
 from asic.db.session import apply_statement_timeouts, bind_tenant
@@ -56,6 +58,8 @@ class ApiSettings:
     auth_mode: AuthMode = AuthMode.DEVELOPMENT_HS256
     oidc_jwks_url: str | None = None
     oidc_algorithms: tuple[str, ...] = DEFAULT_ALGORITHMS
+    #: Maximum accepted ``exp - iat`` (P13-SEC-05); ``ASIC_JWT_MAX_LIFETIME_SECONDS``.
+    jwt_max_lifetime_seconds: int = DEFAULT_MAX_TOKEN_LIFETIME_SECONDS
     #: Permit plain HTTP to a loopback JWKS server. For local test servers only; refused
     #: by :func:`build_token_verifier` in a production deployment.
     oidc_allow_loopback_http: bool = False
@@ -72,6 +76,13 @@ class ApiSettings:
             raise RuntimeError(
                 "ASIC_AUTH_MODE must be 'oidc_jwks' or 'development_hs256'"
             ) from None
+        raw_lifetime = os.environ.get("ASIC_JWT_MAX_LIFETIME_SECONDS", "").strip()
+        try:
+            max_lifetime = validate_max_lifetime(
+                int(raw_lifetime) if raw_lifetime else DEFAULT_MAX_TOKEN_LIFETIME_SECONDS
+            )
+        except ValueError as exc:
+            raise RuntimeError(f"ASIC_JWT_MAX_LIFETIME_SECONDS: {exc}") from None
         metrics = os.environ.get("ASIC_METRICS_ENABLED", "").strip().lower() in (
             "1",
             "true",
@@ -97,6 +108,7 @@ class ApiSettings:
                 auth_mode=mode,
                 oidc_jwks_url=url,
                 oidc_algorithms=algorithms or DEFAULT_ALGORITHMS,
+                jwt_max_lifetime_seconds=max_lifetime,
             )
         secret = os.environ.get("ASIC_JWT_SECRET")
         if not secret or len(secret) < 32:
@@ -106,6 +118,7 @@ class ApiSettings:
             jwt_issuer=os.environ.get("ASIC_JWT_ISSUER", "asic-idp"),
             jwt_audience=os.environ.get("ASIC_JWT_AUDIENCE", "asic-api"),
             metrics_enabled=metrics,
+            jwt_max_lifetime_seconds=max_lifetime,
         )
 
 
@@ -121,7 +134,10 @@ def build_token_verifier(settings: ApiSettings) -> TokenVerifier:
         if production:
             raise RuntimeError("development JWT authentication cannot run in production")
         return Hs256DevelopmentVerifier(
-            secret=settings.jwt_secret, issuer=settings.jwt_issuer, audience=settings.jwt_audience
+            secret=settings.jwt_secret,
+            issuer=settings.jwt_issuer,
+            audience=settings.jwt_audience,
+            max_lifetime_seconds=settings.jwt_max_lifetime_seconds,
         )
     if not settings.oidc_jwks_url:
         raise RuntimeError("OIDC mode requires a JWKS URL")
@@ -136,6 +152,7 @@ def build_token_verifier(settings: ApiSettings) -> TokenVerifier:
         issuer=settings.jwt_issuer,
         audience=settings.jwt_audience,
         algorithms=settings.oidc_algorithms,
+        max_lifetime_seconds=settings.jwt_max_lifetime_seconds,
     )
 
 
@@ -149,7 +166,7 @@ class Claims(BaseModel):
     aud: str | list[str]
     exp: int
     nbf: int | None = None
-    iat: int | None = None
+    iat: int
     connector_id: str | None = Field(default=None, min_length=1, max_length=255)
     source: str | None = Field(default=None, min_length=1, max_length=64)
     service_id: uuid.UUID | None = None

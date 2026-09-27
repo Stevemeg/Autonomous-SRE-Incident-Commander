@@ -257,5 +257,8 @@ def test_alembic_head_is_the_readiness_revision() -> None:
 
     from asic.observability.health import EXPECTED_SCHEMA_REVISION
 
-    head = ScriptDirectory.from_config(_alembic_config("postgresql://unused")).get_current_head()
-    assert head == CURRENT == EXPECTED_SCHEMA_REVISION
+    script = ScriptDirectory.from_config(_alembic_config("postgresql://unused"))
+    head = script.get_current_head()
+    assert head == EXPECTED_SCHEMA_REVISION
+    # Later revisions (0019 retention maintenance) build on this one; it stays in the chain.
+    assert CURRENT in {revision.revision for revision in script.walk_revisions()}

@@ -11,3 +11,9 @@ from tests.api.test_auth import (  # noqa: F401 - registered as fixtures for thi
     api_factory,
     worlds,
 )
+from tests.integrations.conftest import runtime  # noqa: F401 - adapter fixture
+from tests.observability.conftest import (  # noqa: F401 - span capture fixtures
+    span_exporter,
+    spans,
+    telemetry,
+)

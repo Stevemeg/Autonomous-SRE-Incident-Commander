@@ -26,6 +26,7 @@ from pathlib import Path
 from types import ModuleType
 
 import yaml
+from chaos_experiments import Context, retention_maintenance, run_suite
 from deploy_release import (
     MIGRATION_JOB,
     Kubectl,
@@ -376,6 +377,11 @@ def main() -> int:
     parser.add_argument("--frontend", required=True)
     parser.add_argument("--kind", default="kind")
     parser.add_argument("--name", default="asic-delivery-smoke")
+    parser.add_argument(
+        "--chaos",
+        action="store_true",
+        help="also run the declared Phase 15 chaos experiments (scripts/chaos_experiments.py)",
+    )
     args = parser.parse_args()
     if not args.name.startswith("asic-") or not args.name.replace("-", "").isalnum():
         parser.error("cluster name must be a task-specific asic-* name")
@@ -652,6 +658,10 @@ def main() -> int:
                     bad_migration,
                     application,
                     poll_interval=1,
+                    # N-4: the non-vacuity run must never be able to spend the real 600 s
+                    # migration deadline, whatever the mutant does.
+                    migration_timeout=FAST_FAILURE_SECONDS,
+                    pod_timeout=60,
                     rollout_timeout=30,
                     smoke=lambda _kube: None,
                 )
@@ -878,6 +888,18 @@ def main() -> int:
 
             step("Redeployment matrix on one cluster: repeat, new template, fail, fix-forward")
             evidence["redeployment"] = redeployment_matrix(kube, migration, application)
+
+            step("Retention maintenance CronJob: admitted, suspended, dry run, then execute")
+            evidence["retention_maintenance"] = retention_maintenance(
+                kube,
+                render("overlays/local-maintenance"),
+                run_process=run_process,
+                kubectl=kubectl,
+            )
+
+            if args.chaos:
+                step("Chaos experiments (each declared before its fault is injected)")
+                evidence["chaos"] = run_suite(Context(kube, migration, application))
 
             for image, expected in image_ids.items():
                 if (

@@ -41,12 +41,27 @@ MAX_ITEMS: Final[int] = 50
 #: How deep the walker descends before collapsing the remainder.
 MAX_DEPTH: Final[int] = 6
 
+#: Every pattern runs in time linear in the input (Phase 15; ``tests/security/
+#: test_redaction_complexity.py``). Two shapes were quadratic on long unbroken runs and were
+#: rewritten without changing what they detect:
+#:
+#: * JWT: the atomic group commits to the FIRST ``eyJ`` at a word boundary in a run of
+#:   base64url characters. Its first segment extends to the run's end, so it is the longest
+#:   candidate; if it cannot be followed by ``.segment.segment`` no later ``eyJ`` in the same
+#:   run can be either. The lookbehind stops a restart at every later position of that run.
+#: * URL credentials: the same construction for the scheme: the first letter at a word
+#:   boundary in a run of scheme characters, then the rest of that run possessively. A later
+#:   start in the same run ends at the same ``://`` and so cannot succeed where it failed.
 _SECRET_SHAPED: Final[tuple[re.Pattern[str], ...]] = (
     re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
-    re.compile(r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}"),  # JWT
+    re.compile(  # JWT
+        r"(?<![A-Za-z0-9_-])(?>[A-Za-z0-9_-]*?\beyJ[A-Za-z0-9_-]{10,}+)"
+        r"\.[A-Za-z0-9_-]{10,}+\.[A-Za-z0-9_-]{10}"
+    ),
     re.compile(r"\b(?:bearer|basic)\s+[A-Za-z0-9._~+/=-]{16,}", re.IGNORECASE),
     re.compile(r"\b(?:sk|rk|pk)-[A-Za-z0-9]{16,}"),
-    re.compile(r"\b[a-z][a-z0-9+.-]*://[^\s:/@]+:[^\s:/@]+@"),  # credentials in a URL
+    # credentials in a URL (scheme://user:password@)
+    re.compile(r"(?<![a-z0-9+.-])(?>[a-z0-9+.-]*?\b[a-z][a-z0-9+.-]*+)://[^\s:/@]++:[^\s:/@]++@"),
     re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
     re.compile(r"\bghp_[A-Za-z0-9]{20,}\b"),
     # Phase 13 (F-16): secret-bearing URLs and vendor tokens that arrive under an innocuous
@@ -115,6 +130,19 @@ def looks_like_secret(value: str) -> bool:
     return any(pattern.search(value) for pattern in _SECRET_SHAPED)
 
 
+def scrub_text(text: str, *, limit: int = MAX_VALUE_CHARS) -> str:
+    """Replace each secret-shaped *substring* and bound the result (Phase 15).
+
+    ``redact_value`` replaces a whole value that looks like a secret, which is right for an
+    attribute but destroys a diagnostic sentence such as an exception message quoting a
+    connection string. This keeps the sentence and removes only the credential-shaped parts.
+    Every pattern is linear-time (see ``_SECRET_SHAPED``).
+    """
+    for pattern in _SECRET_SHAPED:
+        text = pattern.sub(REDACTED, text)
+    return text if len(text) <= limit else text[:limit] + "...[truncated]"
+
+
 def redact_value(value: object, *, depth: int = 0) -> Any:
     """Redact and bound one value of any shape."""
     if depth > MAX_DEPTH:
@@ -179,4 +207,5 @@ __all__ = [
     "redact_arguments",
     "redact_mapping",
     "redact_value",
+    "scrub_text",
 ]

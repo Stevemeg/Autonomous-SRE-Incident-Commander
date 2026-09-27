@@ -54,7 +54,7 @@ from sqlalchemy.orm import Session
 from asic.db.models.evaluation import TraceSpan
 from asic.domain.clock import Clock
 from asic.domain.enums import NodeId, SpanStatus, TerminationReason, TraceSpanKind
-from asic.observability.redaction import redact_mapping, redact_value
+from asic.observability.redaction import redact_mapping, redact_value, scrub_text
 from asic.observability.trace_ids import require_valid_trace_id
 
 #: Instrumentation scope name. Stable, because dashboards and sampling rules key on it.
@@ -148,7 +148,10 @@ class SpanHandle:
 
     def fail(self, reason: str) -> None:
         self.status = SpanStatus.ERROR
-        self.failure_reason = reason
+        # Scrubbed here, once, so the persisted span and the exported span agree: exception
+        # text routinely quotes connection strings or vendor keys (Phase 15 leak campaign
+        # found the persisted copy unredacted while the exported one was clean).
+        self.failure_reason = scrub_text(reason)
 
     def succeed(self) -> None:
         if self.status is SpanStatus.UNSET:

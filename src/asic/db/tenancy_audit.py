@@ -42,6 +42,8 @@ RUNTIME_READ_ONLY_TABLES: Final[frozenset[str]] = frozenset(
         "user_role_assignment",
         "integration_connector",
         "connector_scope_binding",
+        # written only by the separate maintenance role (retention executor receipts)
+        "retention_run",
     }
 )
 

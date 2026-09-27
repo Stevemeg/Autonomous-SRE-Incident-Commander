@@ -1,0 +1,281 @@
+{
+  "result": "passed",
+  "image_ids": {
+    "asic-backend:phase15-final": "sha256:5fd927dff0a43a014aa56f12ab21186125c0155a26076e86ad986db60a155b3d",
+    "asic-frontend:phase15-final": "sha256:78be086986d176c6bb642a2c27653193ba207647cdcbfe468c1bcbb90a549136"
+  },
+  "kubernetes": "1.34.0",
+  "cni": "cilium_1.20.2",
+  "psa_labels": {
+    "pod-security.kubernetes.io/audit": "restricted",
+    "pod-security.kubernetes.io/audit-version": "v1.34",
+    "pod-security.kubernetes.io/enforce": "restricted",
+    "pod-security.kubernetes.io/enforce-version": "v1.34",
+    "pod-security.kubernetes.io/warn": "restricted",
+    "pod-security.kubernetes.io/warn-version": "v1.34"
+  },
+  "privileged_pod": "Error from server (Forbidden): error when creating \"STDIN\": pods \"psa-privileged-probe\" is forbidden: violates PodSecurity \"restricted:v1.34\": host namespaces (hostNetwork=true, hostPID=true), privileged (container \"probe\" must not set securityContext.privileged=true), allowPrivilegeEscalation != fa",
+  "cidr_union": "refused_before_render",
+  "restricted_workloads_admitted": true,
+  "failed_migration": {
+    "detected_seconds": 9.3,
+    "job_failed": true,
+    "application_apply_executed": false,
+    "api_deployment_present": false
+  },
+  "guard_mutation_detected": true,
+  "successful_migration_seconds": 9.2,
+  "post_rollout_smoke": "passed_automatically",
+  "network_policy": {
+    "frontend_to_api": "allowed",
+    "api_to_db": "allowed",
+    "dns": "allowed",
+    "frontend_to_db": "denied",
+    "internet_egress": "denied",
+    "other_namespace_to_api": "denied"
+  },
+  "api_outage": {
+    "frontend_probe_seconds": {
+      "/livez": 0.02,
+      "/readyz": 1.52
+    },
+    "frontend_restarts_before": 0,
+    "frontend_restarts_after": 0,
+    "frontend_ready_endpoints": 0,
+    "post_rollout_smoke": "failed as required: asic-api did not converge within 60s after 29 attempts; last error: service asic-api has no ready endpoints"
+  },
+  "rollback": "passed",
+  "redeployment": {
+    "B_same_release_again": {
+      "seconds": 21.2,
+      "migration": "complete",
+      "old_job_deleted": true,
+      "job_uid": "07b03b15-1e78-4105-95fc-3a8c9ec33e74",
+      "job_state": "complete",
+      "api_rolled": true,
+      "smoke_retries": 0,
+      "smoke": "passed"
+    },
+    "C_changed_template_over_complete_job": {
+      "seconds": 20.8,
+      "migration": "complete",
+      "old_job_deleted": true,
+      "job_uid": "5f5cd900-1a1a-42c8-80df-4eb5bd1e1ac8",
+      "job_state": "complete",
+      "api_rolled": true,
+      "smoke_retries": 0,
+      "smoke": "passed"
+    },
+    "D1_failed_migration_changed_template": {
+      "seconds": 8.1,
+      "old_job_deleted": true,
+      "application_applied": false,
+      "job_state": "failed"
+    },
+    "D2_fix_forward_over_failed_job": {
+      "seconds": 22.0,
+      "migration": "complete",
+      "old_job_deleted": true,
+      "job_uid": "0c1f19e1-bf25-473b-888f-f315d484d7bd",
+      "job_state": "complete",
+      "api_rolled": true,
+      "smoke_retries": 0,
+      "smoke": "passed"
+    },
+    "F_delete_wait_with_finalizer": {
+      "seconds": 37.7,
+      "created_after_release_seconds": 1.4
+    },
+    "E_active_migration_collision": {
+      "refused": "migration Job asic-migration is still active (uid=dd19bf70-4563-4867-a7db-576c66e513bd conditions=[none]); another deployment may be migrating. Refusing to dele",
+      "active_job_untouched": true,
+      "application_applied": false
+    },
+    "G_recovery_after_collision": {
+      "seconds": 20.3,
+      "migration": "complete",
+      "old_job_deleted": false,
+      "job_uid": "c58581bf-aaaf-4825-ab90-c17a59e981e0",
+      "job_state": "complete",
+      "api_rolled": true,
+      "smoke_retries": 0,
+      "smoke": "passed"
+    },
+    "J_job_deleted_mid_wait": {
+      "failed_after_seconds": 8.6
+    },
+    "K_api_never_ready": {
+      "failed_after_seconds": 106.8,
+      "failure": "asic-api did not converge within 60s after 27 attempts; last error: asic-api/readyz: expected 200, got 503"
+    },
+    "L_recovery_after_broken_release": {
+      "seconds": 23.1,
+      "migration": "complete",
+      "old_job_deleted": true,
+      "job_uid": "dfd5575d-db1f-42d6-bde8-df0d9e3a715f",
+      "job_state": "complete",
+      "api_rolled": true,
+      "smoke_retries": 0,
+      "smoke": "passed"
+    }
+  },
+  "retention_maintenance": {
+    "cronjob_suspended": true,
+    "server_side_admitted": true,
+    "dry_run": {
+      "eligible": 3,
+      "deleted": 0,
+      "rows_after": 4
+    },
+    "execute": {
+      "deleted": 3,
+      "rows_after": 1,
+      "recent_row_kept": true
+    },
+    "receipts_written": 2,
+    "identity": "asic_maintenance_local (member of asic_maintenance only)"
+  },
+  "chaos": {
+    "api_pod_kill": {
+      "result": "passed",
+      "seconds": 19.5,
+      "replica_count": 1,
+      "kill_to_ready_endpoint_seconds": 11.0,
+      "api_via_service": {
+        "samples": 43,
+        "bad_samples": 3,
+        "windows": 1,
+        "longest_window_seconds": 5.79,
+        "recovered": true,
+        "codes": [
+          0,
+          200
+        ]
+      },
+      "frontend_liveness": {
+        "samples": 43,
+        "bad_samples": 0,
+        "windows": 0,
+        "longest_window_seconds": 0.0,
+        "recovered": true,
+        "codes": [
+          200
+        ]
+      },
+      "replacement_egress_attempts": {
+        "connected": 0,
+        "denied": 8,
+        "error": 0
+      },
+      "frontend_restarted": false
+    },
+    "frontend_pod_kill": {
+      "result": "passed",
+      "seconds": 47.4,
+      "seconds_to_ready_endpoint": 8.2,
+      "api_samples_all_healthy": 171
+    },
+    "postgres_restart": {
+      "result": "passed",
+      "seconds": 12.1,
+      "database_back_seconds": 1.4,
+      "api_readyz": {
+        "samples": 33,
+        "bad_samples": 0,
+        "windows": 0,
+        "longest_window_seconds": 0.0,
+        "recovered": true,
+        "codes": [
+          200
+        ]
+      },
+      "readyz_observed_outage": false,
+      "authenticated_requests": {
+        "samples": 33,
+        "bad_samples": 1,
+        "windows": 1,
+        "longest_window_seconds": 0.26,
+        "recovered": true,
+        "codes": [
+          -1,
+          200,
+          503
+        ]
+      },
+      "api_livez_failures": 0,
+      "schema_revision_preserved": "0019_retention_maintenance",
+      "api_restarted": false
+    },
+    "readiness_failure_database_access_revoked": {
+      "result": "passed",
+      "seconds": 43.5,
+      "api_endpoint_removed_after_seconds": 14.9,
+      "frontend_endpoint_removed_after_seconds": 0.1,
+      "api_endpoint_back_after_restore_seconds": 4.6,
+      "frontend_endpoint_back_after_restore_seconds": 3.5,
+      "api_readyz": {
+        "samples": 152,
+        "bad_samples": 112,
+        "windows": 1,
+        "longest_window_seconds": 29.38,
+        "recovered": true,
+        "codes": [
+          200,
+          503
+        ]
+      },
+      "authenticated_requests": {
+        "samples": 152,
+        "bad_samples": 39,
+        "windows": 39,
+        "longest_window_seconds": 0.28,
+        "recovered": true,
+        "codes": [
+          -1,
+          200,
+          503
+        ]
+      },
+      "restarts": 0
+    },
+    "otel_collector_unavailable": {
+      "result": "passed",
+      "seconds": 103.6,
+      "exporter": "otlp",
+      "endpoint": "http://10.255.255.1:4318 (dropped by egress policy)",
+      "samples": 227,
+      "authenticated_request_p50_ms": 14.6,
+      "authenticated_request_p95_ms": 19.9,
+      "authenticated_request_max_ms": 164.0,
+      "exporter_error_log_lines": 2,
+      "api_restarted": false
+    },
+    "migration_pod_overlap": {
+      "result": "passed",
+      "seconds": 111.1,
+      "orchestrated": {
+        "job_object_gone_after_seconds": 0.3,
+        "new_job_created_after_delete_seconds": 42.2,
+        "old_pod_last_seen_after_delete_seconds": 40.3,
+        "termination_grace_seconds": 40,
+        "waited_for_previous_pod": true,
+        "max_concurrent_migration_pods": 1,
+        "samples": 89,
+        "migration": "complete"
+      },
+      "bypass_non_vacuity": {
+        "max_concurrent_migration_pods": 2
+      },
+      "timeout": {
+        "pod_timeout_seconds": 20,
+        "refused_after_seconds": 22.7,
+        "jobs_created": 0,
+        "manifests_applied": 0,
+        "refusal": "previous migration pod(s) still running 20s after the Job slot was freed (asic-migration-8qdf4 phase=Running controller-uid=d7b0c0cc-3d28-4400-80f5-2c7d3eac81b2); the replacement was NOT created"
+      }
+    }
+  },
+  "terraform": "apply, no-drift re-plan, destroy",
+  "remote_production": "not_executed",
+  "note": "Final Phase 15 images (asic-backend:phase15-final, asic-frontend:phase15-final); kind 0.30 / Kubernetes 1.34.0 / Cilium 1.20.2 on a Windows 11 laptop; run 2026-09-27."
+}

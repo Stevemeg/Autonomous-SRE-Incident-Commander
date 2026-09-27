@@ -437,6 +437,7 @@ class TestEvaluationApi:
                 "tenant_id": str(tenant),
                 "iss": SETTINGS.jwt_issuer,
                 "aud": SETTINGS.jwt_audience,
+                "iat": int(time.time()),
                 "exp": int(time.time()) + 300,
             },
             SECRET,

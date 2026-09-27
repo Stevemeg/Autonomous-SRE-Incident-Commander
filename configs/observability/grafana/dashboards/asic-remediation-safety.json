@@ -23,7 +23,7 @@
   "panels": [
     {
       "type": "stat",
-      "title": "Compensation failures (24h)",
+      "title": "Partial effects needing manual compensation (24h)",
       "datasource": {
         "type": "prometheus",
         "uid": "asic-prometheus"
@@ -61,7 +61,7 @@
             "type": "prometheus",
             "uid": "asic-prometheus"
           },
-          "expr": "sum(increase(asic_remediation_action_transitions_total{status=\"compensation_failed\"}[24h]))"
+          "expr": "sum(increase(asic_remediation_action_transitions_total{status=\"failed_partial\"}[24h]))"
         }
       ],
       "id": 1,

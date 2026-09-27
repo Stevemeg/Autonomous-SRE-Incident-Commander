@@ -175,7 +175,8 @@ class TestClaimAttacks:
     def test_small_clock_skew_is_tolerated(self, idp: LocalHttpServer) -> None:
         key = Keys("k1")
         idp.route("GET", "/jwks", Scripted(body=jwks(key)))
-        token = key.sign({"exp": int(time.time()) - 10})
+        now = int(time.time())  # a token that expired 10 s ago, within the 30 s leeway
+        token = key.sign({"iat": now - 310, "exp": now - 10})
         assert verifier_for(idp).verify(token)["sub"] == "alice"
 
 

@@ -67,6 +67,7 @@ from asic.db.models.remediation import (
     RemediationTarget,
     Verification,
 )
+from asic.db.models.retention import RetentionRun
 from asic.db.models.tenancy import (
     Permission,
     Role,
@@ -157,6 +158,7 @@ __all__ = [
     "RemediationAction",
     "RemediationBaseline",
     "RemediationTarget",
+    "RetentionRun",
     "Role",
     "RolePermission",
     "Service",

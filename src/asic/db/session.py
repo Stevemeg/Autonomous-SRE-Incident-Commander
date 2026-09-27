@@ -68,6 +68,13 @@ DEFAULT_IDLE_IN_TRANSACTION_TIMEOUT_MS: Final[int] = 180_000
 #: Seconds allowed to establish a database connection, and to wait for a pooled one.
 DEFAULT_CONNECT_TIMEOUT_SECONDS: Final[int] = 5
 DEFAULT_POOL_TIMEOUT_SECONDS: Final[float] = 10.0
+#: libpq TCP keepalive parameters applied to every application connection.
+TCP_KEEPALIVES: Final[dict[str, int]] = {
+    "keepalives": 1,
+    "keepalives_idle": 30,
+    "keepalives_interval": 10,
+    "keepalives_count": 3,
+}
 
 #: Environment variable holding the *owner* connection string, used by migrations and by
 #: administrative operations such as creating a tenant. Deliberately distinct from
@@ -127,6 +134,12 @@ def create_app_engine(url: str | None = None, **kwargs: Any) -> Engine:
     connect_args = dict(kwargs.pop("connect_args", {}))
     if resolved.startswith("postgresql"):
         connect_args.setdefault("connect_timeout", DEFAULT_CONNECT_TIMEOUT_SECONDS)
+        # TCP keepalives (Phase 15): statement_timeout is enforced by the server, so it cannot
+        # help when the network silently drops an established connection. libpq keepalives
+        # let the client notice within ~idle + interval x count seconds (about a minute)
+        # instead of waiting on the operating system's default (often two hours).
+        for key, value in TCP_KEEPALIVES.items():
+            connect_args.setdefault(key, value)
     return create_engine(resolved, connect_args=connect_args, **kwargs)
 
 
@@ -174,6 +187,45 @@ def apply_statement_timeouts(
             f"SET LOCAL idle_in_transaction_session_timeout = {int(idle_in_transaction_timeout_ms)}"
         )
     )
+
+
+def bind_tenant_on_begin(
+    session: Session,
+    tenant_id: uuid.UUID,
+    *,
+    statement_timeout_ms: int = DEFAULT_STATEMENT_TIMEOUT_MS,
+    idle_in_transaction_timeout_ms: int = DEFAULT_IDLE_IN_TRANSACTION_TIMEOUT_MS,
+) -> None:
+    """Bind the tenant and the statement timeouts at the start of *every* transaction.
+
+    Equivalent to ``bind_tenant`` + ``apply_statement_timeouts`` as the first statements, but
+    nothing touches the database until the session is first used, and a transaction begun
+    after a mid-request commit is bound again (the settings are transaction-local).
+
+    Phase 15: the API's request-session dependency used to bind eagerly, in the threadpool
+    call that sets the dependency up, so a request held a pooled connection while it waited
+    for another thread to run its endpoint. With more concurrent requests than threads plus
+    connections, every thread waited on the pool and every connection waited on a thread until
+    the pool timeout (found by the load harness's burst profile). Binding on begin checks the
+    connection out in the thread that uses it.
+    """
+    if statement_timeout_ms < 0 or idle_in_transaction_timeout_ms < 0:
+        raise ValueError("timeouts must be non-negative milliseconds")
+
+    def bind(_session: Session, _transaction: Any, connection: sa.Connection) -> None:
+        connection.execute(
+            sa.text("SELECT set_config(:setting, :value, true)"),
+            {"setting": TENANT_SETTING, "value": str(tenant_id)},
+        )
+        connection.execute(sa.text(f"SET LOCAL statement_timeout = {int(statement_timeout_ms)}"))
+        connection.execute(
+            sa.text(
+                "SET LOCAL idle_in_transaction_session_timeout = "
+                f"{int(idle_in_transaction_timeout_ms)}"
+            )
+        )
+
+    sa.event.listen(session, "after_begin", bind)
 
 
 def apply_lock_timeout(session: Session, *, lock_timeout_ms: int) -> None:

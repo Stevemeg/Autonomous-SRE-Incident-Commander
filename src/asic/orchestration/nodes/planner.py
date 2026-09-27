@@ -121,6 +121,23 @@ def planner_node(deps: NodeDependencies) -> Any:
             # 2. The model proposes.
             try:
                 decision, tokens, cost = _ask_model(deps, state, available, span, charged)
+            except BudgetExhausted as exc:
+                # The model's bounded estimate did not fit the remaining token/cost budget, so
+                # the call was refused before invocation (Phase 15: this used to escape the
+                # node and abort the run instead of ending it as budget exhaustion).
+                span.set_decision(
+                    action=PlannerAction.TERMINATE.value,
+                    overridden_reason=str(exc),
+                    budget_kind=exc.kind.value,
+                )
+                span.termination_reason = TerminationReason.BUDGET_EXHAUSTED
+                return _terminate(
+                    contract,
+                    charged,
+                    gap="budget exhausted before the planner's model call could be afforded",
+                    reason=str(exc),
+                    budget_refusal=exc.kind,
+                )
             except SchemaViolation as exc:
                 charged = deps.durable_budget(charged)
                 metrics.schema_violations_total.add(

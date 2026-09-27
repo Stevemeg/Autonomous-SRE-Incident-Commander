@@ -112,6 +112,12 @@ def validate_endpoint(
 #: different parsers disagree about them, which is how a URL is made to mean two things.
 _URL_FORBIDDEN_CHARS: Final[re.Pattern[str]] = re.compile(r"[\x00-\x20\x7f\\]")
 _NUMERIC_HOST: Final[re.Pattern[str]] = re.compile(r"[0-9a-fx.]+", re.IGNORECASE)
+#: RFC 1123 host name syntax (lower-cased, optional trailing dot). Anything else that is not
+#: an IP literal - percent-encoded octets, underscores, empty labels - is refused rather than
+#: handed to a resolver that may interpret it differently (Phase 15).
+_HOST_NAME: Final[re.Pattern[str]] = re.compile(
+    r"(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*\.?"
+)
 
 #: Names of cloud instance-metadata services. Reaching one from a connector would hand out
 #: the node's own credentials.
@@ -151,6 +157,8 @@ def check_egress_host(host: str) -> None:
     except ValueError:
         if _NUMERIC_HOST.fullmatch(host) and any(ch.isdigit() for ch in host):
             raise _config("connector endpoint host is an ambiguous numeric address") from None
+        if not _HOST_NAME.fullmatch(host):
+            raise _config("connector endpoint host is not a valid host name") from None
         return
     if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped is not None:
         address = address.ipv4_mapped

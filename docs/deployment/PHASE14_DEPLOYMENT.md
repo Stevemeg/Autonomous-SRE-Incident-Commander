@@ -21,8 +21,9 @@ Required platform-provisioned Secrets:
 
 Production must patch these ConfigMap values: `ASIC_JWT_ISSUER`, `ASIC_JWT_AUDIENCE`,
 `ASIC_OIDC_JWKS_URL` (HTTPS), `OTEL_EXPORTER_OTLP_ENDPOINT`, public API origin and ingress details.
-Development HS256 is refused when `ASIC_DEPLOYMENT_ENVIRONMENT=production`. Configure IdP token
-lifetimes conservatively; maximum JWT lifetime enforcement remains P13-SEC-05.
+Development HS256 is refused when `ASIC_DEPLOYMENT_ENVIRONMENT=production`. Tokens must carry
+`iat`, and `exp - iat` may not exceed `ASIC_JWT_MAX_LIFETIME_SECONDS` (default 3600 s, allowed
+300-5400 s; Phase 15, P13-SEC-05). Configure the IdP's token lifetime at or below it.
 
 ## Build, scan and release
 
@@ -146,6 +147,18 @@ therefore handles the previous Job explicitly before it validates the new one:
 | already being deleted (`deletionTimestamp`, no terminal condition) | do not delete; wait (180 s bound) for that deletion to finish, then proceed |
 | active (no terminal condition) | **fail closed**: another migration may be running; it is not deleted, no second Job is created and nothing is applied |
 
+**The Job object being gone is not enough (Phase 15).** A Job deleted with background propagation, or
+orphaned, disappears at once while its pod can still be running for its whole termination grace
+period - possibly inside a migration transaction. After the Job slot is free the orchestrator
+therefore also waits until no pod labelled `job-name=asic-migration` is in a non-terminal phase
+(any previous Job, whether or not it still exists; a pod already `Succeeded`/`Failed` runs nothing
+and does not block). The wait is bounded (`pod_timeout`, 180 s); if a pod is still running then, the
+deployment fails with `... the replacement was NOT created` and creates nothing. Proven live on kind
+by `scripts/chaos_experiments.py` (`migration_pod_overlap`): with a SIGTERM-ignoring migration pod
+held for its grace period after its Job was deleted, at most one migration pod was ever non-terminal,
+the new Job was created only after the old pod was gone, a 20 s allowance refused without creating
+anything, and bypassing the orchestrator produced two concurrent pods (so the sampler is not blind).
+
 The new Job is validated with a server-side dry-run only after the old one is gone, then created with
 `kubectl create` (never adopted), and the watcher only accepts a result from the UID it created. If
 the old Job cannot be deleted in time (e.g. a stuck finalizer) the deployment fails without creating
@@ -205,7 +218,19 @@ project or production data. It checks:
   egress and another namespace to the API denied;
 - API scaled to zero: frontend `/livez` 200, `/readyz` 503 in well under the 3 s probe timeout, no
   frontend restart after 45 s, frontend removed from endpoints, post-rollout smoke fails;
-- failed application rollout recovery, image IDs unchanged, and Terraform destroy.
+- failed application rollout recovery, the redeployment matrix (repeat, changed template,
+  failed migration and fix-forward, finalizer-held deletion, active-migration refusal, Job deleted
+  mid-wait, never-ready release), image IDs unchanged, and Terraform destroy;
+- the retention maintenance CronJob (`overlays/local-maintenance`): admitted under `restricted`,
+  delivered suspended, and its Job template run in-cluster as a login holding only
+  `asic_maintenance` - a dry run (nothing deleted) and an `--execute` run (only expired
+  idempotency records deleted) with receipts.
+
+`--chaos` additionally runs the declared chaos experiments in `scripts/chaos_experiments.py` (pod
+kills, Postgres restart, sustained database-access loss, unreachable OTLP collector, migration pod
+overlap). Each experiment's hypothesis, invariant, fault, expected signal, recovery condition,
+maximum duration and cleanup are printed before its fault is injected; results are in
+`docs/testing/RESILIENCE_AND_CHAOS.md`.
 
 Terraform state and kubeconfig live in a temporary directory, destroyed with the cluster.
 
@@ -237,9 +262,20 @@ Terraform state and kubeconfig live in a temporary directory, destroyed with the
   disabling the pod security baseline.
 - Trivy DB unavailable: retry after service recovery; do not treat a missing/stale scan as clean.
 
+## Retention maintenance (Phase 15)
+
+`deploy/kubernetes/maintenance` delivers the retention lifecycle CronJob (`asic-retention`),
+**suspended** and in **dry-run** mode. It needs a `asic-maintenance-database` Secret for a login that
+holds only the `asic_maintenance` role (migration 0019) - never the runtime or migration
+credentials - and the Terraform-owned `asic-maintenance` service account. Production overlays
+replace the placeholder database CIDR in `retention-egress`. To enable: review dry-run receipts
+(`retention_run`), add `--execute` to the command through your overlay, then set `suspend: false`.
+The executor deletes only expired API idempotency records; see
+[DATA_RETENTION.md](../security/DATA_RETENTION.md).
+
 ## Deferred operational boundaries
 
-The retention subsystem has classification, holds and a bounded dry-run planner, but no safe deletion
-executor or durable deletion receipt. Therefore Phase 14 intentionally deploys no privileged
-retention CronJob. P13-SEC-05 and F-07/F-09/F-10/F-12/F-17 remain tracked. Phase 15 owns load,
-resilience, chaos, penetration, broader network-policy and recovery campaigns.
+The retention executor covers only the idempotency replay cache; deleting any other class needs
+lineage-aware cascades, backup/PITR coordination and legal-hold integration (gap register). Remote
+GitHub Actions/GHCR execution, remote TLS, high availability, disaster recovery and zero-downtime
+migration guarantees are not verified by this repository; see the production readiness review.

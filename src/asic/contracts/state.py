@@ -39,7 +39,7 @@ from __future__ import annotations
 import operator
 from typing import Annotated, Any, TypedDict
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field
 
 from asic.domain.enums import (
     EvidenceDomain,
@@ -52,11 +52,18 @@ from asic.domain.enums import (
     ProvenanceLabel,
     ReflectionAction,
 )
+from asic.observability.redaction import scrub_text
 
 #: Longest headline retained in graph state for one piece of evidence. Enough for an
 #: operator or a planner to tell two findings apart; far too short to be a copy of the
 #: content.
 HEADLINE_MAX_CHARS = 240
+
+
+#: Free text that may quote exception messages (and so connection strings or vendor keys). It
+#: is persisted in checkpoints and traces, so credential-shaped substrings are scrubbed on
+#: construction (Phase 15 secret-leak campaign). Ordinary prose is unchanged.
+ScrubbedText = Annotated[str, AfterValidator(scrub_text)]
 
 
 class _Frozen(BaseModel):
@@ -125,14 +132,14 @@ class PlannerDecisionRef(_Frozen):
     """What the last planning step decided, and why."""
 
     action: PlannerAction
-    gap: str
-    rationale: str
+    gap: ScrubbedText
+    rationale: ScrubbedText
     domain: EvidenceDomain | None = None
     expected_gain: float = Field(default=0.0, ge=0.0, le=1.0)
     candidates: tuple[CandidateTask, ...] = ()
     #: Set when the deterministic guards overrode the model's choice - redundant
     #: collection, an ungranted capability, an exhausted budget.
-    overridden_reason: str | None = None
+    overridden_reason: ScrubbedText | None = None
 
 
 class ReflectionDecisionRef(_Frozen):
@@ -172,7 +179,10 @@ class NodeFailureRef(_Frozen):
     node_id: NodeId
     node_version: str
     error_type: str
-    message: str
+    #: Exception text quotes whatever the failing dependency said - connection strings,
+    #: vendor keys. It is persisted in checkpoints, so it is scrubbed here, at the one type
+    #: every node records failures with (Phase 15 secret-leak campaign).
+    message: ScrubbedText
     recoverable: bool
     occurred_at: str
     stage: str | None = None

@@ -206,7 +206,7 @@ class TestAgainstALiveInvestigation:
         )
         assert flagged, "the hostile content must be recorded as evidence and flagged"
 
-    def test_an_injection_flag_produces_an_incident_event(
+    def test_an_injection_flag_is_recorded_durably_on_the_evidence(
         self,
         hostile: Fixture,
         session_factory: Callable[[], Session],

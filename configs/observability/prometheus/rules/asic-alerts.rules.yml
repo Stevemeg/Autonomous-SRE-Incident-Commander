@@ -82,15 +82,18 @@ groups:
           summary: "A tool call ended with an unknown outcome ({{ $labels.tool }})"
           description: The effect may or may not have been applied; it must be reconciled, never retried blindly.
           runbook_url: docs/runbooks/tool-unknown-outcome.md
-      - alert: AsicCompensationFailed
-        expr: sum(increase(asic_remediation_action_transitions_total{status="compensation_failed"}[15m])) > 0
+      # F-07 (Phase 15): automated compensation is not implemented, so no action can reach
+      # compensation_failed. The state that actually leaves a target partially changed - and
+      # emits compensation.started as a signal for a human - is failed_partial.
+      - alert: AsicRemediationPartialEffect
+        expr: sum(increase(asic_remediation_action_transitions_total{status="failed_partial"}[15m])) > 0
         labels:
           severity: page
           invariant: rollback-integrity
         annotations:
-          summary: A remediation rollback failed
-          description: A remediation action could not be compensated; the target may be in a partially changed state.
-          runbook_url: docs/runbooks/compensation-failed.md
+          summary: A remediation left its target partially changed
+          description: A remediation action ended failed_partial; automated compensation is not implemented, so a human must restore the target.
+          runbook_url: docs/runbooks/remediation-partial-effect.md
       - alert: AsicVerificationNotVerified
         expr: sum by (verdict) (increase(asic_remediation_verifications_total{verdict=~"not_verified|inconclusive"}[1h])) > 0
         labels:
