@@ -1,6 +1,6 @@
 # ADR-0010: Observability and evaluation tooling — OpenTelemetry-native, not LangSmith or Phoenix
 
-- **Status:** Proposed
+- **Status:** Accepted, amended by the [Phase 16 ADR review](./ADR_REVIEW.md)
 - **Date:** 2026-09-04
 - **Deciders:** Project owner (pending approval)
 - **Spec reference:** §9, §10, §11, §13

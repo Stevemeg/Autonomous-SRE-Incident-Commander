@@ -1,6 +1,6 @@
 # ADR-0011: Authentication, authorization and tenancy model
 
-- **Status:** Proposed
+- **Status:** Accepted, amended by the [Phase 16 ADR review](./ADR_REVIEW.md)
 - **Date:** 2026-09-04
 - **Deciders:** Project owner (pending approval)
 - **Spec reference:** §15, §23(L)

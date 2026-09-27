@@ -14,3 +14,16 @@ One runbook per alert in [`configs/observability/prometheus/rules/asic-alerts.ru
 - [Remediation not verified](./verification-not-verified.md) - `AsicVerificationNotVerified`
 - [Workflow run dead-lettered](./workflow-run-dead-lettered.md) - `AsicWorkflowRunDeadLettered`
 - [Workflow runs failing](./workflow-runs-failing.md) - `AsicWorkflowRunsFailing`
+
+## Operational runbooks (no alert fires them directly)
+
+- [Migration failed or will not start](./operations/migration-failure.md)
+- [Workflow run not progressing](./operations/stuck-workflow.md)
+- [Model provider unavailable or misbehaving](./operations/model-provider-outage.md)
+- [Identity provider or JWKS unavailable](./operations/identity-provider-outage.md)
+- [Container or deployment failure](./operations/deployment-failure.md)
+- [Rotating secrets and credentials](./operations/secret-rotation.md)
+- [Tenant isolation or security alert](./operations/security-incident.md)
+
+See also the [operator guide](../operations/OPERATOR_GUIDE.md) and
+[troubleshooting guide](../operations/TROUBLESHOOTING.md).

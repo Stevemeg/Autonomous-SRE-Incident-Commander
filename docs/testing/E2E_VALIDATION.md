@@ -45,8 +45,9 @@ Measured on the validation run recorded in `docs/testing/PHASE15_RESULTS.md`: 9 
 
 ## Known limits (not hidden)
 
-* Evidence provenance distinguishes `observed`/`retrieved`/`model_inferred`; `verified_fact` is
-  documented but no code path assigns it today (NFR-SEC-11 partially satisfied).
+* Evidence provenance is assigned only by the broker: `verified_fact` for telemetry query results
+  and `retrieved` for knowledge content (scenario A asserts nothing else appears). *Corrected in
+  Phase 16: an earlier version of this page wrongly said `verified_fact` was never assigned.*
 * The `content.injection_flagged` telemetry event is not emitted; flagging is recorded on the
   evidence itself (scenario D asserts that).
 * A crash between a human approval and dispatch loses the approval wait's continuation: the

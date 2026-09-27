@@ -169,3 +169,19 @@ receipts, delivered as a suspended dry-run CronJob; no owner SQL is deployed
 | F-16 | redaction limits | strengthened; limits documented |
 | F-07, F-09, F-10, F-12, F-17 | metric, evaluation, traceback, semantics and label items | not security-related; closed in Phase 15 (see CHANGELOG) |
 | P13-SEC-05 | no maximum token lifetime | closed in Phase 15: `iat` required, lifetime bounded in both verifiers |
+
+## 13. Phase 15 verification and residual risk (closeout)
+
+Phase 15 attacked this boundary with nine automated campaigns (prompt injection across every
+vector, tool abuse, schema-wide tenant attacks, authentication, SSRF/egress, API fuzzing and abuse
+cost, canary secret-leak tracing, redaction complexity, retention confinement) and fixed every
+defect they found ([SECURITY_HARDENING.md](../testing/SECURITY_HARDENING.md)). The strict security
+gate passed 11/11 locally, including gitleaks history and tree and Trivy HIGH/CRITICAL scans of
+both final images ([PHASE15_RESULTS.md](../testing/PHASE15_RESULTS.md)).
+
+Residual risks are owned by the [production gap register](../PRODUCTION_GAP_REGISTER.md): remote
+CI enforcement (GAP-01), TLS and encryption at rest (GAP-02, GAP-03, GAP-29), per-process rate
+limiting (GAP-13), DNS rebinding (GAP-14), secret-manager rotation (GAP-25) and the absence of an
+independent penetration test (GAP-24). Operational response: the
+[security incident runbook](../runbooks/operations/security-incident.md) and
+[secret rotation runbook](../runbooks/operations/secret-rotation.md).

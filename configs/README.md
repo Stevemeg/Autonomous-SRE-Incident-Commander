@@ -1,8 +1,10 @@
 # `configs/` — Configuration
 
-**Phase 12:** [`observability/`](./observability/) holds reference Prometheus, Grafana and
-OpenTelemetry Collector configuration - validated (`promtool check config`, `promtool test
-rules`, `otelcol-contrib validate`) but not deployed. Deployment wiring is Phase 14.
+[`observability/`](./observability/) holds reference Prometheus rules and rule tests, Grafana
+dashboards and OpenTelemetry Collector configuration - validated by `scripts/check_observability.sh`
+(`promtool check config`, `promtool test rules`, `otelcol-contrib validate`) but not deployed
+([production gap register](../docs/PRODUCTION_GAP_REGISTER.md) GAP-22). Kubernetes workloads live
+in `deploy/`, infrastructure prerequisites in `infra/terraform/`.
 
 ## What belongs here
 

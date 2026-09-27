@@ -119,8 +119,8 @@ context and safe namespace. Outputs contain names only.
 Local state is for the disposable smoke cluster. Real environments must configure an encrypted,
 versioned remote backend with locking and restricted access before apply. No secret value is a
 Terraform variable or output, so credentials are not copied into state. Managed database backups,
-PITR, registry retention and state recovery are platform prerequisites; their disaster tests belong
-to Phase 15.
+PITR, registry retention and state recovery are platform prerequisites; their disaster tests need a
+real environment and remain open (production gap register GAP-03, GAP-05).
 
 ## 6. CI and release gates
 
@@ -206,6 +206,8 @@ It also covers failed-rollout recovery and Terraform destroy. Helm is used only 
 Enforcement must still be checked on the production CNI. Remote production, TLS termination, HA, SLOs, scaling, DR and cloud
 cost are **not executed or claimed**.
 
-Phase 15 may measure sizing, broaden network/load/chaos/penetration campaigns, rollout
-resilience and recovery. Interview-relevant concepts here are build-once promotion, immutable
+Phase 15 added the load harness, six declared chaos experiments on kind (including a live
+migration-overlap proof), network/SSRF and security campaigns, and a retention CronJob; results are
+in [docs/testing](../testing/README.md). Sizing, HA and DR on real infrastructure remain open
+([production gap register](../PRODUCTION_GAP_REGISTER.md)). Interview-relevant concepts here are build-once promotion, immutable
 identity, provenance, least privilege, migration ordering, fail-closed gates and IaC ownership.

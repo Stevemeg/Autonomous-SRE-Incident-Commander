@@ -22,6 +22,29 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added — Phase 16 production readiness and project closeout
+
+- Final status for all 131 SRS requirements (112 satisfied, 16 partially satisfied, 2
+  intentionally deferred, 1 external), each with evidence and limit.
+- Production readiness review with area-by-area verdicts, cost and scale discussion, and a single
+  production gap register (29 entries, each with what would close it).
+- One-command local demonstration (`scripts/demo.py`) that reads every outcome back from the
+  database and fails on any mismatch; demo guide.
+- Operator guide, troubleshooting guide and seven operational runbooks (migration failure, stuck
+  workflow, model-provider outage, identity-provider outage, deployment failure, secret rotation,
+  security incident).
+- ADR review against the code: ADR-0001, 0010 and 0011 accepted with recorded amendments; Redis and
+  message-broker triggers revisited with Phase 15 measurements (not fired).
+- Portfolio evidence, resume evidence and interview guide containing only sourced facts; rewritten
+  README and documentation index; architecture "as built" reconciliation.
+
+### Changed / removed — Phase 16
+
+- Removed `asic.memory.history`, an incident-history read model that nothing imported or tested
+  since Phase 6; durable incident history remains the append-only event log.
+- Corrected a Phase 15 statement: `verified_fact` provenance *is* assigned (by the broker, to
+  telemetry query results).
+
 ### Added — Phase 15 resilience, security campaigns and end-to-end validation
 
 - Reproducible load harness (`scripts/load_harness.py`) with smoke, capacity, steady, burst,

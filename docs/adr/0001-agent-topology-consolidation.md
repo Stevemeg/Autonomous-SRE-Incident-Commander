@@ -1,6 +1,6 @@
 # ADR-0001: Agent topology — consolidate 19 candidate responsibilities into 12 nodes
 
-- **Status:** Proposed
+- **Status:** Accepted, amended by the [Phase 16 ADR review](./ADR_REVIEW.md)
 - **Date:** 2026-09-04
 - **Deciders:** Project owner (pending approval)
 - **Spec reference:** §4, §5, §6, §15 of [`../spec/MASTER_PROJECT_PROMPT_V3.md`](../spec/MASTER_PROJECT_PROMPT_V3.md)

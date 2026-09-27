@@ -3,19 +3,16 @@
 This directory holds every non-code artifact required by the master specification
 (section 16, "REQUIRED ARCHITECTURE/DOCUMENTATION").
 
-> **Current project stage: Phase 12 complete - observability and SLO instrumentation.** Bounded,
-> tenant-aware investigation and safety-gated remediation run through one capability broker.
-> Phase 10 adds native Prometheus, Loki, Kubernetes, Slack, Microsoft Teams, PagerDuty, Jira
-> and Grafana adapters behind that broker, with server-side connector authority, credential
-> references resolved only at the execution boundary, normalised failure classes and a
-> deterministic notification service. These adapters are validated against **local
-> deterministic HTTP servers only**; no live vendor system has been exercised. Phase 11 adds a
-> versioned golden corpus, strict replay, regression comparison and an executable gate; its
-> results are simulator/replay runs with a scripted model provider, not reasoning
-> measurements. Phase 12 adds bounded, committed-record telemetry, readiness, dashboards and
-> SLO alerts whose objectives are initial engineering targets, not measurements. No metric
-> anywhere in this directory is a measurement beyond what is explicitly labelled as measured
-> on a stated corpus.
+> **Current project stage: Phase 16 closeout.** Phases 3–15 are implemented and tested against
+> deterministic simulators, local HTTP servers, PostgreSQL and a disposable kind cluster; Phase 15
+> added load, resilience, chaos, adversarial security and end-to-end evidence
+> ([testing](./testing/README.md)). Nothing has run against production telemetry, live vendor
+> systems, a live LLM or a remote CI runner. Closing status:
+> [production readiness review](./PRODUCTION_READINESS_REVIEW.md),
+> [production gap register](./PRODUCTION_GAP_REGISTER.md) and the
+> [requirements final status](./architecture/requirements-traceability.md#final-status-phase-16).
+> No metric anywhere in this directory is a measurement unless it is labelled as measured, with
+> its environment.
 
 ## Start here
 
@@ -35,12 +32,17 @@ area and points to the document that owns the detail.
 | [`architecture/bounded-reflection.md`](./architecture/bounded-reflection.md) | The reflection decision loop: vocabulary, deterministic guards, hypothesis revision, failure handling | **Implemented and tested** |
 | [`architecture/integrations.md`](./architecture/integrations.md) | Native external adapters, connector authority, credentials, failure model | **Implemented; tested against local servers only** |
 | [`adr/`](./adr/) | Architecture Decision Records | See the ADR index for current status |
-| [`security/`](./security/) | Threat model (§L, reconciled through Phase 13), security architecture, authorization matrix, secrets, supply-chain and retention policy, repository checklist | **Implemented and tested** (deployment controls are Phase 14) |
+| [`security/`](./security/) | Threat model (§L, reconciled through Phase 13), security architecture, authorization matrix, secrets, supply-chain and retention policy, repository checklist | **Implemented and tested**; Phase 15 campaigns in [`testing/`](./testing/SECURITY_HARDENING.md) |
 | [`evaluation/`](./evaluation/) | Evaluation harness architecture (§I) and Phase 11 implementation status | **Implemented (simulator/replay) and tested** |
 | [`observability/SLOS.md`](./observability/SLOS.md) | SLOs, error budgets, burn-rate and invariant alerts | **Implemented as rules; targets not measured** |
 | [`runbooks/`](./runbooks/README.md) | One runbook per alert | **Authored and linked from every alert** |
 | [`testing/`](./testing/README.md) | Phase 15 load/performance, resilience and chaos, security campaigns, end-to-end scenarios, measured results and raw evidence | **Executed locally; results labelled LOCAL** |
 | [`deployment/`](./deployment/PHASE14_DEPLOYMENT.md) | Delivery, migration ordering, rollback, retention maintenance, local kind smoke | **Validated on local kind only** |
+| [`operations/`](./operations/OPERATOR_GUIDE.md) | Operator guide and troubleshooting; operational runbooks live in [`runbooks/operations/`](./runbooks/README.md#operational-runbooks-no-alert-fires-them-directly) | **Authored** |
+| [`demo/`](./demo/DEMO.md) | One-command local demonstration (`scripts/demo.py`) | **Executed** |
+| [`portfolio/`](./portfolio/PORTFOLIO_EVIDENCE.md) | Portfolio evidence, resume evidence, interview guide — facts with sources only | **Authored** |
+| [`PRODUCTION_READINESS_REVIEW.md`](./PRODUCTION_READINESS_REVIEW.md) · [`PRODUCTION_GAP_REGISTER.md`](./PRODUCTION_GAP_REGISTER.md) | Area-by-area readiness verdicts; the single list of what is missing and what closes it | **Phase 16** |
+| [`adr/ADR_REVIEW.md`](./adr/ADR_REVIEW.md) | Every ADR re-read against the code; amendments recorded | **Phase 16** |
 
 ## Reading order for a new reviewer
 

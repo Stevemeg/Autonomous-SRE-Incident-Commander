@@ -1,6 +1,8 @@
 # Architecture Decision Records
 
-> **Twenty-eight records. Twenty-three are Accepted.**
+> **Thirty-one records (0001-0032; 0021 reserved). Twenty-nine are Accepted, two Deferred.** The
+> [Phase 16 ADR review](./ADR_REVIEW.md) re-read every record against the code and records where
+> the implementation differs.
 >
 > ADRs 0001-0011 were written during the Architecture Package. Later implementation phases
 > accepted the decisions whose evidence now exists; the table below is authoritative for
@@ -68,7 +70,7 @@ not replace an accepted ADR.
 
 | ADR | Title | Status | Spec ref | Date |
 |---|---|---|---|---|
-| [0001](./0001-agent-topology-consolidation.md) | Agent topology — 19 responsibilities into 12 nodes | `Proposed` | 4, 5, 6, 15 | 2026-09-04 |
+| [0001](./0001-agent-topology-consolidation.md) | Agent topology — 19 responsibilities into 12 nodes | **`Accepted`** (amended: [review](./ADR_REVIEW.md)) | 4, 5, 6, 15 | 2026-09-04 |
 | [0002](./0002-orchestration-langgraph-vs-temporal.md) | Orchestration — LangGraph checkpointing vs Temporal | **`Accepted`** | 4, 12, 13 | 2026-09-04 |
 | [0003](./0003-tool-boundary-native-adapters-mcp-ready.md) | Tool boundary — native adapters behind an MCP-ready seam | **`Accepted`** | 7, 13, 14, 15, 20 | 2026-09-04 |
 | [0004](./0004-postgresql-pgvector-primary-datastore.md) | PostgreSQL + pgvector as the single primary datastore | **`Accepted`** | 8, 13, 15 | 2026-09-04 |
@@ -77,8 +79,8 @@ not replace an accepted ADR.
 | [0007](./0007-eventing-message-broker-necessity.md) | Message broker (Kafka/NATS) — not adopted in v1 | `Deferred` | 12, 13 | 2026-09-04 |
 | [0008](./0008-rag-retrieval-strategy.md) | RAG retrieval — hybrid default, reranking only if measured | **`Accepted`** (hybrid v1; reranking still unbuilt) | 8 | 2026-09-04 |
 | [0009](./0009-memory-architecture-tiers.md) | Memory architecture — five tiers, human-gated promotion | **`Accepted`** | 8, 10 | 2026-09-04 |
-| [0010](./0010-observability-and-evaluation-tooling.md) | Observability tooling — OTel-native, not LangSmith or Phoenix | `Proposed` | 9, 10, 11, 13 | 2026-09-04 |
-| [0011](./0011-authentication-authorization-tenancy.md) | Authentication, authorization and tenancy model | `Proposed` | 15 | 2026-09-04 |
+| [0010](./0010-observability-and-evaluation-tooling.md) | Observability tooling — OTel-native, not LangSmith or Phoenix | **`Accepted`** (amended: [review](./ADR_REVIEW.md)) | 9, 10, 11, 13 | 2026-09-04 |
+| [0011](./0011-authentication-authorization-tenancy.md) | Authentication, authorization and tenancy model | **`Accepted`** (amended: [review](./ADR_REVIEW.md)) | 15 | 2026-09-04 |
 | [0012](./0012-native-postgresql-enum-types.md) | Native PostgreSQL ENUM types for closed vocabularies | **`Accepted`** | 12, 15, 20 | 2026-09-04 |
 | [0013](./0013-composite-tenant-foreign-keys.md) | Composite tenant-scoped foreign keys | **`Accepted`** | 15 | 2026-09-04 |
 | [0014](./0014-materialised-incident-status.md) | Materialised incident status, reconciled against the event log | **`Accepted`** | 12 | 2026-09-04 |
@@ -96,6 +98,9 @@ not replace an accepted ADR.
 | [0027](./0027-loki-as-the-log-backend.md) | Loki is the log backend adapter; Elasticsearch/OpenSearch is not built | **`Accepted`** | 13, 14 | 2026-09-16 |
 | [0028](./0028-evaluation-harness-replay-at-provider-seams.md) | The evaluation harness replays at the provider seams and never lets a judge gate | **`Accepted`** | 9, 10, 17, 18, 20 | 2026-09-17 |
 | [0029](./0029-bounded-telemetry-from-committed-records.md) | Bounded telemetry: catalogued labels, committed-record metrics, one trace id | **`Accepted`** | 11, 13, 15, 20 | 2026-09-17 |
+| [0030](./0030-security-boundary-consolidation.md) | Security boundary consolidation | **`Accepted`** | 6, 7, 8, 14, 15, 17, 18, 20 | 2026-09-21 |
+| [0031](./0031-production-delivery-boundary.md) | Production delivery boundary | **`Accepted`** (narrowed by 0032) | — (none recorded) | 2026-09-22 |
+| [0032](./0032-bounded-retention-executor.md) | A bounded retention executor for the idempotency cache only | **`Accepted`** | 12, 15, 20 | 2026-09-26 |
 
 ## Priority order for acceptance
 
@@ -113,8 +118,8 @@ contract, so they block Phase 3 onward; the rest can be accepted as their eviden
 | 7 | 0005 LLM abstraction | Phase 4 | **Accepted.** The port exists; the only adapter is deterministic (ADR-0016) |
 | 8 | 0010 Observability tooling | Phase 4 | OpenTelemetry spans and metrics emitted; no exporter configured until Phase 12 |
 | 9 | 0008 RAG retrieval | Phase 6, revisit Phase 11 | **Accepted.** Hybrid v1 implemented and measured; reranking A/B still not run |
-| 10 | 0006 Redis | Revisit Phase 15 | `Deferred` — trigger is a load measurement |
-| 11 | 0007 Message broker | Revisit Phase 15 | `Deferred` — trigger is a load measurement |
+| 10 | 0006 Redis | Revisited Phase 15 | `Deferred` — load measured; no trigger fired ([review](./ADR_REVIEW.md)) |
+| 11 | 0007 Message broker | Revisited Phase 15 | `Deferred` — load measured; no trigger fired ([review](./ADR_REVIEW.md)) |
 
 ## Decisions raised by Phase 3
 

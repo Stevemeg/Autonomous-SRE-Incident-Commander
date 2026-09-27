@@ -1,6 +1,6 @@
 # Architecture Overview
 
-- **Status:** Authored — Architecture Package (V3 §23 E). **Proposed; not implemented.**
+- **Status:** Authored in the Architecture Package (V3 §23 E); implemented in Phases 3–15. Section 9 records, at the Phase 16 closeout, where the built system differs from this design.
 - **Master specification references:** Sections 4–13, 23(E)
 - **Authoritative source of requirements:** [`../spec/MASTER_PROJECT_PROMPT_V3.md`](../spec/MASTER_PROJECT_PROMPT_V3.md)
 
@@ -329,3 +329,25 @@ section P. The three that most shape this design:
    partly mitigates this, but a synthetic alert corpus is a weaker signal than real traffic.
 3. **Judge calibration.** LLM-as-judge is itself a model-based measurement; without
    calibration against human labels it can produce confident, systematically wrong scores.
+
+---
+
+## 9. As built (Phase 16 reconciliation)
+
+The design above was implemented with these differences. Each is deliberate and recorded; none
+weakens a safety principle.
+
+| Design | As built | Where recorded |
+|---|---|---|
+| Three deployables plus frontend (API, orchestrator worker, batch worker) | The API and frontend Deployments, a one-shot migration Job and a suspended retention CronJob ship. Investigations are driven by `InvestigationDispatcher` in-process (tests, demo, load harness); no orchestrator or batch worker Deployment exists yet | ADR-0031; GAP-07 |
+| Policy gate and broker inside the orchestrator worker | They run inside whichever process runs the kernel; the property that matters — no network hop between authorizer and executor — holds | ADR-0025 |
+| Seven LLM-backed nodes; model-assisted correlation ranking | Three nodes call the model: Investigation Planner, Hypothesis Engine and Remediation Planner (menu-bound, authoring 4 of 12 proposal fields). Correlation, evidence analysis and verification are deterministic; Postmortem Author not built | [ADR review](../adr/ADR_REVIEW.md); GAP-10 |
+| Postgres-backed queues for work | Durable investigation dispatch requests in PostgreSQL; synchronous ingestion with a per-process bulkhead | ADR-0019; [LOAD_AND_PERFORMANCE.md](../testing/LOAD_AND_PERFORMANCE.md) |
+| Rate limiting in PostgreSQL | In-memory, per process | ADR review (0006); GAP-13 |
+| Traces evidence source | Simulator only; metrics, logs, Kubernetes and deployments have native adapters | GAP-17 |
+| Model-span GenAI semantic conventions | Model calls are attributes of the calling span | ADR review (0010) |
+| Retention lifecycle | Executor for the idempotency cache only, separate maintenance role | ADR-0032; GAP-15 |
+
+The layers, the chokepoint, the investigation loop and the principles PR-1 to PR-7 are as
+designed; the adversarial evidence for them is in [docs/testing](../testing/README.md).
+
