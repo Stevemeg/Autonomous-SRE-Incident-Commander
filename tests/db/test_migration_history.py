@@ -179,6 +179,7 @@ class TestPinnedListsMatchHistory:
             "evaluation_judge_result",
             "evaluation_replay_fixture",
             "retention_run",  # Phase 15 (0019): retention executor receipts
+            "remediation_request",  # Phase 16 (0020): responder -> worker handoff
         }
 
     def test_post_phase_3_append_only_additions(self, phase_3_tables: dict[str, list[str]]) -> None:
@@ -200,6 +201,7 @@ class TestPinnedListsMatchHistory:
             "evaluation_judge_result",
             "evaluation_replay_fixture",
             "retention_run",  # Phase 15 (0019): receipts are immutable evidence
+            "postmortem",  # Phase 16 (0020): drafts are never edited, only versioned
         }
 
 
@@ -471,6 +473,7 @@ class TestUpgradePaths:
             "evaluation_judge_result",
             "evaluation_replay_fixture",
             "retention_run",
+            "remediation_request",
         }
 
     def test_accepted_phase_5_head_upgrades_to_current_head(self, throwaway_database: str) -> None:
@@ -485,7 +488,7 @@ class TestUpgradePaths:
             with engine.connect() as conn:
                 assert (
                     conn.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one()
-                    == "0019_retention_maintenance"
+                    == "0020_postmortem_worker"
                 )
         finally:
             engine.dispose()

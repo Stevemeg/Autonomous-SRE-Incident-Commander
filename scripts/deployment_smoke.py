@@ -25,6 +25,7 @@ import urllib.request
 from pathlib import Path
 from types import ModuleType
 
+import worker_acceptance
 import yaml
 from chaos_experiments import Context, retention_maintenance, run_suite
 from deploy_release import (
@@ -392,9 +393,67 @@ def main() -> int:
         image: run("docker", "image", "inspect", image, "--format", "{{.Id}}").strip()
         for image in (args.backend, args.frontend)
     }
+    # The release's behaviour identity, read from the image that will run (not from the repo).
+    versions = json.loads(
+        run(
+            "docker",
+            "run",
+            "--rm",
+            "--network",
+            "none",
+            args.backend,
+            "/usr/local/bin/python",
+            "-c",
+            "import json; from asic.llm.prompts import PROMPT_SET_VERSION as p; "
+            "from asic.tools.catalogue import CATALOGUE_VERSION as c; import asic; "
+            "print(json.dumps({'prompts': p, 'catalogue': c, 'code': asic.__version__}))",
+        ).strip()
+    )
     evidence: dict[str, object] = {}
     with tempfile.TemporaryDirectory(prefix="asic-deployment-") as directory:
         scratch = Path(directory)
+        # LOCAL TEST ONLY: the kind worker's simulator profile needs src/asic/simulators, which
+        # the production image excludes (FR-INT-04). Build the supplied backend image plus that
+        # one package, and prove every production layer is its unchanged prefix.
+        simulator_context = scratch / "localsim"
+        shutil.copytree(
+            REPO / "src/asic/simulators",
+            simulator_context / "src/asic/simulators",
+            ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+        )
+        localsim = f"asic-backend-localsim:phase14-{image_ids[args.backend][7:19]}"
+        run(
+            "docker",
+            "build",
+            "--build-arg",
+            f"BACKEND_IMAGE={args.backend}",
+            "-t",
+            localsim,
+            "-f",
+            str(REPO / "deploy/local-simulator/Dockerfile"),
+            str(simulator_context),
+            timeout=900,
+        )
+
+        def layers(image: str) -> list[str]:
+            return json.loads(
+                run("docker", "image", "inspect", image, "--format", "{{json .RootFS.Layers}}")
+            )
+
+        backend_layers, localsim_layers = layers(args.backend), layers(localsim)
+        if (
+            localsim_layers[: len(backend_layers)] != backend_layers
+            or len(localsim_layers) != len(backend_layers) + 1
+        ):
+            raise RuntimeError("local simulator image is not the backend image plus one layer")
+        evidence["local_simulator_image"] = {
+            "image": localsim,
+            "id": run("docker", "image", "inspect", localsim, "--format", "{{.Id}}").strip(),
+            "base_backend_id": image_ids[args.backend],
+            "production_layers_unchanged": len(backend_layers),
+            "added_layers": 1,
+            "use": "kind worker only (simulator profile); never published",
+        }
         config = scratch / "kubeconfig"
         kind_config = scratch / "kind.yaml"
         kind_config.write_text(
@@ -579,13 +638,15 @@ def main() -> int:
                 raise RuntimeError("refused configuration still produced manifests")
             evidence["cidr_union"] = "refused_before_render"
 
-            for image in (args.backend, args.frontend):
+            for image in (args.backend, args.frontend, localsim):
                 run(args.kind, "load", "docker-image", "--name", args.name, image)
 
             def render(overlay: str) -> str:
                 text = run(*kubectl, "kustomize", f"deploy/kubernetes/{overlay}")
-                return text.replace("asic-backend:phase14-local", args.backend).replace(
-                    "asic-frontend:phase14-local", args.frontend
+                return (
+                    text.replace("asic-backend-localsim:phase14-local", localsim)
+                    .replace("asic-backend:phase14-local", args.backend)
+                    .replace("asic-frontend:phase14-local", args.frontend)
                 )
 
             database = render("overlays/local-database")
@@ -670,13 +731,29 @@ def main() -> int:
             if not applied(mutant_calls, application) or not deployment_exists(kube, "asic-api"):
                 raise RuntimeError("mutation was not detected: guard check is vacuous")
             evidence["guard_mutation_detected"] = True
-            kube("delete", "deployment", "asic-api", "asic-frontend", "--wait=true", timeout=180)
+            kube(
+                "delete",
+                "deployment",
+                "asic-api",
+                "asic-frontend",
+                "asic-worker",
+                "--wait=true",
+                timeout=180,
+            )
             if deployment_exists(kube, "asic-api"):
                 raise RuntimeError("mutant application was not cleaned up")
 
             step("Authoritative sequence with a good migration: migrate, roll out, auto-smoke")
             recorder, calls = recording(kube)
-            outcome = run_deployment(recorder, migration, application, poll_interval=1)
+            outcome = run_deployment(
+                recorder,
+                migration,
+                application,
+                poll_interval=1,
+                # Release registration between migration and rollout: the worker's behaviour
+                # version, which the new schema holds and the rollout needs.
+                after_migration=worker_acceptance.behaviour_registration(versions),
+            )
             order = [
                 "migration" if "create" in args_ else "application"
                 for args_, content in calls
@@ -809,6 +886,20 @@ def main() -> int:
                 "internet_egress": "denied",
                 "other_namespace_to_api": "denied",
             }
+
+            step("Worker identity and network policy (probed from inside the cluster)")
+            evidence["worker_runtime"] = worker_acceptance.network_and_runtime(kube, args.backend)
+            print(json.dumps(evidence["worker_runtime"]), flush=True)
+
+            step(
+                "Worker acceptance: alert -> dispatch -> worker -> investigation -> remediation "
+                "-> approval -> verification -> G11 postmortem (two replicas, API path only)"
+            )
+            evidence["worker_acceptance"] = worker_acceptance.run(kube)
+            print(json.dumps(evidence["worker_acceptance"], indent=2), flush=True)
+
+            step("Worker graceful termination: SIGTERM drains within the grace period")
+            evidence["worker_termination"] = worker_acceptance.graceful_termination(kube)
 
             step("API outage: frontend stays live, leaves endpoints, is not restarted")
 

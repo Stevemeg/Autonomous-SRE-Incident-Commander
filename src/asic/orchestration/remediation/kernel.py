@@ -32,7 +32,7 @@ from asic.db.models.catalog import Environment, Service
 from asic.db.models.evaluation import BehaviourVersion, ExecutionTrace, TraceSpan
 from asic.db.models.incident import Alert, Incident, WorkflowRun
 from asic.db.models.investigation import Hypothesis
-from asic.db.models.remediation import RemediationTarget
+from asic.db.models.remediation import RemediationRequest, RemediationTarget
 from asic.domain.budget import BudgetPolicy, BudgetState
 from asic.domain.clock import Clock, SystemClock
 from asic.domain.enums import HypothesisStatus, IncidentStatus, WorkflowRunStatus
@@ -59,6 +59,10 @@ from asic.tools.provider import ToolProvider
 _logger = logging.getLogger("asic.orchestration.remediation.kernel")
 
 LEASE_DURATION: Final[timedelta] = timedelta(minutes=15)
+
+
+class RequestAlreadyLinked(DomainError):
+    """A remediation request already owns a run; the worker must not start a second."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -124,6 +128,7 @@ class RemediationKernel:
         behaviour_version_id: uuid.UUID,
         selected_service_id: uuid.UUID,
         fixture_refs: Mapping[str, Any] | None = None,
+        request_id: uuid.UUID | None = None,
     ) -> RemediationOutcome:
         """Open a remediation run against an incident that is currently investigating.
 
@@ -135,6 +140,26 @@ class RemediationKernel:
         """
         uow = UnitOfWork(self._session_factory, tenant_id=tenant_id)
         with uow as session:
+            request = None
+            if request_id is not None:
+                # A responder's durable request (Phase 16). Locked, and linked to the run in
+                # this same transaction, so a crash can never leave a started run whose
+                # request still looks pending - or two runs for one request.
+                request = session.scalar(
+                    sa.select(RemediationRequest)
+                    .where(
+                        RemediationRequest.tenant_id == tenant_id,
+                        RemediationRequest.id == request_id,
+                        RemediationRequest.incident_id == incident_id,
+                        RemediationRequest.hypothesis_id == hypothesis_id,
+                        RemediationRequest.service_id == selected_service_id,
+                    )
+                    .with_for_update()
+                )
+                if request is None:
+                    raise DomainError("remediation request is not visible for this incident")
+                if request.workflow_run_id is not None or request.status != "pending":
+                    raise RequestAlreadyLinked("remediation request already has a run")
             incident = _load_incident(session, tenant_id=tenant_id, incident_id=incident_id)
             if incident.status is not IncidentStatus.INVESTIGATING:
                 raise DomainError(
@@ -201,6 +226,10 @@ class RemediationKernel:
             )
             session.add(run)
             session.flush()
+            if request is not None:
+                request.workflow_run_id = run.id
+                request.status = "started"
+                request.last_error = None
 
             service = session.execute(
                 sa.select(Service).where(

@@ -125,6 +125,11 @@ METRICS: Final[tuple[MetricSpec, ...]] = (
     _spec("asic.tool.refusals", C, "stage"),
     _spec("asic.integration.calls", C, "integration", "outcome", "failure_class"),
     _spec("asic.notification.failures", C, "event_type"),
+    # --- post-incident and worker (asic.postmortem, asic.worker)
+    _spec("asic.postmortem.drafts", C, "outcome"),
+    _spec("asic.postmortem.claims.removed", C, "reason"),
+    _spec("asic.worker.items", C, "kind", "outcome"),
+    _spec("asic.worker.item.duration", H, "kind", unit="s", buckets=SECONDS_BUCKETS),
     # --- ingestion (asic.ingestion)
     _spec("asic.ingestion.stages", C, "stage", "outcome"),
     _spec("asic.ingestion.duration", H, "stage", "outcome", unit="s", buckets=SECONDS_BUCKETS),

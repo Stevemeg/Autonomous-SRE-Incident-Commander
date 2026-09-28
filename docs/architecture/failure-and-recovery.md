@@ -366,3 +366,19 @@ secondary ones — the test suite is the only detector these failures have.
 | Fail-closed | Kill policy store and secret manager; assert deny |
 | Dead-letter | Malformed alerts; assert capture with reason and replayability |
 | State machine | Exhaustive reachability: every state reaches a terminal state; no illegal transitions |
+
+---
+
+## Phase 16 closure: the deployed worker and G11
+
+| Failure | Behaviour | Evidence |
+|---|---|---|
+| Worker process killed mid-node | Its advisory-lock connection closes; the run keeps its lease; another worker is refused (`busy`) until the 15-minute lease expires, then resumes the same run from its last checkpoint without repeating an effect | `tests/worker/test_worker.py` (crash test), demo crash/resume flow; GAP-26 |
+| Two workers race for one item | The advisory lock admits one; below it the kernel lease, the one-live-run index and dispatch/request linkage make a second start impossible | two-worker race test; kind acceptance with two replicas |
+| SIGTERM (rollout, eviction) | Stops claiming; waits up to `ASIC_WORKER_DRAIN_SECONDS` (30 s, below the 45 s grace) for running items; items still running are abandoned exactly like a crash, because a node is not preemptible (GAP-34) | SIGTERM and drain-deadline tests; kind pod deletion |
+| Database unreachable | The poll fails, is logged, backs off (up to 30 s); `/readyz` turns 503 while `/livez` stays 200, so Kubernetes neither restarts the pod nor routes to it | outage test |
+| Behaviour version not registered / mismatched | The worker stays alive, unready (`worker.blocked`), claims nothing, and resumes once the row exists | late-registration test |
+| A remediation request no longer startable (hypothesis rejected, incident moved) | The request is `rejected` with a safe code and the incident is handed back to a human (`escalated`) | rejection test |
+| Live mode, or plaintext database in production | The process exits 2 with the reason before doing any work | entry-point tests; final image |
+| G11 model failure or unusable output | A records-only draft is written; the failure is recorded on the draft (`generation.model_outcome`, `validation.output_error`) | postmortem tests |
+| G11 sources change while drafting | Nothing is written (`sources_changed`); the next poll drafts from the new record set | author design; idempotency test |

@@ -1,0 +1,368 @@
+{
+  "result": "passed",
+  "image_ids": {
+    "asic-backend:phase14-p16closure": "sha256:e766bc1edecdaa5d3c754f738c6162cfd9ff465a36f8af625fc3df77e5af8a56",
+    "asic-frontend:phase14-p16closure": "sha256:0efe46591e5ef64631f49000fb7d3ee7f8ae37cebd5eff98d32e3f12fc8af455"
+  },
+  "kubernetes": "1.34.0",
+  "cni": "cilium_1.20.2",
+  "local_simulator_image": {
+    "image": "asic-backend-localsim:phase14-e766bc1edecd",
+    "id": "sha256:84b00b2ca9e38d7edd303431b394cac1c6ce9f3f53115664753476072e18afff",
+    "base_backend_id": "sha256:e766bc1edecdaa5d3c754f738c6162cfd9ff465a36f8af625fc3df77e5af8a56",
+    "production_layers_unchanged": 10,
+    "added_layers": 1,
+    "use": "kind worker only (simulator profile); never published"
+  },
+  "psa_labels": {
+    "pod-security.kubernetes.io/audit": "restricted",
+    "pod-security.kubernetes.io/audit-version": "v1.34",
+    "pod-security.kubernetes.io/enforce": "restricted",
+    "pod-security.kubernetes.io/enforce-version": "v1.34",
+    "pod-security.kubernetes.io/warn": "restricted",
+    "pod-security.kubernetes.io/warn-version": "v1.34"
+  },
+  "privileged_pod": "Error from server (Forbidden): error when creating \"STDIN\": pods \"psa-privileged-probe\" is forbidden: violates PodSecurity \"restricted:v1.34\": host namespaces (hostNetwork=true, hostPID=true), privileged (container \"probe\" must not set securityContext.privileged=true), allowPrivilegeEscalation != fa",
+  "cidr_union": "refused_before_render",
+  "restricted_workloads_admitted": true,
+  "failed_migration": {
+    "detected_seconds": 8.3,
+    "job_failed": true,
+    "application_apply_executed": false,
+    "api_deployment_present": false
+  },
+  "guard_mutation_detected": true,
+  "successful_migration_seconds": 7.8,
+  "post_rollout_smoke": "passed_automatically",
+  "network_policy": {
+    "frontend_to_api": "allowed",
+    "api_to_db": "allowed",
+    "dns": "allowed",
+    "frontend_to_db": "denied",
+    "internet_egress": "denied",
+    "other_namespace_to_api": "denied"
+  },
+  "worker_runtime": {
+    "uid_10001": true,
+    "service_account_token": "absent",
+    "read_only_root_filesystem": true,
+    "probes": "livez/readyz 200",
+    "database_role": "non-owner, no BYPASSRLS, no migration privilege",
+    "worker_to_db": "allowed",
+    "worker_to_internet": "denied",
+    "worker_to_api": "denied",
+    "frontend_to_worker": "denied"
+  },
+  "worker_acceptance": {
+    "worker_replicas": 2,
+    "alert": {
+      "http": 200,
+      "outcome": "accepted"
+    },
+    "investigation": {
+      "terminal_status": "escalated",
+      "seconds": 6.1,
+      "evidence_records": 3,
+      "hypotheses": 1,
+      "execution_traces": 1
+    },
+    "remediation": {
+      "tool": "k8s.deployment.rollback",
+      "policy_verdict": "require_approval",
+      "approval": "approved",
+      "action_status": "verified",
+      "verification": "verified",
+      "seconds_after_approval": 72.5
+    },
+    "postmortem": {
+      "status": "draft",
+      "review_required": true,
+      "resolution_basis": "independently_verified",
+      "citations": 19,
+      "citations_resolved": 19,
+      "model_claims_removed": 0,
+      "published": false
+    },
+    "persisted_state": {
+      "workflow_runs": "2",
+      "mutating_executions": "1",
+      "resolved_transitions": "1",
+      "postmortem_rows": "1",
+      "non_draft_postmortems": "0"
+    },
+    "worker_items": {
+      "by_kind_and_outcome": {
+        "investigation": {
+          "completed": 1
+        },
+        "remediation_start": {
+          "suspended": 1
+        },
+        "remediation_run": {
+          "suspended": 1,
+          "completed": 1
+        },
+        "postmortem": {
+          "created": 1
+        }
+      },
+      "handled_per_pod": {
+        "asic-worker-6f4c5b897d-6w27w": 0,
+        "asic-worker-6f4c5b897d-wdkcl": 5
+      }
+    }
+  },
+  "worker_termination": {
+    "terminated_seconds": 1.9,
+    "replacement_ready": true
+  },
+  "api_outage": {
+    "frontend_probe_seconds": {
+      "/livez": 0.0,
+      "/readyz": 1.52
+    },
+    "frontend_restarts_before": 0,
+    "frontend_restarts_after": 0,
+    "frontend_ready_endpoints": 0,
+    "post_rollout_smoke": "failed as required: asic-api did not converge within 60s after 30 attempts; last error: service asic-api has no ready endpoints"
+  },
+  "rollback": "passed",
+  "redeployment": {
+    "B_same_release_again": {
+      "seconds": 16.0,
+      "migration": "complete",
+      "old_job_deleted": true,
+      "job_uid": "ca7a1875-3b71-4123-92d1-5a7e2f459deb",
+      "job_state": "complete",
+      "api_rolled": true,
+      "smoke_retries": 0,
+      "smoke": "passed"
+    },
+    "C_changed_template_over_complete_job": {
+      "seconds": 15.9,
+      "migration": "complete",
+      "old_job_deleted": true,
+      "job_uid": "fe687412-98d7-421c-bc9a-c7acbe955036",
+      "job_state": "complete",
+      "api_rolled": true,
+      "smoke_retries": 0,
+      "smoke": "passed"
+    },
+    "D1_failed_migration_changed_template": {
+      "seconds": 5.6,
+      "old_job_deleted": true,
+      "application_applied": false,
+      "job_state": "failed"
+    },
+    "D2_fix_forward_over_failed_job": {
+      "seconds": 16.5,
+      "migration": "complete",
+      "old_job_deleted": true,
+      "job_uid": "c3735a0a-5f40-45f8-9b9c-fc381a853706",
+      "job_state": "complete",
+      "api_rolled": true,
+      "smoke_retries": 0,
+      "smoke": "passed"
+    },
+    "F_delete_wait_with_finalizer": {
+      "seconds": 35.8,
+      "created_after_release_seconds": 1.3
+    },
+    "E_active_migration_collision": {
+      "refused": "migration Job asic-migration is still active (uid=0410b717-c660-478b-9c6e-9a9c4fdbfefe conditions=[none]); another deployment may be migrating. Refusing to dele",
+      "active_job_untouched": true,
+      "application_applied": false
+    },
+    "G_recovery_after_collision": {
+      "seconds": 16.1,
+      "migration": "complete",
+      "old_job_deleted": false,
+      "job_uid": "d2094690-8c4f-4680-8235-e2b0c9c8ab87",
+      "job_state": "complete",
+      "api_rolled": true,
+      "smoke_retries": 0,
+      "smoke": "passed"
+    },
+    "J_job_deleted_mid_wait": {
+      "failed_after_seconds": 7.4
+    },
+    "K_api_never_ready": {
+      "failed_after_seconds": 105.1,
+      "failure": "asic-api did not converge within 60s after 28 attempts; last error: asic-api/readyz: expected 200, got 503"
+    },
+    "L_recovery_after_broken_release": {
+      "seconds": 21.1,
+      "migration": "complete",
+      "old_job_deleted": true,
+      "job_uid": "5d73b084-189a-46f5-b0aa-273f6a4a82cc",
+      "job_state": "complete",
+      "api_rolled": true,
+      "smoke_retries": 0,
+      "smoke": "passed"
+    }
+  },
+  "retention_maintenance": {
+    "cronjob_suspended": true,
+    "server_side_admitted": true,
+    "dry_run": {
+      "eligible": 3,
+      "deleted": 0,
+      "rows_after": 4
+    },
+    "execute": {
+      "deleted": 3,
+      "rows_after": 1,
+      "recent_row_kept": true
+    },
+    "tenant_b": {
+      "rows_before": 2,
+      "rows_after_execute": 2,
+      "deleted": 0
+    },
+    "receipts_written": 2,
+    "receipts_tenant_bound": true,
+    "identity": "asic_maintenance_local (member of asic_maintenance only)"
+  },
+  "chaos": {
+    "api_pod_kill": {
+      "result": "passed",
+      "seconds": 19.2,
+      "replica_count": 1,
+      "kill_to_ready_endpoint_seconds": 10.0,
+      "api_via_service": {
+        "samples": 44,
+        "bad_samples": 4,
+        "windows": 1,
+        "longest_window_seconds": 8.02,
+        "recovered": true,
+        "codes": [
+          0,
+          200
+        ]
+      },
+      "frontend_liveness": {
+        "samples": 44,
+        "bad_samples": 0,
+        "windows": 0,
+        "longest_window_seconds": 0.0,
+        "recovered": true,
+        "codes": [
+          200
+        ]
+      },
+      "replacement_egress_attempts": {
+        "connected": 0,
+        "denied": 8,
+        "error": 0
+      },
+      "frontend_restarted": false
+    },
+    "frontend_pod_kill": {
+      "result": "passed",
+      "seconds": 46.5,
+      "seconds_to_ready_endpoint": 7.9,
+      "api_samples_all_healthy": 174
+    },
+    "postgres_restart": {
+      "result": "passed",
+      "seconds": 13.1,
+      "database_back_seconds": 2.3,
+      "api_readyz": {
+        "samples": 41,
+        "bad_samples": 0,
+        "windows": 0,
+        "longest_window_seconds": 0.0,
+        "recovered": true,
+        "codes": [
+          200
+        ]
+      },
+      "readyz_observed_outage": false,
+      "authenticated_requests": {
+        "samples": 41,
+        "bad_samples": 2,
+        "windows": 2,
+        "longest_window_seconds": 1.29,
+        "recovered": true,
+        "codes": [
+          -1,
+          200,
+          503
+        ]
+      },
+      "api_livez_failures": 0,
+      "schema_revision_preserved": "0020_postmortem_worker",
+      "api_restarted": false
+    },
+    "readiness_failure_database_access_revoked": {
+      "result": "passed",
+      "seconds": 42.4,
+      "api_endpoint_removed_after_seconds": 14.2,
+      "frontend_endpoint_removed_after_seconds": 0.1,
+      "api_endpoint_back_after_restore_seconds": 4.4,
+      "frontend_endpoint_back_after_restore_seconds": 3.4,
+      "api_readyz": {
+        "samples": 155,
+        "bad_samples": 112,
+        "windows": 1,
+        "longest_window_seconds": 28.81,
+        "recovered": true,
+        "codes": [
+          200,
+          503
+        ]
+      },
+      "authenticated_requests": {
+        "samples": 155,
+        "bad_samples": 39,
+        "windows": 39,
+        "longest_window_seconds": 0.27,
+        "recovered": true,
+        "codes": [
+          -1,
+          200,
+          503
+        ]
+      },
+      "restarts": 0
+    },
+    "otel_collector_unavailable": {
+      "result": "passed",
+      "seconds": 100.0,
+      "exporter": "otlp",
+      "endpoint": "http://10.255.255.1:4318 (dropped by egress policy)",
+      "samples": 232,
+      "authenticated_request_p50_ms": 9.4,
+      "authenticated_request_p95_ms": 15.2,
+      "authenticated_request_max_ms": 126.2,
+      "exporter_error_log_lines": 2,
+      "api_restarted": false
+    },
+    "migration_pod_overlap": {
+      "result": "passed",
+      "seconds": 98.6,
+      "orchestrated": {
+        "job_object_gone_after_seconds": 0.1,
+        "new_job_created_after_delete_seconds": 41.4,
+        "old_pod_last_seen_after_delete_seconds": 40.5,
+        "termination_grace_seconds": 40,
+        "waited_for_previous_pod": true,
+        "max_concurrent_migration_pods": 1,
+        "samples": 95,
+        "migration": "complete"
+      },
+      "bypass_non_vacuity": {
+        "max_concurrent_migration_pods": 2
+      },
+      "timeout": {
+        "pod_timeout_seconds": 20,
+        "refused_after_seconds": 22.2,
+        "jobs_created": 0,
+        "manifests_applied": 0,
+        "refusal": "previous migration pod(s) still running 20s after the Job slot was freed (asic-migration-5prkh phase=Running controller-uid=a23c581f-79ba-498a-be08-ac11e59cf137); the replacement was NOT created"
+      }
+    }
+  },
+  "terraform": "apply, no-drift re-plan, destroy",
+  "remote_production": "not_executed"
+}

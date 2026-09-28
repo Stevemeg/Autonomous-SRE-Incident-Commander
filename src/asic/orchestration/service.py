@@ -28,6 +28,7 @@ import uuid
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING
 
 import sqlalchemy as sa
 from sqlalchemy import Engine
@@ -64,12 +65,13 @@ from asic.observability import metrics
 from asic.observability.logging import configure_logging, log_event
 from asic.observability.setup import TelemetrySettings, configure_telemetry
 from asic.orchestration.kernel import InvestigationKernel, RunOutcome
-from asic.simulators.provider import SimulatorProvider
-from asic.simulators.scenarios import PRIMARY_SCENARIO_ID, Scenario, scenario
 from asic.tools.capability import CapabilityResolver
 from asic.tools.catalogue import CATALOGUE_VERSION
 from asic.tools.provider import ToolProvider
 from asic.tools.registry import ToolRegistry
+
+if TYPE_CHECKING:  # the simulator package is test infrastructure, absent from the image
+    from asic.simulators.scenarios import Scenario
 
 _logger = logging.getLogger("asic.orchestration.service")
 
@@ -317,6 +319,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             "orchestration kernel. Read-only: no capability above tier RO is registered."
         )
     )
+    # Imported here, not at module level: InvestigationService is the worker's boundary and
+    # must import in the production image, which excludes the simulator package (FR-INT-04).
+    from asic.simulators.provider import SimulatorProvider
+    from asic.simulators.scenarios import PRIMARY_SCENARIO_ID, scenario
+
     parser.add_argument("--scenario", default=PRIMARY_SCENARIO_ID, help="scenario id to run")
     parser.add_argument(
         "--database-url",

@@ -32,6 +32,10 @@ spec:
                 secretKeyRef:
                   name: asic-migration-database
                   key: url
+            # Marks the profile for the database transport policy (asic.db.tls): the Job does
+            # not read the asic-runtime ConfigMap, so it states production itself.
+            - name: ASIC_DEPLOYMENT_ENVIRONMENT
+              value: production
           resources:
             requests:
               cpu: 100m
@@ -47,7 +51,14 @@ spec:
           volumeMounts:
             - name: tmp
               mountPath: /tmp
+            - name: database-ca
+              mountPath: /etc/asic/database-ca
+              readOnly: true
       volumes:
         - name: tmp
           emptyDir:
             sizeLimit: 64Mi
+        - name: database-ca
+          secret:
+            secretName: asic-database-ca
+            optional: true

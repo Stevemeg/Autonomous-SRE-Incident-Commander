@@ -550,3 +550,80 @@ class RemediationBaseline(Base, TenantScoped, CreatedAtMixin):
         sa.CheckConstraint("observed_at <= captured_at", name="observed_before_capture"),
         sa.Index("ix_remediation_baseline_target", "tenant_id", "remediation_target_id"),
     )
+
+
+class RemediationRequest(Base, TenantScoped, TimestampMixin):
+    """A responder's durable request to remediate an escalated incident (worker handoff).
+
+    The investigation graph ends by handing an actionable cause to a human (ADR-0023); this
+    row is how that human asks the deployed worker to start the remediation graph, instead of
+    an evaluation harness calling the kernel directly. The request carries identities only:
+    the worker re-validates every one of them when it starts the run, and the policy gate and
+    approval service still decide - the request confers no execution authority.
+
+    ``workflow_run_id`` is set in the same transaction that creates the remediation run, so a
+    worker that dies between the two never leaves a started run without its request.
+    """
+
+    __tablename__ = "remediation_request"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    incident_id: Mapped[uuid.UUID] = mapped_column(pg.UUID(as_uuid=True), nullable=False)
+    hypothesis_id: Mapped[uuid.UUID] = mapped_column(pg.UUID(as_uuid=True), nullable=False)
+    service_id: Mapped[uuid.UUID] = mapped_column(pg.UUID(as_uuid=True), nullable=False)
+    requested_by_user_id: Mapped[uuid.UUID] = mapped_column(pg.UUID(as_uuid=True), nullable=False)
+    justification: Mapped[str] = mapped_column(sa.Text, nullable=False)
+    status: Mapped[str] = mapped_column(
+        sa.String(16), nullable=False, server_default=sa.text("'pending'")
+    )
+    workflow_run_id: Mapped[uuid.UUID | None] = mapped_column(pg.UUID(as_uuid=True))
+    attempts: Mapped[int] = mapped_column(sa.Integer, nullable=False, server_default=sa.text("0"))
+    last_error: Mapped[str | None] = mapped_column(sa.String(64))
+
+    __table_args__ = (
+        *tenant_identity_constraints("remediation_request"),
+        tenant_fk(
+            "incident_id", "incident", ondelete="RESTRICT", name="fk_remediation_request_incident"
+        ),
+        tenant_fk(
+            "hypothesis_id",
+            "hypothesis",
+            ondelete="RESTRICT",
+            name="fk_remediation_request_hypothesis",
+        ),
+        tenant_fk(
+            "service_id", "service", ondelete="RESTRICT", name="fk_remediation_request_service"
+        ),
+        tenant_fk(
+            "requested_by_user_id",
+            "app_user",
+            ondelete="RESTRICT",
+            name="fk_remediation_request_requester",
+        ),
+        tenant_fk(
+            "workflow_run_id",
+            "workflow_run",
+            ondelete="RESTRICT",
+            name="fk_remediation_request_run",
+        ),
+        sa.CheckConstraint("status IN ('pending', 'started', 'rejected')", name="known_status"),
+        sa.CheckConstraint(
+            "(status = 'started') = (workflow_run_id IS NOT NULL)",
+            name="started_request_names_run",
+        ),
+        sa.CheckConstraint(
+            "status <> 'rejected' OR last_error IS NOT NULL", name="rejection_has_reason"
+        ),
+        sa.CheckConstraint("attempts >= 0", name="attempts_nonnegative"),
+        sa.CheckConstraint(
+            "char_length(justification) BETWEEN 1 AND 2000", name="justification_bounded"
+        ),
+        sa.Index(
+            "uq_remediation_request_pending_incident",
+            "tenant_id",
+            "incident_id",
+            unique=True,
+            postgresql_where=sa.text("status = 'pending'"),
+        ),
+        sa.Index("ix_remediation_request_status", "tenant_id", "status"),
+    )

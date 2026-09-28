@@ -10,6 +10,7 @@ configMapGenerator:
     behavior: merge
     literals:
       - ASIC_DEPLOYMENT_ENVIRONMENT=local
+      - ASIC_BEHAVIOUR_VERSION_LABEL=kind-local
       - ASIC_AUTH_MODE=development_hs256
       - ASIC_JWT_ISSUER=asic-local-idp
       - ASIC_JWT_AUDIENCE=asic-api
@@ -17,6 +18,8 @@ configMapGenerator:
       - ASIC_OTEL_TRACES_EXPORTER=none
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318
 secretGenerator:
+  # LOCAL TEST PROFILE ONLY: plaintext to the disposable in-cluster PostgreSQL. Accepted because
+  # ASIC_DEPLOYMENT_ENVIRONMENT=local; any production profile refuses it (asic.db.tls).
   - name: asic-runtime-database
     literals:
       - url=postgresql+psycopg2://asic_app@postgres:5432/asic
@@ -34,5 +37,6 @@ images:
     newTag: phase14-local
 patches:
   - path: backend-patch.yaml
+  - path: worker-patch.yaml
   - path: frontend-patch.yaml
   - path: remove-production-edge.yaml

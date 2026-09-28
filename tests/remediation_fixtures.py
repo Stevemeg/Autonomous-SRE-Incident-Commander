@@ -180,9 +180,92 @@ def escalate_to_accepted_hypothesis(
         session.close()
 
 
+def resolve_through_approved_remediation(
+    kernel_session: Session,
+    session_factory: Callable[[], Session],
+    resolver: CapabilityResolver,
+    remediation_resolver: CapabilityResolver,
+    clock: FrozenClock,
+    *,
+    slug: str,
+) -> Fixture:
+    """Drive a production incident to ``resolved`` through the real path (Phase 16).
+
+    Investigation escalates, a human reopens, G6 proposes a rollback, G7 requires approval,
+    an authorised human approves the exact action version, G9 executes, and G10 verifies
+    against a fresh post-settling reading. Every step is the real kernel; nothing is inserted
+    by hand. Used by the postmortem and worker suites, which need a genuinely resolved
+    incident to work on.
+    """
+    from asic.db.models import RemediationAction
+    from asic.domain.enums import ApprovalDecision
+    from asic.evaluation.corpus import remediation_fixtures
+    from asic.orchestration.remediation.kernel import RemediationKernel
+    from asic.remediation import approval_service
+    from asic.simulators.scenarios import scenario
+    from tests.kernel_fixtures import build_fixture
+
+    pre, post = remediation_fixtures("production_approval")
+    fixture = build_fixture(kernel_session, slug=slug)  # production environment by default
+    approver = create_approver(kernel_session, fixture, email=f"{slug}@example.com")
+    kernel_session.commit()
+    hypothesis_id = escalate_to_accepted_hypothesis(
+        session_factory,
+        resolver,
+        clock,
+        fixture,
+        scenario("SC-0001-checkout-latency-after-deploy"),
+    )
+
+    def kernel(selected: Scenario) -> RemediationKernel:
+        return RemediationKernel(
+            session_factory=session_factory,
+            resolver=remediation_resolver,
+            providers=[SimulatorProvider(selected, clock=clock)],
+            model=DeterministicModelProvider(selected),
+            clock=clock,
+        )
+
+    outcome = kernel(pre).start(
+        tenant_id=fixture.tenant_id,
+        incident_id=fixture.incident.id,
+        hypothesis_id=hypothesis_id,
+        behaviour_version_id=fixture.behaviour_version.id,
+        selected_service_id=fixture.service_ids[0],
+    )
+    assert outcome.incident_status is IncidentStatus.AWAITING_APPROVAL
+    kernel_session.expire_all()
+    bind_tenant(kernel_session, fixture.tenant_id)
+    action = kernel_session.execute(
+        sa.select(RemediationAction).where(RemediationAction.tenant_id == fixture.tenant_id)
+    ).scalar_one()
+    approval_service.decide(
+        kernel_session,
+        tenant_id=fixture.tenant_id,
+        action_id=action.id,
+        actor_user_id=approver.id,
+        decision=ApprovalDecision.APPROVED,
+        expected_action_version_hash=action.action_version_hash,
+        justification="rollback matches the deployment evidence",
+        clock=clock,
+    )
+    kernel_session.commit()
+    outcome = kernel(pre).resume(
+        tenant_id=fixture.tenant_id, workflow_run_id=outcome.workflow_run_id
+    )
+    assert not outcome.terminated  # executed; waiting for the settling window
+    clock.advance(90)
+    outcome = kernel(post).resume(
+        tenant_id=fixture.tenant_id, workflow_run_id=outcome.workflow_run_id
+    )
+    assert outcome.incident_status is IncidentStatus.RESOLVED, outcome
+    return fixture
+
+
 __all__ = [
     "create_approver",
     "escalate_to_accepted_hypothesis",
     "grant_write_capabilities",
     "remediation_resolver",
+    "resolve_through_approved_remediation",
 ]

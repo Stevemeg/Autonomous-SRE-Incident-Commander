@@ -4,6 +4,7 @@ namespace: asic-system
 resources:
   - configmap.yaml
   - backend-deployment.yaml
+  - worker-deployment.yaml
   - backend-service.yaml
   - frontend-deployment.yaml
   - frontend-service.yaml

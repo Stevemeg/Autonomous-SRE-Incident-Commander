@@ -22,10 +22,45 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed — Phase 16 closure correction (independent review findings F-01 to F-05)
+
+- **G11 postmortem author (F-01, FR-PMT-01/02).** Resolved incidents get a versioned, cited,
+  draft-only postmortem: facts assembled from persisted records, model prose limited to four
+  sections and validated deterministically (uncited, foreign-cited, injection-only, unsupported
+  causal and unsupported-figure claims are removed into a labelled uncertainty list). Migration
+  0020 makes `postmortem` append-only and drafts-only at the database. AI behaviour change: prompt
+  set `2026.09.27-1` adds the `postmortem_author` prompt; no existing prompt changed; the 18-scenario
+  evaluation gate still passes 18/18 in simulator and replay modes.
+- **Worker (F-02).** `python -m asic.worker` drives recorded work from PostgreSQL (investigation
+  dispatches, remediation requests and runs, postmortems) with advisory-lock claims over kernel
+  leases, bounded concurrency, SIGTERM drain and HTTP probes; Kubernetes Deployment, service
+  account, PDB and a least-privilege network policy; kind acceptance with two replicas. New API
+  routes: remediation requests and human resolution (incident control), postmortem reads. The
+  requester of a remediation cannot approve it. Its live profile refuses to start until a live
+  model exists (GAP-08); the production image contains no simulator, so kind uses a derived
+  local-only image.
+- **Production database TLS (F-03, NFR-SEC-07).** Production processes refuse any database URL
+  that is not `sslmode=verify-full` with a CA and a TCP host, before connecting; migration and
+  maintenance Jobs mark the production profile; an optional CA Secret is mounted everywhere.
+- **Claims (F-04).** README, resume and interview material now state the autonomy matrix precisely
+  (R1 outside production is autonomous), describe the OIDC attestation as a locally validated
+  workflow never run remotely, and count the as-built graph (10 LangGraph nodes, 4 model callers).
+- **Documentation and gaps (F-05).** Requirement statuses recomputed one by one (112 satisfied,
+  19 partial, 0 unsatisfied, 0 external prerequisite); FR-CLB-01 and FR-CLB-03 no longer claimed
+  satisfied. Gap register rebuilt (37 open gaps, including G12, single-service evidence, node
+  non-preemption, historical retrieval, postmortem publication, worker limits and notifications);
+  stale "later"/"Phase 15 obligation" language replaced with evidence or gaps; stuck-workflow
+  runbook describes the real recovery path.
+- Load harness terminology separates offered rate, responses, successful throughput and classified
+  rejections; one-command load environment (`scripts/load_environment.py`); the Phase 15 load
+  evidence is relabelled with the commit and dirty flag it actually recorded, and representative
+  profiles were re-measured on the final image. E2E scenario F asserts its one deterministic outcome.
+
 ### Added — Phase 16 production readiness and project closeout
 
 - Final status for all 131 SRS requirements (112 satisfied, 16 partially satisfied, 2
-  intentionally deferred, 1 external), each with evidence and limit.
+  intentionally deferred, 1 external), each with evidence and limit. Superseded by the closure
+  correction above (112 satisfied, 19 partial; 37 open gaps).
 - Production readiness review with area-by-area verdicts, cost and scale discussion, and a single
   production gap register (29 entries, each with what would close it).
 - One-command local demonstration (`scripts/demo.py`) that reads every outcome back from the
@@ -112,8 +147,10 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Digest-pinned multi-stage backend and Next.js standalone images run as UID/GID 10001 and contain
   only runtime dependencies/artifacts; simulator and test sources are excluded from production.
 - Trivy HIGH/CRITICAL scanning is now a mandatory fail-closed security-gate input. Final-image
-  CycloneDX SBOMs are checked for expected packages, and trusted GHCR releases receive GitHub OIDC
-  build-provenance attestations over immutable registry digests.
+  CycloneDX SBOMs are checked for expected packages, and the release workflow is written so that
+  trusted GHCR releases receive GitHub OIDC build-provenance attestations over immutable registry
+  digests (validated locally only; the workflow has never run on GitHub and no attestation exists,
+  GAP-01).
 - Kustomize defines the API/frontend, TLS Ingress contract, PDBs, probes, initial resources,
   tokenless service accounts, hardened pod contexts, default-deny networking and a separate one-shot
   Alembic migration Job. Local overlays add disposable PostgreSQL/pgvector only for smoke testing.

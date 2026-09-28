@@ -67,7 +67,11 @@ def test_workloads_enforce_the_pod_security_baseline() -> None:
 
 def test_production_images_are_digest_addressed_and_secrets_are_references() -> None:
     deployments = [doc for doc in _documents("base") if doc["kind"] == "Deployment"]
-    assert len(deployments) == 2
+    assert {d["metadata"]["name"] for d in deployments} == {  # type: ignore[index]
+        "asic-api",
+        "asic-frontend",
+        "asic-worker",  # Phase 16: the durable-work worker, same backend image
+    }
     for deployment in deployments:
         containers = deployment["spec"]["template"]["spec"]["containers"]  # type: ignore[index]
         assert all(re.search(r"@sha256:[0-9a-f]{64}$", item["image"]) for item in containers)
@@ -75,12 +79,16 @@ def test_production_images_are_digest_addressed_and_secrets_are_references() -> 
     serialized = yaml.safe_dump(config)
     assert "DATABASE_URL" not in serialized
     assert "JWT_SECRET" not in serialized
-    backend = next(doc for doc in deployments if doc["metadata"]["name"] == "asic-api")  # type: ignore[index]
-    env = backend["spec"]["template"]["spec"]["containers"][0]["env"]  # type: ignore[index]
-    assert any(
-        item.get("name") == "ASIC_DATABASE_URL" and "secretKeyRef" in item["valueFrom"]
-        for item in env
-    )
+    for name in ("asic-api", "asic-worker"):
+        backend = next(doc for doc in deployments if doc["metadata"]["name"] == name)  # type: ignore[index]
+        env = backend["spec"]["template"]["spec"]["containers"][0]["env"]  # type: ignore[index]
+        secrets = {
+            item["valueFrom"]["secretKeyRef"]["name"]
+            for item in env
+            if "secretKeyRef" in item.get("valueFrom", {})
+        }
+        # The runtime credential only: never the migration or maintenance login.
+        assert secrets == {"asic-runtime-database"}, (name, secrets)
 
 
 def test_network_policy_is_default_deny_with_only_named_paths() -> None:

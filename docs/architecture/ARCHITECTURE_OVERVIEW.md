@@ -332,21 +332,23 @@ section P. The three that most shape this design:
 
 ---
 
-## 9. As built (Phase 16 reconciliation)
+## 9. As built (Phase 16 closure)
 
 The design above was implemented with these differences. Each is deliberate and recorded; none
 weakens a safety principle.
 
 | Design | As built | Where recorded |
 |---|---|---|
-| Three deployables plus frontend (API, orchestrator worker, batch worker) | The API and frontend Deployments, a one-shot migration Job and a suspended retention CronJob ship. Investigations are driven by `InvestigationDispatcher` in-process (tests, demo, load harness); no orchestrator or batch worker Deployment exists yet | ADR-0031; GAP-07 |
-| Policy gate and broker inside the orchestrator worker | They run inside whichever process runs the kernel; the property that matters — no network hop between authorizer and executor — holds | ADR-0025 |
-| Seven LLM-backed nodes; model-assisted correlation ranking | Three nodes call the model: Investigation Planner, Hypothesis Engine and Remediation Planner (menu-bound, authoring 4 of 12 proposal fields). Correlation, evidence analysis and verification are deterministic; Postmortem Author not built | [ADR review](../adr/ADR_REVIEW.md); GAP-10 |
-| Postgres-backed queues for work | Durable investigation dispatch requests in PostgreSQL; synchronous ingestion with a per-process bulkhead | ADR-0019; [LOAD_AND_PERFORMANCE.md](../testing/LOAD_AND_PERFORMANCE.md) |
+| Three deployables plus frontend (API, orchestrator worker, batch worker) | API, **worker** and frontend Deployments, a one-shot migration Job and a suspended retention CronJob ship. One worker (`python -m asic.worker`, same image as the API) does both orchestrator and batch duties: investigation dispatches, remediation requests and runs, and G11 postmortems. Knowledge ingestion and evaluation runs are operator commands, not worker jobs. The worker's live profile refuses to start without a live model; it runs on kind in the simulator profile | ADR-0031 (amended); [orchestration-kernel §18](./orchestration-kernel.md); GAP-07, GAP-08 |
+| Policy gate and broker inside the orchestrator worker | They run inside the worker process that runs the kernel; the property that matters — no network hop between authorizer and executor — holds | ADR-0025 |
+| Twelve nodes, seven LLM-backed; model-assisted correlation ranking | 10 LangGraph nodes implement G2-G10; four components call the model: Investigation Planner, Hypothesis Engine, Remediation Planner (menu-bound, authoring 4 of 12 proposal fields) and the G11 Postmortem Author (a worker stage; prose only, validated). Correlation, evidence analysis and verification are deterministic; the G12 Memory Curator is not built | [agent topology §0](./agent-topology.md); GAP-31 |
+| Postgres-backed queues for work | Durable investigation dispatches and remediation requests in PostgreSQL, claimed by the worker with advisory locks over kernel leases; synchronous ingestion with a per-process bulkhead | ADR-0019; [LOAD_AND_PERFORMANCE.md](../testing/LOAD_AND_PERFORMANCE.md) |
 | Rate limiting in PostgreSQL | In-memory, per process | ADR review (0006); GAP-13 |
 | Traces evidence source | Simulator only; metrics, logs, Kubernetes and deployments have native adapters | GAP-17 |
 | Model-span GenAI semantic conventions | Model calls are attributes of the calling span | ADR review (0010) |
 | Retention lifecycle | Executor for the idempotency cache only, separate maintenance role | ADR-0032; GAP-15 |
+| Historical incidents inform investigation (T3 retrieval), memory curation after incidents | Neither is built: history reaches investigation only as ingested knowledge documents, and nothing proposes memory promotions | [memory-and-rag.md](./memory-and-rag.md); GAP-31, GAP-33 |
+| Database traffic encrypted in transit | Production refuses any database URL that is not verified TLS (`asic.db.tls`); at-rest encryption is the managed database's | GAP-03, GAP-29 |
 
 The layers, the chokepoint, the investigation loop and the principles PR-1 to PR-7 are as
 designed; the adversarial evidence for them is in [docs/testing](../testing/README.md).

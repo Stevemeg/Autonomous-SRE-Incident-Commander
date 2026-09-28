@@ -99,6 +99,8 @@ def _post_routes(target: Target) -> list[str]:
         f"/api/v1/incidents/{incident}/annotate",
         f"/api/v1/incidents/{incident}/escalate",
         f"/api/v1/incidents/{incident}/cancel",
+        f"/api/v1/incidents/{incident}/resolve",
+        f"/api/v1/incidents/{incident}/remediation-requests",
         f"/api/v1/approvals/{uuid.uuid4()}/decide",
         "/api/v1/ingest/alerts",
         "/api/v1/ingest/webhooks/simulator",

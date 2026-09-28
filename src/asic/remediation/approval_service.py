@@ -26,7 +26,12 @@ import sqlalchemy as sa
 from sqlalchemy.orm import Session
 
 from asic.db.models.catalog import Environment
-from asic.db.models.remediation import Approval, PolicyDecision, RemediationAction
+from asic.db.models.remediation import (
+    Approval,
+    PolicyDecision,
+    RemediationAction,
+    RemediationRequest,
+)
 from asic.db.models.tenancy import Permission, RolePermission, User, UserRoleAssignment
 from asic.domain.clock import Clock
 from asic.domain.enums import ApprovalDecision, RemediationActionStatus, RiskTier, UserStatus
@@ -143,6 +148,21 @@ def decide(
     # every action is proposed by G6, an agent node, and ``Approval.proposer_user_id`` is
     # always NULL as a result - there is no human proposer for a human to collide with yet.
     # The constraint stands ready for the day a human-authored proposal path exists.
+    #
+    # Phase 16: a remediation run the deployed worker starts comes from a responder's request.
+    # That responder chose the hypothesis to act on, so they may not also be the one who
+    # approves the resulting action: the request is not an approval, and must not become one.
+    requester = session.execute(
+        sa.select(RemediationRequest.requested_by_user_id).where(
+            RemediationRequest.tenant_id == tenant_id,
+            RemediationRequest.workflow_run_id == action.workflow_run_id,
+        )
+    ).scalar_one_or_none()
+    if requester is not None and requester == actor_user_id:
+        raise ApprovalInvalid(
+            "the responder who requested this remediation cannot also approve it; a second "
+            "authorised approver must decide"
+        )
 
     policy_decision = session.execute(
         sa.select(PolicyDecision).where(

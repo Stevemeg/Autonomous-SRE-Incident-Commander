@@ -1,10 +1,9 @@
 # Agent Topology and State Machine
 
-- **Status:** Authored — Architecture Package (V3 §23 F). Formalised as [ADR-0001](../adr/0001-agent-topology-consolidation.md).
-  **Partially implemented:** G2, G3, G4 and G5 exist in the Phase 4 orchestration kernel
-  ([`orchestration-kernel.md`](./orchestration-kernel.md)); G1 is Phase 5, G6-G10 Phase 8,
-  G11-G12 later. G4 is implemented without a model call for now, which the kernel document
-  records and justifies.
+- **Status:** Designed in the Architecture Package (V3 §23 F) and formalised as
+  [ADR-0001](../adr/0001-agent-topology-consolidation.md). **As built at the Phase 16 closure,
+  see §0** - sections 1-8 are the design and its reasoning, kept because the decisions still
+  hold; where the build differs, §0 is authoritative.
 - **Master specification references:** Sections 4, 5, 12, 16, 23(F)
 - **Authoritative source:** [`../spec/MASTER_PROJECT_PROMPT_V3.md`](../spec/MASTER_PROJECT_PROMPT_V3.md)
 
@@ -14,6 +13,56 @@ agents/nodes only where responsibility, tools, permissions, failure modes or eva
 criteria are meaningfully different."*
 
 This document applies that test to all nineteen, one at a time, and records the result.
+
+---
+
+## 0. As built (Phase 16 closure)
+
+Counted from the source, not from the design:
+
+| Component | Form in code | Model call |
+|---|---|---|
+| G1 Alert Correlator | Deterministic ingestion/correlation service (`asic.ingestion`), not a graph node | No |
+| G2 Incident Coordinator | Two investigation-graph nodes: `coordinator` and `terminator` | No |
+| G3 Investigation Planner | Investigation-graph node `planner` | **Yes** |
+| G4 Evidence Collector | Investigation-graph node `evidence_collector`, six deterministic domain strategies | No |
+| G5 Hypothesis Engine | Investigation-graph node `hypothesis_engine` (with bounded reflection) | **Yes** |
+| G6 Remediation Planner | Remediation-graph node `remediation_planner` | **Yes** |
+| G7 Policy Gate | Remediation-graph node `policy_gate` | No |
+| G8 Approval Service | Remediation-graph node `approval_service` | No |
+| G9 Remediation Executor | Remediation-graph node `remediation_executor` | No |
+| G10 Verifier | Remediation-graph node `verifier` | No |
+| G11 Postmortem Author | **Post-incident stage** run by the worker on resolved incidents (`asic.postmortem`), not a graph node | **Yes** (prose only; facts are assembled from records) |
+| G12 Memory Curator | **Not built.** The governed promotion service it would call exists (`asic.memory`); nothing proposes promotions ([GAP-31](../PRODUCTION_GAP_REGISTER.md)) | - |
+| S1 Timeline projection | Deterministic projection (`asic.db.projections`) | No |
+| S2 Notification service | Deterministic service (`asic.notifications`); not composed by the deployed worker ([GAP-38](../PRODUCTION_GAP_REGISTER.md)) | No |
+
+**Counts.** 10 LangGraph nodes (5 investigation, 5 remediation) implementing design nodes G2-G10;
+1 post-incident stage (G11); 1 deterministic pre-incident component (G1); 2 services (S1, S2);
+G12 not built. **4 components call a model** (G3, G5, G6 in the graphs, and G11) - not the
+seven the design anticipated: G4 and G10 were built deterministic on purpose (the verifier must
+not be persuadable), and G1 has no model-assisted ranking. Every model call goes through the
+budgeted port to the deterministic scripted provider; no live model is wired (GAP-08).
+
+**Why G11 is a stage, not a node.** Both graphs end when their run ends, and an incident can
+also be resolved by a responder with no run at all. Drafting a postmortem is separate work over
+the incident's final record set, idempotent on its own (one draft per source fingerprint), so the
+worker invokes it directly rather than adding a node to either graph.
+
+**Who drives the graphs.** The deployed worker (`python -m asic.worker`): it claims durable
+investigation dispatches, remediation requests and runs, and resolved incidents from PostgreSQL
+and drives each through the kernels or G11 ([orchestration-kernel.md](./orchestration-kernel.md)).
+
+```mermaid
+flowchart LR
+    ING["G1 ingestion + correlation"] -->|"dispatch row"| W["Worker"]
+    W --> INV["Investigation graph: coordinator, planner, evidence_collector, hypothesis_engine, terminator"]
+    INV -->|"escalated with a hypothesis"| H["Responder: remediation request"]
+    H -->|"request row"| W
+    W --> REM["Remediation graph: remediation_planner, policy_gate, approval_service, remediation_executor, verifier"]
+    REM -->|"resolved"| W
+    W --> PM["G11 postmortem stage: cited draft, review required"]
+```
 
 ---
 
@@ -52,7 +101,9 @@ the single most consequential finding in this document.
 
 ---
 
-## 2. Result
+## 2. Result (design)
+
+*This is the ADR-0001 design. The as-built counts are in §0.*
 
 **Nineteen candidate responsibilities become twelve graph nodes plus two derived services.**
 
@@ -392,6 +443,15 @@ project brief. `RO` = read-only capability tier; risk tiers are defined in
 
 ### G11 — Postmortem Author *(LLM, batch)*
 
+> **As built:** a worker-run stage, not a graph node (§0). Facts (timeline, root cause,
+> remediation, verification) are assembled deterministically from records; the model drafts
+> only summary and lessons prose, and a deterministic validator removes any claim that cites
+> nothing, cites a foreign record, rests only on injection-flagged evidence, asserts an
+> unsupported cause or states a figure absent from its records. Drafts are versioned by source
+> fingerprint and the database refuses anything but an unreviewed draft. Events emitted:
+> `postmortem.drafted` (the `claim_stripped_uncited` event below was not built; removals are
+> recorded on the draft's `validation` and `uncertainties`). Jira export is not built (GAP-30).
+
 | Attribute | Specification |
 |---|---|
 | **Responsibility** | Draft a cited postmortem from the incident record |
@@ -408,6 +468,11 @@ project brief. `RO` = read-only capability tier; risk tiers are defined in
 | **Evaluation** | Citation validity rate; factual consistency vs incident record (judge + deterministic ID check); human-edit distance |
 
 ### G12 — Memory Curator *(LLM, batch, human-gated)*
+
+> **As built: not built** ([GAP-31](../PRODUCTION_GAP_REGISTER.md)). The governed promotion
+> path it would use - proposal, human decision by a non-proposer, versioned promotion, database
+> refusal of ungoverned writes - exists and is tested, but no node, worker step or API route
+> proposes a promotion, so incident learning is not reachable in the running product.
 
 | Attribute | Specification |
 |---|---|
@@ -466,7 +531,9 @@ this design. What changed is their **implementation form**:
 | 12, 13, 14 | Deterministic components G7, G8, G9 — **not models** |
 | 16, 17 | Derived services S1, S2 |
 
-**No responsibility from §4 has been dropped.** This is checked mechanically by
+**No responsibility from §4 has been dropped from the design.** As built (§0), eighteen have
+an implementation; Incident Learning/Memory (19) exists only as the governed promotion service
+without its trigger (GAP-31). The design's dispositions are checked mechanically by
 `scripts/validate_docs.py`, which fails if any of the nineteen names lacks a disposition in
 the decision table above.
 

@@ -895,22 +895,46 @@ class MemoryWriteDecision(Base, TenantScoped, CreatedAtMixin):
 
 
 class Postmortem(Base, TenantScoped, TimestampMixin):
-    """A cited postmortem draft.
+    """A cited postmortem draft written by the G11 postmortem author (FR-PMT-01/02).
 
-    Cannot reach ``published`` without a named human reviewer: the constraint below makes
-    autonomous publication impossible rather than merely discouraged.
+    Append-only and drafts-only (migration 0020): the runtime role may insert a draft and
+    read it, never change it, and the database refuses any row that is not an unreviewed
+    ``draft``. There is no review or publication workflow yet; whatever builds one must
+    first change these constraints in a migration, so publication can never be reached by
+    an automated path by accident. A changed source record set produces a new ``version``,
+    never an edit of an earlier one.
     """
 
     __tablename__ = "postmortem"
+    __append_only__ = True
 
     id: Mapped[uuid.UUID] = uuid_pk()
     incident_id: Mapped[uuid.UUID] = mapped_column(pg.UUID(as_uuid=True), nullable=False)
+    #: 1, 2, ... per incident: a new version only when the source fingerprint changes.
+    version: Mapped[int] = mapped_column(sa.Integer, nullable=False)
+    #: SHA-256 over the identities and states of every record the draft was built from.
+    source_fingerprint: Mapped[str] = mapped_column(sa.String(64), nullable=False)
     title: Mapped[str] = mapped_column(sa.Text, nullable=False)
+    #: Human-readable rendering of ``sections``; the structured form is authoritative.
     content: Mapped[str] = mapped_column(sa.Text, nullable=False)
-    #: Event and evidence ids backing each claim. Uncited claims are stripped before the
-    #: draft is written, so this is never empty for a non-trivial draft.
+    #: Section name -> list of claims, each ``{"text", "citations", "origin"}``.
+    sections: Mapped[dict[str, Any]] = mapped_column(pg.JSONB, nullable=False)
+    #: Claims that could not be grounded, and why. Never presented as fact.
+    uncertainties: Mapped[list[Any]] = mapped_column(
+        pg.JSONB, nullable=False, server_default=sa.text("'[]'::jsonb")
+    )
+    #: Every record the draft cites: ``{"handle", "kind", "id"}``. Never empty.
     citations: Mapped[list[Any]] = mapped_column(
         pg.JSONB, nullable=False, server_default=sa.text("'[]'::jsonb")
+    )
+    #: How the incident came to be resolved: verified by G10, or declared by a human.
+    resolution_basis: Mapped[str] = mapped_column(sa.String(32), nullable=False)
+    #: Generator, prompt, provider, model and token usage - what produced the draft.
+    generation: Mapped[dict[str, Any]] = mapped_column(pg.JSONB, nullable=False)
+    #: Grounding validation outcome: claims kept, removed and why.
+    validation: Mapped[dict[str, Any]] = mapped_column(pg.JSONB, nullable=False)
+    review_required: Mapped[bool] = mapped_column(
+        sa.Boolean, nullable=False, server_default=sa.text("true")
     )
     status: Mapped[PostmortemStatus] = mapped_column(
         enum_column(PostmortemStatus, "postmortem_status"),
@@ -931,10 +955,29 @@ class Postmortem(Base, TenantScoped, TimestampMixin):
             ondelete="RESTRICT",
             name="fk_postmortem_reviewer",
         ),
-        sa.UniqueConstraint("tenant_id", "incident_id", name="uq_postmortem_incident"),
+        sa.UniqueConstraint("tenant_id", "incident_id", "version", name="uq_postmortem_version"),
+        sa.UniqueConstraint(
+            "tenant_id", "incident_id", "source_fingerprint", name="uq_postmortem_fingerprint"
+        ),
         sa.CheckConstraint(
             "status = 'draft' OR reviewed_by_user_id IS NOT NULL",
             name="reviewed_postmortem_names_reviewer",
         ),
+        sa.CheckConstraint(
+            "status = 'draft' AND review_required AND reviewed_by_user_id IS NULL "
+            "AND reviewed_at IS NULL",
+            name="unreviewed_drafts_only",
+        ),
+        sa.CheckConstraint("version >= 1", name="version_positive"),
+        sa.CheckConstraint(
+            "resolution_basis IN ('independently_verified', 'human_declared')",
+            name="known_resolution_basis",
+        ),
+        sa.CheckConstraint(
+            "jsonb_typeof(citations) = 'array' AND jsonb_array_length(citations) > 0",
+            name="cites_at_least_one_record",
+        ),
+        sa.CheckConstraint("jsonb_typeof(sections) = 'object'", name="sections_is_object"),
+        sa.CheckConstraint("jsonb_typeof(uncertainties) = 'array'", name="uncertainties_is_array"),
         sa.Index("ix_postmortem_status", "tenant_id", "status"),
     )

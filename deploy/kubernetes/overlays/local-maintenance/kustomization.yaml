@@ -17,6 +17,16 @@ images:
     newName: asic-backend
     newTag: phase14-local
 patches:
+  # Explicit local-test profile (see local-migration): plaintext only because not production.
+  - target:
+      kind: CronJob
+      name: asic-retention
+    patch: |-
+      - op: replace
+        path: /spec/jobTemplate/spec/template/spec/containers/0/env/1
+        value:
+          name: ASIC_DEPLOYMENT_ENVIRONMENT
+          value: local
   - target:
       kind: NetworkPolicy
       name: retention-egress

@@ -1,0 +1,3511 @@
+{
+ "environment": {
+  "label": "LOCAL BENCHMARK",
+  "date": "2026-09-28T08:57:59+00:00",
+  "api_image_id": "sha256:e766bc1edecdaa5d3c754f738c6162cfd9ff465a36f8af625fc3df77e5af8a56",
+  "api_image_revision": "006f486+p16closure-content-1457df4abac8d003",
+  "commit": "006f48670ef0bb914dfc6882533d788608f543ae",
+  "working_tree_dirty": true,
+  "host": {
+   "platform": "Windows-11-10.0.26200-SP0",
+   "logical_cpus": 8,
+   "memory_gib": 15.8,
+   "python": "3.12.13"
+  },
+  "docker": "8 CPUs, 8212045824 bytes, 29.5.3",
+  "postgres": "PostgreSQL 16.15 (Debian 16.15-1.pgdg12+2) on x86_64-pc-linux-gnu, compiled by gcc (Debian 12.2.0-14+deb12u1) 12.2.0, 64-bit",
+  "postgres_max_connections": "100",
+  "api_container": "asic-load-api"
+ },
+ "parameters": {
+  "admin_url": "postgresql+psycopg2://postgres:***@127.0.0.1:55480/asic",
+  "app_url": "postgresql+psycopg2://asic_load_runtime:***@127.0.0.1:55480/asic",
+  "api_url": "http://127.0.0.1:18080",
+  "api_container": "asic-load-api",
+  "profile": "all",
+  "readers": "400",
+  "services": "40",
+  "step_seconds": "20",
+  "steady_rps": "40",
+  "steady_seconds": "120",
+  "ingest_rps": "50",
+  "ingest_seconds": "60",
+  "burst_concurrency": "96",
+  "incidents": "60",
+  "investigation_workers": "8",
+  "soak_seconds": "600.0",
+  "soak_rps": "20",
+  "timeout": "10",
+  "seed": "15",
+  "output": "phase16-closure-load.json"
+ },
+ "profiles": {
+  "smoke": {
+   "requests": 45,
+   "wall_seconds": 0.58,
+   "responses_per_second": 77.85,
+   "successful_per_second": 77.85,
+   "classified_rejections_per_second": 0.0,
+   "classified_rejections": 0,
+   "throughput_rps": 77.85,
+   "error_rate": 0.0,
+   "statuses": {
+    "200": 45
+   },
+   "p50_ms": 10.91,
+   "p95_ms": 43.34,
+   "p99_ms": 48.39,
+   "max_ms": 48.39,
+   "mean_ms": 12.66,
+   "per_operation": {
+    "admin.tools": {
+     "count": 5,
+     "errors": 0,
+     "p50_ms": 11.89,
+     "p95_ms": 12.74,
+     "p99_ms": 12.74
+    },
+    "approvals.pending": {
+     "count": 5,
+     "errors": 0,
+     "p50_ms": 10.4,
+     "p95_ms": 10.91,
+     "p99_ms": 10.91
+    },
+    "evaluation.suite_runs": {
+     "count": 5,
+     "errors": 0,
+     "p50_ms": 9.84,
+     "p95_ms": 10.52,
+     "p99_ms": 10.52
+    },
+    "incidents.actions": {
+     "count": 1,
+     "errors": 0,
+     "p50_ms": 10.02,
+     "p95_ms": 10.02,
+     "p99_ms": 10.02
+    },
+    "incidents.detail": {
+     "count": 5,
+     "errors": 0,
+     "p50_ms": 10.67,
+     "p95_ms": 11.23,
+     "p99_ms": 11.23
+    },
+    "incidents.hypotheses": {
+     "count": 2,
+     "errors": 0,
+     "p50_ms": 11.09,
+     "p95_ms": 11.4,
+     "p99_ms": 11.4
+    },
+    "incidents.list": {
+     "count": 5,
+     "errors": 0,
+     "p50_ms": 11.42,
+     "p95_ms": 12.31,
+     "p99_ms": 12.31
+    },
+    "incidents.timeline": {
+     "count": 2,
+     "errors": 0,
+     "p50_ms": 11.3,
+     "p95_ms": 13.11,
+     "p99_ms": 13.11
+    },
+    "ingest.alert": {
+     "count": 5,
+     "errors": 0,
+     "p50_ms": 43.34,
+     "p95_ms": 48.39,
+     "p99_ms": 48.39
+    },
+    "livez": {
+     "count": 5,
+     "errors": 0,
+     "p50_ms": 2.56,
+     "p95_ms": 2.85,
+     "p99_ms": 2.85
+    },
+    "readyz": {
+     "count": 5,
+     "errors": 0,
+     "p50_ms": 2.67,
+     "p95_ms": 4.08,
+     "p99_ms": 4.08
+    }
+   },
+   "unexpected": [],
+   "resources": {
+    "start": {
+     "t": 1790585881.6368124,
+     "tag": "smoke:start",
+     "cpu_percent": 0.21,
+     "memory": "81.56MiB",
+     "pids": 2,
+     "rss_kib": 107764,
+     "threads": 2,
+     "open_fds": 9,
+     "db": {
+      "asic_load_runtime:idle": 1,
+      "postgres:active": 1
+     }
+    },
+    "end": {
+     "t": 1790585883.3756866,
+     "tag": "smoke:end",
+     "cpu_percent": 0.22,
+     "memory": "81.7MiB",
+     "pids": 2,
+     "rss_kib": 107880,
+     "threads": 2,
+     "open_fds": 9,
+     "db": {
+      "asic_load_runtime:idle": 1,
+      "postgres:active": 1
+     }
+    }
+   }
+  },
+  "capacity": {
+   "steps": [
+    {
+     "concurrency": 1,
+     "requests": 1959,
+     "wall_seconds": 20.0,
+     "responses_per_second": 97.95,
+     "successful_per_second": 97.95,
+     "classified_rejections_per_second": 0.0,
+     "classified_rejections": 0,
+     "throughput_rps": 97.95,
+     "error_rate": 0.0,
+     "statuses": {
+      "200": 1959
+     },
+     "p50_ms": 10.45,
+     "p95_ms": 13.71,
+     "p99_ms": 18.59,
+     "max_ms": 51.98,
+     "mean_ms": 10.16,
+     "per_operation": {
+      "admin.tools": {
+       "count": 101,
+       "errors": 0,
+       "p50_ms": 11.41,
+       "p95_ms": 15.13,
+       "p99_ms": 18.02
+      },
+      "approvals.pending": {
+       "count": 184,
+       "errors": 0,
+       "p50_ms": 10.55,
+       "p95_ms": 14.65,
+       "p99_ms": 19.04
+      },
+      "evaluation.suite_runs": {
+       "count": 95,
+       "errors": 0,
+       "p50_ms": 9.92,
+       "p95_ms": 12.2,
+       "p99_ms": 13.74
+      },
+      "incidents.actions": {
+       "count": 108,
+       "errors": 0,
+       "p50_ms": 10.76,
+       "p95_ms": 14.13,
+       "p99_ms": 18.66
+      },
+      "incidents.detail": {
+       "count": 406,
+       "errors": 0,
+       "p50_ms": 9.95,
+       "p95_ms": 12.74,
+       "p99_ms": 15.93
+      },
+      "incidents.evidence": {
+       "count": 88,
+       "errors": 0,
+       "p50_ms": 10.84,
+       "p95_ms": 15.09,
+       "p99_ms": 17.0
+      },
+      "incidents.hypotheses": {
+       "count": 95,
+       "errors": 0,
+       "p50_ms": 10.81,
+       "p95_ms": 14.12,
+       "p99_ms": 17.76
+      },
+      "incidents.list": {
+       "count": 588,
+       "errors": 0,
+       "p50_ms": 10.8,
+       "p95_ms": 15.17,
+       "p99_ms": 20.19
+      },
+      "incidents.timeline": {
+       "count": 84,
+       "errors": 0,
+       "p50_ms": 10.54,
+       "p95_ms": 12.57,
+       "p99_ms": 13.09
+      },
+      "livez": {
+       "count": 108,
+       "errors": 0,
+       "p50_ms": 2.89,
+       "p95_ms": 3.95,
+       "p99_ms": 5.45
+      },
+      "readyz": {
+       "count": 102,
+       "errors": 0,
+       "p50_ms": 2.66,
+       "p95_ms": 4.46,
+       "p99_ms": 5.39
+      }
+     }
+    },
+    {
+     "concurrency": 2,
+     "requests": 2708,
+     "wall_seconds": 20.0,
+     "responses_per_second": 135.4,
+     "successful_per_second": 135.4,
+     "classified_rejections_per_second": 0.0,
+     "classified_rejections": 0,
+     "throughput_rps": 135.4,
+     "error_rate": 0.0,
+     "statuses": {
+      "200": 2708
+     },
+     "p50_ms": 14.97,
+     "p95_ms": 20.17,
+     "p99_ms": 33.54,
+     "max_ms": 76.95,
+     "mean_ms": 14.74,
+     "per_operation": {
+      "admin.tools": {
+       "count": 121,
+       "errors": 0,
+       "p50_ms": 15.7,
+       "p95_ms": 20.0,
+       "p99_ms": 24.11
+      },
+      "approvals.pending": {
+       "count": 274,
+       "errors": 0,
+       "p50_ms": 14.78,
+       "p95_ms": 18.47,
+       "p99_ms": 23.3
+      },
+      "evaluation.suite_runs": {
+       "count": 147,
+       "errors": 0,
+       "p50_ms": 14.36,
+       "p95_ms": 19.58,
+       "p99_ms": 35.62
+      },
+      "incidents.actions": {
+       "count": 142,
+       "errors": 0,
+       "p50_ms": 15.34,
+       "p95_ms": 19.68,
+       "p99_ms": 28.11
+      },
+      "incidents.detail": {
+       "count": 512,
+       "errors": 0,
+       "p50_ms": 14.55,
+       "p95_ms": 19.44,
+       "p99_ms": 33.54
+      },
+      "incidents.evidence": {
+       "count": 139,
+       "errors": 0,
+       "p50_ms": 15.53,
+       "p95_ms": 21.32,
+       "p99_ms": 40.61
+      },
+      "incidents.hypotheses": {
+       "count": 117,
+       "errors": 0,
+       "p50_ms": 15.66,
+       "p95_ms": 19.9,
+       "p99_ms": 30.23
+      },
+      "incidents.list": {
+       "count": 838,
+       "errors": 0,
+       "p50_ms": 15.53,
+       "p95_ms": 21.4,
+       "p99_ms": 34.36
+      },
+      "incidents.timeline": {
+       "count": 139,
+       "errors": 0,
+       "p50_ms": 15.67,
+       "p95_ms": 22.26,
+       "p99_ms": 39.62
+      },
+      "livez": {
+       "count": 158,
+       "errors": 0,
+       "p50_ms": 4.12,
+       "p95_ms": 5.71,
+       "p99_ms": 6.8
+      },
+      "readyz": {
+       "count": 121,
+       "errors": 0,
+       "p50_ms": 3.77,
+       "p95_ms": 6.3,
+       "p99_ms": 7.31
+      }
+     }
+    },
+    {
+     "concurrency": 4,
+     "requests": 2574,
+     "wall_seconds": 20.0,
+     "responses_per_second": 128.7,
+     "successful_per_second": 128.7,
+     "classified_rejections_per_second": 0.0,
+     "classified_rejections": 0,
+     "throughput_rps": 128.7,
+     "error_rate": 0.0,
+     "statuses": {
+      "200": 2574
+     },
+     "p50_ms": 31.92,
+     "p95_ms": 42.24,
+     "p99_ms": 56.75,
+     "max_ms": 98.79,
+     "mean_ms": 31.04,
+     "per_operation": {
+      "admin.tools": {
+       "count": 142,
+       "errors": 0,
+       "p50_ms": 32.15,
+       "p95_ms": 42.36,
+       "p99_ms": 53.9
+      },
+      "approvals.pending": {
+       "count": 245,
+       "errors": 0,
+       "p50_ms": 31.83,
+       "p95_ms": 40.06,
+       "p99_ms": 56.95
+      },
+      "evaluation.suite_runs": {
+       "count": 136,
+       "errors": 0,
+       "p50_ms": 31.31,
+       "p95_ms": 38.51,
+       "p99_ms": 41.84
+      },
+      "incidents.actions": {
+       "count": 127,
+       "errors": 0,
+       "p50_ms": 33.44,
+       "p95_ms": 45.01,
+       "p99_ms": 56.82
+      },
+      "incidents.detail": {
+       "count": 508,
+       "errors": 0,
+       "p50_ms": 31.67,
+       "p95_ms": 42.69,
+       "p99_ms": 71.68
+      },
+      "incidents.evidence": {
+       "count": 126,
+       "errors": 0,
+       "p50_ms": 33.49,
+       "p95_ms": 43.88,
+       "p99_ms": 52.94
+      },
+      "incidents.hypotheses": {
+       "count": 141,
+       "errors": 0,
+       "p50_ms": 33.5,
+       "p95_ms": 41.84,
+       "p99_ms": 50.33
+      },
+      "incidents.list": {
+       "count": 770,
+       "errors": 0,
+       "p50_ms": 32.75,
+       "p95_ms": 43.47,
+       "p99_ms": 56.87
+      },
+      "incidents.timeline": {
+       "count": 142,
+       "errors": 0,
+       "p50_ms": 33.71,
+       "p95_ms": 42.88,
+       "p99_ms": 49.3
+      },
+      "livez": {
+       "count": 131,
+       "errors": 0,
+       "p50_ms": 8.08,
+       "p95_ms": 11.8,
+       "p99_ms": 15.32
+      },
+      "readyz": {
+       "count": 106,
+       "errors": 0,
+       "p50_ms": 5.98,
+       "p95_ms": 12.67,
+       "p99_ms": 14.98
+      }
+     }
+    }
+   ],
+   "observed_saturation": {
+    "at_concurrency": 4,
+    "previous_concurrency": 2,
+    "throughput_gain": -0.049,
+    "reason": "throughput_plateau"
+   },
+   "max_observed_throughput_rps": 135.4,
+   "max_throughput_concurrency": 2,
+   "safe_tested_region": {
+    "max_concurrency": 4,
+    "criteria": "zero errors and p95 <= 250 ms"
+   },
+   "resources": {
+    "start": {
+     "t": 1790585884.8192596,
+     "tag": "capacity:start",
+     "cpu_percent": 0.23,
+     "memory": "81.54MiB",
+     "pids": 2,
+     "rss_kib": 107880,
+     "threads": 2,
+     "open_fds": 9,
+     "db": {
+      "asic_load_runtime:idle": 1,
+      "postgres:active": 1
+     }
+    },
+    "end": {
+     "t": 1790585946.8222387,
+     "tag": "capacity:end",
+     "cpu_percent": 0.21,
+     "memory": "84.27MiB",
+     "pids": 8,
+     "rss_kib": 110652,
+     "threads": 8,
+     "open_fds": 15,
+     "db": {
+      "asic_load_runtime:idle": 4,
+      "postgres:active": 1
+     }
+    }
+   }
+  },
+  "steady": {
+   "target_rps": 40,
+   "offered_rps": 40,
+   "scheduled": 4800,
+   "dropped": 0,
+   "requests": 4800,
+   "wall_seconds": 120.0,
+   "responses_per_second": 40.0,
+   "successful_per_second": 40.0,
+   "classified_rejections_per_second": 0.0,
+   "classified_rejections": 0,
+   "throughput_rps": 40.0,
+   "error_rate": 0.0,
+   "statuses": {
+    "200": 4800
+   },
+   "p50_ms": 15.0,
+   "p95_ms": 50.0,
+   "p99_ms": 72.0,
+   "max_ms": 159.0,
+   "mean_ms": 18.34,
+   "per_operation": {
+    "admin.tools": {
+     "count": 203,
+     "errors": 0,
+     "p50_ms": 12.0,
+     "p95_ms": 25.0,
+     "p99_ms": 44.0
+    },
+    "approvals.pending": {
+     "count": 411,
+     "errors": 0,
+     "p50_ms": 12.0,
+     "p95_ms": 22.0,
+     "p99_ms": 31.0
+    },
+    "evaluation.suite_runs": {
+     "count": 197,
+     "errors": 0,
+     "p50_ms": 12.0,
+     "p95_ms": 22.0,
+     "p99_ms": 28.0
+    },
+    "incidents.actions": {
+     "count": 204,
+     "errors": 0,
+     "p50_ms": 12.0,
+     "p95_ms": 25.0,
+     "p99_ms": 34.0
+    },
+    "incidents.detail": {
+     "count": 814,
+     "errors": 0,
+     "p50_ms": 12.0,
+     "p95_ms": 22.0,
+     "p99_ms": 31.0
+    },
+    "incidents.evidence": {
+     "count": 200,
+     "errors": 0,
+     "p50_ms": 12.0,
+     "p95_ms": 25.0,
+     "p99_ms": 31.0
+    },
+    "incidents.hypotheses": {
+     "count": 220,
+     "errors": 0,
+     "p50_ms": 12.0,
+     "p95_ms": 25.0,
+     "p99_ms": 34.0
+    },
+    "incidents.list": {
+     "count": 1154,
+     "errors": 0,
+     "p50_ms": 12.0,
+     "p95_ms": 25.0,
+     "p99_ms": 37.0
+    },
+    "incidents.timeline": {
+     "count": 192,
+     "errors": 0,
+     "p50_ms": 12.0,
+     "p95_ms": 25.0,
+     "p99_ms": 28.0
+    },
+    "ingest.alert": {
+     "count": 813,
+     "errors": 0,
+     "p50_ms": 44.0,
+     "p95_ms": 72.0,
+     "p99_ms": 94.0
+    },
+    "livez": {
+     "count": 207,
+     "errors": 0,
+     "p50_ms": 3.0,
+     "p95_ms": 15.0,
+     "p99_ms": 19.0
+    },
+    "readyz": {
+     "count": 185,
+     "errors": 0,
+     "p50_ms": 3.0,
+     "p95_ms": 15.0,
+     "p99_ms": 15.0
+    }
+   },
+   "resources": {
+    "start": {
+     "t": 1790585948.000706,
+     "tag": "steady:start",
+     "cpu_percent": 0.17,
+     "memory": "84.25MiB",
+     "pids": 8,
+     "rss_kib": 110652,
+     "threads": 8,
+     "open_fds": 15,
+     "db": {
+      "asic_load_runtime:idle": 4,
+      "postgres:active": 1
+     }
+    },
+    "end": {
+     "t": 1790586070.0243192,
+     "tag": "steady:end",
+     "cpu_percent": 0.26,
+     "memory": "84.8MiB",
+     "pids": 6,
+     "rss_kib": 110748,
+     "threads": 6,
+     "open_fds": 19,
+     "db": {
+      "asic_load_runtime:idle": 5,
+      "postgres:active": 1
+     }
+    }
+   }
+  },
+  "ingest": {
+   "target_rps": 50,
+   "offered_rps": 50,
+   "scheduled": 3000,
+   "dropped": 1670,
+   "requests": 1330,
+   "wall_seconds": 63.72,
+   "responses_per_second": 20.87,
+   "successful_per_second": 20.87,
+   "classified_rejections_per_second": 0.0,
+   "classified_rejections": 0,
+   "throughput_rps": 20.87,
+   "error_rate": 0.0,
+   "statuses": {
+    "200": 1330
+   },
+   "p50_ms": 4064.0,
+   "p95_ms": 4469.0,
+   "p99_ms": 4670.0,
+   "max_ms": 4755.0,
+   "mean_ms": 3813.23,
+   "per_operation": {
+    "ingest.alert": {
+     "count": 1330,
+     "errors": 0,
+     "p50_ms": 4064.0,
+     "p95_ms": 4469.0,
+     "p99_ms": 4670.0
+    }
+   },
+   "resources": {
+    "start": {
+     "t": 1790586071.1934867,
+     "tag": "ingest:start",
+     "cpu_percent": 0.19,
+     "memory": "84.02MiB",
+     "pids": 6,
+     "rss_kib": 110748,
+     "threads": 6,
+     "open_fds": 19,
+     "db": {
+      "asic_load_runtime:idle": 5,
+      "postgres:active": 1
+     }
+    },
+    "end": {
+     "t": 1790586136.9157248,
+     "tag": "ingest:end",
+     "cpu_percent": 0.3,
+     "memory": "87.96MiB",
+     "pids": 6,
+     "rss_kib": 114096,
+     "threads": 6,
+     "open_fds": 76,
+     "db": {
+      "asic_load_runtime:idle": 5,
+      "postgres:active": 1
+     }
+    }
+   }
+  },
+  "burst": {
+   "concurrency": 96,
+   "requests": 1123,
+   "wall_seconds": 17.86,
+   "responses_per_second": 62.88,
+   "successful_per_second": 58.34,
+   "classified_rejections_per_second": 4.54,
+   "classified_rejections": 81,
+   "throughput_rps": 58.34,
+   "error_rate": 0.07213,
+   "statuses": {
+    "200": 1042,
+    "503": 81
+   },
+   "p50_ms": 591.0,
+   "p95_ms": 5330.15,
+   "p99_ms": 6233.13,
+   "max_ms": 6506.37,
+   "mean_ms": 1324.01,
+   "per_operation": {
+    "admin.tools": {
+     "count": 46,
+     "errors": 0,
+     "p50_ms": 379.76,
+     "p95_ms": 1426.6,
+     "p99_ms": 1587.29
+    },
+    "approvals.pending": {
+     "count": 82,
+     "errors": 0,
+     "p50_ms": 529.42,
+     "p95_ms": 1371.32,
+     "p99_ms": 1448.55
+    },
+    "evaluation.suite_runs": {
+     "count": 49,
+     "errors": 0,
+     "p50_ms": 495.21,
+     "p95_ms": 1516.34,
+     "p99_ms": 1641.82
+    },
+    "incidents.actions": {
+     "count": 51,
+     "errors": 0,
+     "p50_ms": 386.98,
+     "p95_ms": 1266.54,
+     "p99_ms": 1444.45
+    },
+    "incidents.detail": {
+     "count": 184,
+     "errors": 0,
+     "p50_ms": 427.68,
+     "p95_ms": 1322.83,
+     "p99_ms": 1454.28
+    },
+    "incidents.evidence": {
+     "count": 41,
+     "errors": 0,
+     "p50_ms": 667.72,
+     "p95_ms": 1392.94,
+     "p99_ms": 1684.44
+    },
+    "incidents.hypotheses": {
+     "count": 63,
+     "errors": 0,
+     "p50_ms": 502.59,
+     "p95_ms": 1433.22,
+     "p99_ms": 1511.85
+    },
+    "incidents.list": {
+     "count": 271,
+     "errors": 0,
+     "p50_ms": 486.52,
+     "p95_ms": 1408.91,
+     "p99_ms": 1660.59
+    },
+    "incidents.timeline": {
+     "count": 32,
+     "errors": 0,
+     "p50_ms": 457.53,
+     "p95_ms": 1239.57,
+     "p99_ms": 1736.57
+    },
+    "ingest.alert": {
+     "count": 192,
+     "errors": 81,
+     "p50_ms": 5220.98,
+     "p95_ms": 6236.61,
+     "p99_ms": 6388.94
+    },
+    "livez": {
+     "count": 46,
+     "errors": 0,
+     "p50_ms": 178.35,
+     "p95_ms": 907.13,
+     "p99_ms": 933.06
+    },
+    "readyz": {
+     "count": 66,
+     "errors": 0,
+     "p50_ms": 174.0,
+     "p95_ms": 699.59,
+     "p99_ms": 721.44
+    }
+   },
+   "recovery": {
+    "concurrency": 4,
+    "requests": 816,
+    "wall_seconds": 10.01,
+    "responses_per_second": 81.48,
+    "successful_per_second": 81.48,
+    "classified_rejections_per_second": 0.0,
+    "classified_rejections": 0,
+    "throughput_rps": 81.48,
+    "error_rate": 0.0,
+    "statuses": {
+     "200": 816
+    },
+    "p50_ms": 49.04,
+    "p95_ms": 70.57,
+    "p99_ms": 90.36,
+    "max_ms": 223.55,
+    "mean_ms": 48.97,
+    "per_operation": {
+     "admin.tools": {
+      "count": 42,
+      "errors": 0,
+      "p50_ms": 49.04,
+      "p95_ms": 70.06,
+      "p99_ms": 78.76
+     },
+     "approvals.pending": {
+      "count": 67,
+      "errors": 0,
+      "p50_ms": 50.14,
+      "p95_ms": 65.02,
+      "p99_ms": 66.03
+     },
+     "evaluation.suite_runs": {
+      "count": 42,
+      "errors": 0,
+      "p50_ms": 45.91,
+      "p95_ms": 68.36,
+      "p99_ms": 139.71
+     },
+     "incidents.actions": {
+      "count": 39,
+      "errors": 0,
+      "p50_ms": 50.99,
+      "p95_ms": 71.71,
+      "p99_ms": 82.99
+     },
+     "incidents.detail": {
+      "count": 168,
+      "errors": 0,
+      "p50_ms": 49.41,
+      "p95_ms": 70.43,
+      "p99_ms": 80.3
+     },
+     "incidents.evidence": {
+      "count": 41,
+      "errors": 0,
+      "p50_ms": 50.93,
+      "p95_ms": 70.95,
+      "p99_ms": 85.77
+     },
+     "incidents.hypotheses": {
+      "count": 43,
+      "errors": 0,
+      "p50_ms": 49.92,
+      "p95_ms": 69.52,
+      "p99_ms": 79.95
+     },
+     "incidents.list": {
+      "count": 247,
+      "errors": 0,
+      "p50_ms": 50.34,
+      "p95_ms": 74.17,
+      "p99_ms": 116.0
+     },
+     "incidents.timeline": {
+      "count": 54,
+      "errors": 0,
+      "p50_ms": 51.84,
+      "p95_ms": 70.73,
+      "p99_ms": 73.67
+     },
+     "livez": {
+      "count": 37,
+      "errors": 0,
+      "p50_ms": 12.57,
+      "p95_ms": 25.17,
+      "p99_ms": 223.55
+     },
+     "readyz": {
+      "count": 36,
+      "errors": 0,
+      "p50_ms": 9.99,
+      "p95_ms": 18.86,
+      "p99_ms": 29.93
+     }
+    }
+   },
+   "resources": {
+    "start": {
+     "t": 1790586139.046463,
+     "tag": "burst:start",
+     "cpu_percent": 1.42,
+     "memory": "88.2MiB",
+     "pids": 6,
+     "rss_kib": 114096,
+     "threads": 6,
+     "open_fds": 32,
+     "db": {
+      "asic_load_runtime:idle": 5,
+      "postgres:active": 1
+     }
+    },
+    "end": {
+     "t": 1790586174.0327334,
+     "tag": "burst:end",
+     "cpu_percent": 2.83,
+     "memory": "91.84MiB",
+     "pids": 7,
+     "rss_kib": 117880,
+     "threads": 7,
+     "open_fds": 16,
+     "db": {
+      "asic_load_runtime:idle": 5,
+      "postgres:active": 1
+     }
+    }
+   }
+  },
+  "concurrency": {
+   "ingestion": {
+    "requests": 60,
+    "wall_seconds": 3.14,
+    "responses_per_second": 19.1,
+    "successful_per_second": 19.1,
+    "classified_rejections_per_second": 0.0,
+    "classified_rejections": 0,
+    "throughput_rps": 19.1,
+    "error_rate": 0.0,
+    "statuses": {
+     "200": 60
+    },
+    "p50_ms": 763.6,
+    "p95_ms": 960.46,
+    "p99_ms": 1018.01,
+    "max_ms": 1106.38,
+    "mean_ms": 754.63,
+    "per_operation": {
+     "ingest.alert": {
+      "count": 60,
+      "errors": 0,
+      "p50_ms": 763.6,
+      "p95_ms": 960.46,
+      "p99_ms": 1018.01
+     }
+    }
+   },
+   "dispatched": 40,
+   "workers": 8,
+   "outcomes": {
+    "completed": 40
+   },
+   "wall_seconds": 11.94,
+   "runs_per_minute": 201.0,
+   "run_seconds_p50": 2.335,
+   "run_seconds_p95": 3.084,
+   "run_seconds_p99": 3.662,
+   "run_seconds_max": 3.662,
+   "resources": {
+    "start": {
+     "t": 1790586175.7412727,
+     "tag": "concurrency:start",
+     "cpu_percent": 0.25,
+     "memory": "92.25MiB",
+     "pids": 7,
+     "rss_kib": 117880,
+     "threads": 7,
+     "open_fds": 16,
+     "db": {
+      "asic_load_runtime:idle": 5,
+      "postgres:active": 1
+     }
+    },
+    "end": {
+     "t": 1790586197.0918093,
+     "tag": "concurrency:end",
+     "cpu_percent": 0.28,
+     "memory": "91.83MiB",
+     "pids": 15,
+     "rss_kib": 118108,
+     "threads": 15,
+     "open_fds": 12,
+     "db": {
+      "asic_load_runtime:idle": 5,
+      "postgres:active": 1
+     }
+    }
+   }
+  },
+  "soak": {
+   "target_rps": 20,
+   "offered_rps": 20,
+   "scheduled": 12000,
+   "dropped": 0,
+   "requests": 12000,
+   "wall_seconds": 600.0,
+   "responses_per_second": 20.0,
+   "successful_per_second": 20.0,
+   "classified_rejections_per_second": 0.0,
+   "classified_rejections": 0,
+   "throughput_rps": 20.0,
+   "error_rate": 0.0,
+   "statuses": {
+    "200": 12000
+   },
+   "p50_ms": 25.0,
+   "p95_ms": 106.0,
+   "p99_ms": 134.0,
+   "max_ms": 241.0,
+   "mean_ms": 33.95,
+   "per_operation": {
+    "admin.tools": {
+     "count": 482,
+     "errors": 0,
+     "p50_ms": 25.0,
+     "p95_ms": 44.0,
+     "p99_ms": 59.0
+    },
+    "approvals.pending": {
+     "count": 1014,
+     "errors": 0,
+     "p50_ms": 22.0,
+     "p95_ms": 37.0,
+     "p99_ms": 47.0
+    },
+    "evaluation.suite_runs": {
+     "count": 497,
+     "errors": 0,
+     "p50_ms": 22.0,
+     "p95_ms": 37.0,
+     "p99_ms": 53.0
+    },
+    "incidents.actions": {
+     "count": 487,
+     "errors": 0,
+     "p50_ms": 22.0,
+     "p95_ms": 37.0,
+     "p99_ms": 44.0
+    },
+    "incidents.detail": {
+     "count": 2063,
+     "errors": 0,
+     "p50_ms": 22.0,
+     "p95_ms": 34.0,
+     "p99_ms": 44.0
+    },
+    "incidents.evidence": {
+     "count": 494,
+     "errors": 0,
+     "p50_ms": 22.0,
+     "p95_ms": 37.0,
+     "p99_ms": 44.0
+    },
+    "incidents.hypotheses": {
+     "count": 538,
+     "errors": 0,
+     "p50_ms": 22.0,
+     "p95_ms": 37.0,
+     "p99_ms": 47.0
+    },
+    "incidents.list": {
+     "count": 2993,
+     "errors": 0,
+     "p50_ms": 25.0,
+     "p95_ms": 41.0,
+     "p99_ms": 53.0
+    },
+    "incidents.timeline": {
+     "count": 524,
+     "errors": 0,
+     "p50_ms": 25.0,
+     "p95_ms": 41.0,
+     "p99_ms": 56.0
+    },
+    "ingest.alert": {
+     "count": 1915,
+     "errors": 0,
+     "p50_ms": 97.0,
+     "p95_ms": 141.0,
+     "p99_ms": 169.0
+    },
+    "livez": {
+     "count": 499,
+     "errors": 0,
+     "p50_ms": 6.0,
+     "p95_ms": 19.0,
+     "p99_ms": 22.0
+    },
+    "readyz": {
+     "count": 494,
+     "errors": 0,
+     "p50_ms": 6.0,
+     "p95_ms": 22.0,
+     "p99_ms": 31.0
+    }
+   },
+   "resources": {
+    "start": {
+     "t": 1790586198.3347726,
+     "tag": "soak:start",
+     "cpu_percent": 0.24,
+     "memory": "92.52MiB",
+     "pids": 15,
+     "rss_kib": 118108,
+     "threads": 15,
+     "open_fds": 12,
+     "db": {
+      "asic_load_runtime:idle": 5,
+      "postgres:active": 1
+     }
+    },
+    "end": {
+     "t": 1790586800.4358032,
+     "tag": "soak:end",
+     "cpu_percent": 0.28,
+     "memory": "91.34MiB",
+     "pids": 4,
+     "rss_kib": 117616,
+     "threads": 4,
+     "open_fds": 23,
+     "db": {
+      "asic_load_runtime:idle": 5,
+      "postgres:active": 1
+     }
+    }
+   }
+  }
+ },
+ "samples": [
+  {
+   "t": 1790585879.4461696,
+   "tag": "before",
+   "cpu_percent": 2.2,
+   "memory": "85.15MiB",
+   "pids": 3,
+   "rss_kib": 107612,
+   "threads": 2,
+   "open_fds": 8,
+   "db": {
+    "asic_load_runtime:idle": 1,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790585881.6368124,
+   "tag": "smoke:start",
+   "cpu_percent": 0.21,
+   "memory": "81.56MiB",
+   "pids": 2,
+   "rss_kib": 107764,
+   "threads": 2,
+   "open_fds": 9,
+   "db": {
+    "asic_load_runtime:idle": 1,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790585883.3756866,
+   "tag": "smoke:end",
+   "cpu_percent": 0.22,
+   "memory": "81.7MiB",
+   "pids": 2,
+   "rss_kib": 107880,
+   "threads": 2,
+   "open_fds": 9,
+   "db": {
+    "asic_load_runtime:idle": 1,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790585884.8192596,
+   "tag": "capacity:start",
+   "cpu_percent": 0.23,
+   "memory": "81.54MiB",
+   "pids": 2,
+   "rss_kib": 107880,
+   "threads": 2,
+   "open_fds": 9,
+   "db": {
+    "asic_load_runtime:idle": 1,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790585885.6581302,
+   "tag": "periodic",
+   "cpu_percent": 59.13,
+   "memory": "82.37MiB",
+   "pids": 2,
+   "rss_kib": 108096,
+   "threads": 2,
+   "open_fds": 10,
+   "db": {
+    "asic_load_runtime:idle in transaction": 1,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790585892.8524945,
+   "tag": "periodic",
+   "cpu_percent": 68.48,
+   "memory": "82.85MiB",
+   "pids": 2,
+   "rss_kib": 108784,
+   "threads": 2,
+   "open_fds": 9,
+   "db": {
+    "asic_load_runtime:idle in transaction": 1,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790585899.0456514,
+   "tag": "periodic",
+   "cpu_percent": 68.11,
+   "memory": "83.39MiB",
+   "pids": 2,
+   "rss_kib": 109156,
+   "threads": 2,
+   "open_fds": 9,
+   "db": {
+    "asic_load_runtime:idle": 1,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790585905.2735507,
+   "tag": "periodic",
+   "cpu_percent": 66.45,
+   "memory": "83.54MiB",
+   "pids": 2,
+   "rss_kib": 109412,
+   "threads": 2,
+   "open_fds": 9,
+   "db": {
+    "asic_load_runtime:idle": 1,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790585911.4483383,
+   "tag": "periodic",
+   "cpu_percent": 101.62,
+   "memory": "84.4MiB",
+   "pids": 4,
+   "rss_kib": 110052,
+   "threads": 4,
+   "open_fds": 11,
+   "db": {
+    "asic_load_runtime:idle": 2,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790585917.6599755,
+   "tag": "periodic",
+   "cpu_percent": 100.95,
+   "memory": "84.02MiB",
+   "pids": 4,
+   "rss_kib": 109984,
+   "threads": 4,
+   "open_fds": 11,
+   "db": {
+    "asic_load_runtime:active": 1,
+    "asic_load_runtime:idle in transaction": 1,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790585923.8607037,
+   "tag": "periodic",
+   "cpu_percent": 102.91,
+   "memory": "84.2MiB",
+   "pids": 4,
+   "rss_kib": 110048,
+   "threads": 4,
+   "open_fds": 11,
+   "db": {
+    "asic_load_runtime:idle": 1,
+    "asic_load_runtime:idle in transaction": 1,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790585930.0588012,
+   "tag": "periodic",
+   "cpu_percent": 111.43,
+   "memory": "85.14MiB",
+   "pids": 8,
+   "rss_kib": 110616,
+   "threads": 8,
+   "open_fds": 15,
+   "db": {
+    "asic_load_runtime:idle": 3,
+    "asic_load_runtime:idle in transaction": 1,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790585936.2523887,
+   "tag": "periodic",
+   "cpu_percent": 109.62,
+   "memory": "85.12MiB",
+   "pids": 8,
+   "rss_kib": 110716,
+   "threads": 8,
+   "open_fds": 15,
+   "db": {
+    "asic_load_runtime:idle": 2,
+    "asic_load_runtime:idle in transaction": 2,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790585942.4542797,
+   "tag": "periodic",
+   "cpu_percent": 108.77,
+   "memory": "85MiB",
+   "pids": 8,
+   "rss_kib": 110620,
+   "threads": 8,
+   "open_fds": 15,
+   "db": {
+    "asic_load_runtime:active": 1,
+    "asic_load_runtime:idle": 1,
+    "asic_load_runtime:idle in transaction": 2,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790585946.8222387,
+   "tag": "capacity:end",
+   "cpu_percent": 0.21,
+   "memory": "84.27MiB",
+   "pids": 8,
+   "rss_kib": 110652,
+   "threads": 8,
+   "open_fds": 15,
+   "db": {
+    "asic_load_runtime:idle": 4,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790585948.6574984,
+   "tag": "periodic",
+   "cpu_percent": 0.17,
+   "memory": "84.25MiB",
+   "pids": 8,
+   "rss_kib": 110652,
+   "threads": 8,
+   "open_fds": 15,
+   "db": {
+    "asic_load_runtime:idle": 4,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790585948.000706,
+   "tag": "steady:start",
+   "cpu_percent": 0.17,
+   "memory": "84.25MiB",
+   "pids": 8,
+   "rss_kib": 110652,
+   "threads": 8,
+   "open_fds": 15,
+   "db": {
+    "asic_load_runtime:idle": 4,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790585955.0179327,
+   "tag": "periodic",
+   "cpu_percent": 55.4,
+   "memory": "84.83MiB",
+   "pids": 7,
+   "rss_kib": 110660,
+   "threads": 7,
+   "open_fds": 15,
+   "db": {
+    "asic_load_runtime:idle": 3,
+    "asic_load_runtime:idle in transaction": 1,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790585961.2382712,
+   "tag": "periodic",
+   "cpu_percent": 45.7,
+   "memory": "84.7MiB",
+   "pids": 5,
+   "rss_kib": 110632,
+   "threads": 5,
+   "open_fds": 15,
+   "db": {
+    "asic_load_runtime:idle": 3,
+    "asic_load_runtime:idle in transaction": 1,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790585967.4269087,
+   "tag": "periodic",
+   "cpu_percent": 49.78,
+   "memory": "84.75MiB",
+   "pids": 5,
+   "rss_kib": 110688,
+   "threads": 5,
+   "open_fds": 15,
+   "db": {
+    "asic_load_runtime:idle": 4,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790585973.6166432,
+   "tag": "periodic",
+   "cpu_percent": 38.06,
+   "memory": "84.64MiB",
+   "pids": 5,
+   "rss_kib": 110652,
+   "threads": 5,
+   "open_fds": 15,
+   "db": {
+    "asic_load_runtime:idle": 4,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790585979.821431,
+   "tag": "periodic",
+   "cpu_percent": 48.39,
+   "memory": "84.97MiB",
+   "pids": 4,
+   "rss_kib": 110616,
+   "threads": 4,
+   "open_fds": 16,
+   "db": {
+    "asic_load_runtime:idle": 4,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790585986.0149963,
+   "tag": "periodic",
+   "cpu_percent": 43.42,
+   "memory": "84.6MiB",
+   "pids": 4,
+   "rss_kib": 110616,
+   "threads": 4,
+   "open_fds": 17,
+   "db": {
+    "asic_load_runtime:idle": 4,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790585992.2033687,
+   "tag": "periodic",
+   "cpu_percent": 56.48,
+   "memory": "84.73MiB",
+   "pids": 5,
+   "rss_kib": 110648,
+   "threads": 5,
+   "open_fds": 18,
+   "db": {
+    "asic_load_runtime:idle": 4,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790585998.38395,
+   "tag": "periodic",
+   "cpu_percent": 51.81,
+   "memory": "84.46MiB",
+   "pids": 5,
+   "rss_kib": 110652,
+   "threads": 5,
+   "open_fds": 18,
+   "db": {
+    "asic_load_runtime:idle": 3,
+    "asic_load_runtime:idle in transaction": 1,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586004.5816643,
+   "tag": "periodic",
+   "cpu_percent": 43.54,
+   "memory": "84.18MiB",
+   "pids": 4,
+   "rss_kib": 110628,
+   "threads": 4,
+   "open_fds": 18,
+   "db": {
+    "asic_load_runtime:idle": 4,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586010.7619865,
+   "tag": "periodic",
+   "cpu_percent": 47.74,
+   "memory": "84.62MiB",
+   "pids": 4,
+   "rss_kib": 110612,
+   "threads": 4,
+   "open_fds": 18,
+   "db": {
+    "asic_load_runtime:idle": 3,
+    "asic_load_runtime:idle in transaction": 1,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586016.951898,
+   "tag": "periodic",
+   "cpu_percent": 33.75,
+   "memory": "84.83MiB",
+   "pids": 4,
+   "rss_kib": 110612,
+   "threads": 4,
+   "open_fds": 18,
+   "db": {
+    "asic_load_runtime:idle": 3,
+    "asic_load_runtime:idle in transaction": 1,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586023.1285512,
+   "tag": "periodic",
+   "cpu_percent": 44.07,
+   "memory": "84.9MiB",
+   "pids": 4,
+   "rss_kib": 110620,
+   "threads": 4,
+   "open_fds": 18,
+   "db": {
+    "asic_load_runtime:idle": 4,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586029.3459568,
+   "tag": "periodic",
+   "cpu_percent": 46.35,
+   "memory": "84.64MiB",
+   "pids": 4,
+   "rss_kib": 110628,
+   "threads": 4,
+   "open_fds": 18,
+   "db": {
+    "asic_load_runtime:active": 1,
+    "asic_load_runtime:idle": 3,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586035.5586276,
+   "tag": "periodic",
+   "cpu_percent": 48.18,
+   "memory": "84.75MiB",
+   "pids": 5,
+   "rss_kib": 110668,
+   "threads": 5,
+   "open_fds": 19,
+   "db": {
+    "asic_load_runtime:idle": 3,
+    "asic_load_runtime:idle in transaction": 1,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586041.7653544,
+   "tag": "periodic",
+   "cpu_percent": 47.42,
+   "memory": "84.89MiB",
+   "pids": 6,
+   "rss_kib": 110680,
+   "threads": 6,
+   "open_fds": 19,
+   "db": {
+    "asic_load_runtime:idle": 3,
+    "asic_load_runtime:idle in transaction": 1,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586047.9412806,
+   "tag": "periodic",
+   "cpu_percent": 39.19,
+   "memory": "84.41MiB",
+   "pids": 5,
+   "rss_kib": 110660,
+   "threads": 5,
+   "open_fds": 19,
+   "db": {
+    "asic_load_runtime:idle": 3,
+    "asic_load_runtime:idle in transaction": 1,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586054.119032,
+   "tag": "periodic",
+   "cpu_percent": 38.23,
+   "memory": "84.87MiB",
+   "pids": 5,
+   "rss_kib": 110660,
+   "threads": 5,
+   "open_fds": 19,
+   "db": {
+    "asic_load_runtime:idle": 4,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586060.3116012,
+   "tag": "periodic",
+   "cpu_percent": 50.57,
+   "memory": "84.68MiB",
+   "pids": 4,
+   "rss_kib": 110660,
+   "threads": 4,
+   "open_fds": 19,
+   "db": {
+    "asic_load_runtime:idle": 3,
+    "asic_load_runtime:idle in transaction": 1,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586066.4821796,
+   "tag": "periodic",
+   "cpu_percent": 41.42,
+   "memory": "84.51MiB",
+   "pids": 4,
+   "rss_kib": 110668,
+   "threads": 4,
+   "open_fds": 19,
+   "db": {
+    "asic_load_runtime:idle": 4,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586070.0243192,
+   "tag": "steady:end",
+   "cpu_percent": 0.26,
+   "memory": "84.8MiB",
+   "pids": 6,
+   "rss_kib": 110748,
+   "threads": 6,
+   "open_fds": 19,
+   "db": {
+    "asic_load_runtime:idle": 5,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586071.1934867,
+   "tag": "ingest:start",
+   "cpu_percent": 0.19,
+   "memory": "84.02MiB",
+   "pids": 6,
+   "rss_kib": 110748,
+   "threads": 6,
+   "open_fds": 19,
+   "db": {
+    "asic_load_runtime:idle": 5,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586072.6801224,
+   "tag": "periodic",
+   "cpu_percent": 82.44,
+   "memory": "85.46MiB",
+   "pids": 7,
+   "rss_kib": 110920,
+   "threads": 7,
+   "open_fds": 42,
+   "db": {
+    "asic_load_runtime:active": 2,
+    "asic_load_runtime:idle": 3,
+    "asic_load_runtime:idle in transaction": 1,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586079.214327,
+   "tag": "periodic",
+   "cpu_percent": 92.63,
+   "memory": "87.88MiB",
+   "pids": 8,
+   "rss_kib": 113300,
+   "threads": 8,
+   "open_fds": 78,
+   "db": {
+    "asic_load_runtime:active": 2,
+    "asic_load_runtime:idle": 2,
+    "asic_load_runtime:idle in transaction": 3,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586085.5334284,
+   "tag": "periodic",
+   "cpu_percent": 90.1,
+   "memory": "88.16MiB",
+   "pids": 6,
+   "rss_kib": 113820,
+   "threads": 6,
+   "open_fds": 78,
+   "db": {
+    "asic_load_runtime:active": 3,
+    "asic_load_runtime:idle": 3,
+    "asic_load_runtime:idle in transaction": 1,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586091.7985826,
+   "tag": "periodic",
+   "cpu_percent": 89.81,
+   "memory": "88.45MiB",
+   "pids": 7,
+   "rss_kib": 113840,
+   "threads": 7,
+   "open_fds": 78,
+   "db": {
+    "asic_load_runtime:active": 3,
+    "asic_load_runtime:idle": 3,
+    "asic_load_runtime:idle in transaction": 1,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586098.1104536,
+   "tag": "periodic",
+   "cpu_percent": 89.86,
+   "memory": "88.4MiB",
+   "pids": 7,
+   "rss_kib": 113880,
+   "threads": 7,
+   "open_fds": 78,
+   "db": {
+    "asic_load_runtime:active": 2,
+    "asic_load_runtime:idle": 4,
+    "asic_load_runtime:idle in transaction": 1,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586104.379556,
+   "tag": "periodic",
+   "cpu_percent": 87.61,
+   "memory": "88.51MiB",
+   "pids": 6,
+   "rss_kib": 113868,
+   "threads": 6,
+   "open_fds": 78,
+   "db": {
+    "asic_load_runtime:active": 2,
+    "asic_load_runtime:idle": 3,
+    "asic_load_runtime:idle in transaction": 2,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586110.6460662,
+   "tag": "periodic",
+   "cpu_percent": 88.73,
+   "memory": "88.48MiB",
+   "pids": 6,
+   "rss_kib": 113872,
+   "threads": 6,
+   "open_fds": 78,
+   "db": {
+    "asic_load_runtime:active": 2,
+    "asic_load_runtime:idle": 2,
+    "asic_load_runtime:idle in transaction": 3,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586116.9363036,
+   "tag": "periodic",
+   "cpu_percent": 89.89,
+   "memory": "88.26MiB",
+   "pids": 6,
+   "rss_kib": 113880,
+   "threads": 6,
+   "open_fds": 78,
+   "db": {
+    "asic_load_runtime:active": 2,
+    "asic_load_runtime:idle": 4,
+    "asic_load_runtime:idle in transaction": 1,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586123.2127383,
+   "tag": "periodic",
+   "cpu_percent": 89.01,
+   "memory": "88.41MiB",
+   "pids": 6,
+   "rss_kib": 113884,
+   "threads": 6,
+   "open_fds": 78,
+   "db": {
+    "asic_load_runtime:active": 3,
+    "asic_load_runtime:idle": 3,
+    "asic_load_runtime:idle in transaction": 1,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586129.4970355,
+   "tag": "periodic",
+   "cpu_percent": 91.05,
+   "memory": "88.37MiB",
+   "pids": 6,
+   "rss_kib": 113888,
+   "threads": 6,
+   "open_fds": 78,
+   "db": {
+    "asic_load_runtime:active": 4,
+    "asic_load_runtime:idle": 3,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586135.7585115,
+   "tag": "periodic",
+   "cpu_percent": 78.57,
+   "memory": "88.27MiB",
+   "pids": 6,
+   "rss_kib": 114096,
+   "threads": 6,
+   "open_fds": 76,
+   "db": {
+    "asic_load_runtime:idle": 5,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586136.9157248,
+   "tag": "ingest:end",
+   "cpu_percent": 0.3,
+   "memory": "87.96MiB",
+   "pids": 6,
+   "rss_kib": 114096,
+   "threads": 6,
+   "open_fds": 76,
+   "db": {
+    "asic_load_runtime:idle": 5,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586139.046463,
+   "tag": "burst:start",
+   "cpu_percent": 1.42,
+   "memory": "88.2MiB",
+   "pids": 6,
+   "rss_kib": 114096,
+   "threads": 6,
+   "open_fds": 32,
+   "db": {
+    "asic_load_runtime:idle": 5,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586142.032716,
+   "tag": "periodic",
+   "cpu_percent": 0.27,
+   "memory": "87.61MiB",
+   "pids": 6,
+   "rss_kib": 114096,
+   "threads": 6,
+   "open_fds": 12,
+   "db": {
+    "asic_load_runtime:idle": 5,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586148.2878304,
+   "tag": "periodic",
+   "cpu_percent": 136.52,
+   "memory": "93.77MiB",
+   "pids": 48,
+   "rss_kib": 118364,
+   "threads": 49,
+   "open_fds": 118,
+   "db": {
+    "asic_load_runtime:idle": 2,
+    "asic_load_runtime:idle in transaction": 13,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586154.578463,
+   "tag": "periodic",
+   "cpu_percent": 116.88,
+   "memory": "95.76MiB",
+   "pids": 49,
+   "rss_kib": 120124,
+   "threads": 49,
+   "open_fds": 118,
+   "db": {
+    "asic_load_runtime:active": 3,
+    "asic_load_runtime:idle": 5,
+    "asic_load_runtime:idle in transaction": 7,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586160.8528717,
+   "tag": "periodic",
+   "cpu_percent": 96.65,
+   "memory": "95.41MiB",
+   "pids": 42,
+   "rss_kib": 119968,
+   "threads": 42,
+   "open_fds": 111,
+   "db": {
+    "asic_load_runtime:active": 2,
+    "asic_load_runtime:idle": 4,
+    "asic_load_runtime:idle in transaction": 2,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586167.1521378,
+   "tag": "periodic",
+   "cpu_percent": 111.75,
+   "memory": "94.75MiB",
+   "pids": 37,
+   "rss_kib": 119680,
+   "threads": 37,
+   "open_fds": 17,
+   "db": {
+    "asic_load_runtime:idle": 4,
+    "asic_load_runtime:idle in transaction": 1,
+    "postgres:active": 1,
+    "None:active": 1
+   }
+  },
+  {
+   "t": 1790586173.4426827,
+   "tag": "periodic",
+   "cpu_percent": 54.66,
+   "memory": "91.96MiB",
+   "pids": 7,
+   "rss_kib": 117880,
+   "threads": 7,
+   "open_fds": 16,
+   "db": {
+    "asic_load_runtime:idle": 5,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586174.0327334,
+   "tag": "burst:end",
+   "cpu_percent": 2.83,
+   "memory": "91.84MiB",
+   "pids": 7,
+   "rss_kib": 117880,
+   "threads": 7,
+   "open_fds": 16,
+   "db": {
+    "asic_load_runtime:idle": 5,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586175.7412727,
+   "tag": "concurrency:start",
+   "cpu_percent": 0.25,
+   "memory": "92.25MiB",
+   "pids": 7,
+   "rss_kib": 117880,
+   "threads": 7,
+   "open_fds": 16,
+   "db": {
+    "asic_load_runtime:idle": 5,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586179.732499,
+   "tag": "periodic",
+   "cpu_percent": 0.23,
+   "memory": "91.84MiB",
+   "pids": 7,
+   "rss_kib": 117880,
+   "threads": 7,
+   "open_fds": 12,
+   "db": {
+    "asic_load_runtime:idle": 5,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586186.0720303,
+   "tag": "periodic",
+   "cpu_percent": 0.23,
+   "memory": "92.47MiB",
+   "pids": 15,
+   "rss_kib": 118108,
+   "threads": 15,
+   "open_fds": 12,
+   "db": {
+    "asic_load_runtime:active": 3,
+    "asic_load_runtime:idle": 12,
+    "asic_load_runtime:idle in transaction": 5,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586192.5665581,
+   "tag": "periodic",
+   "cpu_percent": 0.23,
+   "memory": "91.55MiB",
+   "pids": 15,
+   "rss_kib": 118108,
+   "threads": 15,
+   "open_fds": 12,
+   "db": {
+    "asic_load_runtime:idle": 10,
+    "asic_load_runtime:idle in transaction": 8,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586197.0918093,
+   "tag": "concurrency:end",
+   "cpu_percent": 0.28,
+   "memory": "91.83MiB",
+   "pids": 15,
+   "rss_kib": 118108,
+   "threads": 15,
+   "open_fds": 12,
+   "db": {
+    "asic_load_runtime:idle": 5,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586198.3347726,
+   "tag": "soak:start",
+   "cpu_percent": 0.24,
+   "memory": "92.52MiB",
+   "pids": 15,
+   "rss_kib": 118108,
+   "threads": 15,
+   "open_fds": 12,
+   "db": {
+    "asic_load_runtime:idle": 5,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586198.9759426,
+   "tag": "periodic",
+   "cpu_percent": 0.24,
+   "memory": "92.52MiB",
+   "pids": 15,
+   "rss_kib": 118108,
+   "threads": 15,
+   "open_fds": 12,
+   "db": {
+    "asic_load_runtime:idle": 5,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586205.359099,
+   "tag": "periodic",
+   "cpu_percent": 28.91,
+   "memory": "91.79MiB",
+   "pids": 3,
+   "rss_kib": 117700,
+   "threads": 3,
+   "open_fds": 15,
+   "db": {
+    "asic_load_runtime:idle": 5,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586211.6693773,
+   "tag": "periodic",
+   "cpu_percent": 49.54,
+   "memory": "92.25MiB",
+   "pids": 3,
+   "rss_kib": 117708,
+   "threads": 3,
+   "open_fds": 15,
+   "db": {
+    "asic_load_runtime:idle": 5,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586217.93504,
+   "tag": "periodic",
+   "cpu_percent": 34.0,
+   "memory": "91.51MiB",
+   "pids": 4,
+   "rss_kib": 117604,
+   "threads": 4,
+   "open_fds": 16,
+   "db": {
+    "asic_load_runtime:idle": 5,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586224.1877186,
+   "tag": "periodic",
+   "cpu_percent": 34.19,
+   "memory": "91.42MiB",
+   "pids": 4,
+   "rss_kib": 117604,
+   "threads": 4,
+   "open_fds": 16,
+   "db": {
+    "asic_load_runtime:idle": 5,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586230.4532974,
+   "tag": "periodic",
+   "cpu_percent": 36.12,
+   "memory": "91.28MiB",
+   "pids": 3,
+   "rss_kib": 117584,
+   "threads": 3,
+   "open_fds": 16,
+   "db": {
+    "asic_load_runtime:idle": 5,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586236.6913865,
+   "tag": "periodic",
+   "cpu_percent": 36.05,
+   "memory": "91.77MiB",
+   "pids": 4,
+   "rss_kib": 117648,
+   "threads": 4,
+   "open_fds": 16,
+   "db": {
+    "asic_load_runtime:idle": 4,
+    "asic_load_runtime:idle in transaction": 1,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586242.9705057,
+   "tag": "periodic",
+   "cpu_percent": 34.2,
+   "memory": "91.71MiB",
+   "pids": 4,
+   "rss_kib": 117604,
+   "threads": 4,
+   "open_fds": 16,
+   "db": {
+    "asic_load_runtime:idle": 5,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586249.2300534,
+   "tag": "periodic",
+   "cpu_percent": 28.97,
+   "memory": "91.94MiB",
+   "pids": 4,
+   "rss_kib": 117648,
+   "threads": 4,
+   "open_fds": 16,
+   "db": {
+    "asic_load_runtime:idle": 5,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586255.4919775,
+   "tag": "periodic",
+   "cpu_percent": 45.24,
+   "memory": "92MiB",
+   "pids": 4,
+   "rss_kib": 117648,
+   "threads": 4,
+   "open_fds": 16,
+   "db": {
+    "asic_load_runtime:idle": 4,
+    "asic_load_runtime:idle in transaction": 1,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586261.7671394,
+   "tag": "periodic",
+   "cpu_percent": 29.8,
+   "memory": "91.45MiB",
+   "pids": 4,
+   "rss_kib": 117656,
+   "threads": 4,
+   "open_fds": 17,
+   "db": {
+    "asic_load_runtime:idle": 5,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586268.0350766,
+   "tag": "periodic",
+   "cpu_percent": 40.66,
+   "memory": "91.78MiB",
+   "pids": 4,
+   "rss_kib": 117664,
+   "threads": 4,
+   "open_fds": 17,
+   "db": {
+    "asic_load_runtime:idle": 5,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586274.318423,
+   "tag": "periodic",
+   "cpu_percent": 53.21,
+   "memory": "91.69MiB",
+   "pids": 4,
+   "rss_kib": 117664,
+   "threads": 4,
+   "open_fds": 17,
+   "db": {
+    "asic_load_runtime:idle": 5,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586280.5704267,
+   "tag": "periodic",
+   "cpu_percent": 36.57,
+   "memory": "91.66MiB",
+   "pids": 5,
+   "rss_kib": 117668,
+   "threads": 5,
+   "open_fds": 18,
+   "db": {
+    "asic_load_runtime:idle": 4,
+    "asic_load_runtime:idle in transaction": 1,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586286.8672023,
+   "tag": "periodic",
+   "cpu_percent": 29.86,
+   "memory": "91.69MiB",
+   "pids": 3,
+   "rss_kib": 117604,
+   "threads": 3,
+   "open_fds": 18,
+   "db": {
+    "asic_load_runtime:idle": 5,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586293.1522932,
+   "tag": "periodic",
+   "cpu_percent": 38.37,
+   "memory": "91.18MiB",
+   "pids": 3,
+   "rss_kib": 117604,
+   "threads": 3,
+   "open_fds": 18,
+   "db": {
+    "asic_load_runtime:idle": 5,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586299.4017656,
+   "tag": "periodic",
+   "cpu_percent": 32.9,
+   "memory": "91.73MiB",
+   "pids": 3,
+   "rss_kib": 117604,
+   "threads": 3,
+   "open_fds": 18,
+   "db": {
+    "asic_load_runtime:active": 1,
+    "asic_load_runtime:idle": 4,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586305.6656885,
+   "tag": "periodic",
+   "cpu_percent": 28.36,
+   "memory": "91.29MiB",
+   "pids": 3,
+   "rss_kib": 117604,
+   "threads": 3,
+   "open_fds": 18,
+   "db": {
+    "asic_load_runtime:idle": 3,
+    "asic_load_runtime:idle in transaction": 2,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586311.9137127,
+   "tag": "periodic",
+   "cpu_percent": 28.78,
+   "memory": "91.59MiB",
+   "pids": 4,
+   "rss_kib": 117624,
+   "threads": 4,
+   "open_fds": 18,
+   "db": {
+    "asic_load_runtime:idle": 4,
+    "asic_load_runtime:idle in transaction": 1,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586318.1771483,
+   "tag": "periodic",
+   "cpu_percent": 35.87,
+   "memory": "91.77MiB",
+   "pids": 4,
+   "rss_kib": 117632,
+   "threads": 4,
+   "open_fds": 18,
+   "db": {
+    "asic_load_runtime:idle": 5,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586324.4221568,
+   "tag": "periodic",
+   "cpu_percent": 40.72,
+   "memory": "91.56MiB",
+   "pids": 4,
+   "rss_kib": 117636,
+   "threads": 4,
+   "open_fds": 18,
+   "db": {
+    "asic_load_runtime:active": 1,
+    "asic_load_runtime:idle": 4,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586330.6767004,
+   "tag": "periodic",
+   "cpu_percent": 37.8,
+   "memory": "91.22MiB",
+   "pids": 4,
+   "rss_kib": 117644,
+   "threads": 4,
+   "open_fds": 18,
+   "db": {
+    "asic_load_runtime:idle": 5,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586336.9343164,
+   "tag": "periodic",
+   "cpu_percent": 40.41,
+   "memory": "91.57MiB",
+   "pids": 3,
+   "rss_kib": 117628,
+   "threads": 3,
+   "open_fds": 18,
+   "db": {
+    "asic_load_runtime:idle": 5,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586343.2063336,
+   "tag": "periodic",
+   "cpu_percent": 40.96,
+   "memory": "92.05MiB",
+   "pids": 4,
+   "rss_kib": 117620,
+   "threads": 4,
+   "open_fds": 18,
+   "db": {
+    "asic_load_runtime:idle": 5,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586349.4908667,
+   "tag": "periodic",
+   "cpu_percent": 34.89,
+   "memory": "91.32MiB",
+   "pids": 4,
+   "rss_kib": 117620,
+   "threads": 4,
+   "open_fds": 18,
+   "db": {
+    "asic_load_runtime:idle": 5,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586355.7957606,
+   "tag": "periodic",
+   "cpu_percent": 36.23,
+   "memory": "91.68MiB",
+   "pids": 4,
+   "rss_kib": 117620,
+   "threads": 4,
+   "open_fds": 18,
+   "db": {
+    "asic_load_runtime:idle": 5,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586362.0468528,
+   "tag": "periodic",
+   "cpu_percent": 32.1,
+   "memory": "91.4MiB",
+   "pids": 4,
+   "rss_kib": 117620,
+   "threads": 4,
+   "open_fds": 18,
+   "db": {
+    "asic_load_runtime:idle": 5,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586368.2932594,
+   "tag": "periodic",
+   "cpu_percent": 30.22,
+   "memory": "91.51MiB",
+   "pids": 4,
+   "rss_kib": 117620,
+   "threads": 4,
+   "open_fds": 18,
+   "db": {
+    "asic_load_runtime:idle": 5,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586374.5522327,
+   "tag": "periodic",
+   "cpu_percent": 42.28,
+   "memory": "91.34MiB",
+   "pids": 3,
+   "rss_kib": 117604,
+   "threads": 3,
+   "open_fds": 18,
+   "db": {
+    "asic_load_runtime:idle": 5,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586380.9628532,
+   "tag": "periodic",
+   "cpu_percent": 34.93,
+   "memory": "91.68MiB",
+   "pids": 4,
+   "rss_kib": 117628,
+   "threads": 4,
+   "open_fds": 18,
+   "db": {
+    "asic_load_runtime:idle": 5,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586387.2454407,
+   "tag": "periodic",
+   "cpu_percent": 31.8,
+   "memory": "91.62MiB",
+   "pids": 4,
+   "rss_kib": 117636,
+   "threads": 4,
+   "open_fds": 18,
+   "db": {
+    "asic_load_runtime:idle": 4,
+    "asic_load_runtime:idle in transaction": 1,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586393.5158782,
+   "tag": "periodic",
+   "cpu_percent": 27.89,
+   "memory": "91.71MiB",
+   "pids": 3,
+   "rss_kib": 117620,
+   "threads": 3,
+   "open_fds": 18,
+   "db": {
+    "asic_load_runtime:idle": 4,
+    "asic_load_runtime:idle in transaction": 1,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586399.805333,
+   "tag": "periodic",
+   "cpu_percent": 36.07,
+   "memory": "91.54MiB",
+   "pids": 4,
+   "rss_kib": 117644,
+   "threads": 4,
+   "open_fds": 19,
+   "db": {
+    "asic_load_runtime:idle": 3,
+    "asic_load_runtime:idle in transaction": 2,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586406.0706606,
+   "tag": "periodic",
+   "cpu_percent": 26.17,
+   "memory": "91.34MiB",
+   "pids": 5,
+   "rss_kib": 117644,
+   "threads": 5,
+   "open_fds": 20,
+   "db": {
+    "asic_load_runtime:idle": 3,
+    "asic_load_runtime:idle in transaction": 2,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586412.354114,
+   "tag": "periodic",
+   "cpu_percent": 58.85,
+   "memory": "91.35MiB",
+   "pids": 4,
+   "rss_kib": 117624,
+   "threads": 4,
+   "open_fds": 20,
+   "db": {
+    "asic_load_runtime:idle": 5,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586418.6216376,
+   "tag": "periodic",
+   "cpu_percent": 28.7,
+   "memory": "91.67MiB",
+   "pids": 4,
+   "rss_kib": 117624,
+   "threads": 4,
+   "open_fds": 20,
+   "db": {
+    "asic_load_runtime:idle": 5,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586424.8787365,
+   "tag": "periodic",
+   "cpu_percent": 30.46,
+   "memory": "91.81MiB",
+   "pids": 4,
+   "rss_kib": 117624,
+   "threads": 4,
+   "open_fds": 20,
+   "db": {
+    "asic_load_runtime:idle": 4,
+    "asic_load_runtime:idle in transaction": 1,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586431.1767669,
+   "tag": "periodic",
+   "cpu_percent": 38.41,
+   "memory": "91.75MiB",
+   "pids": 4,
+   "rss_kib": 117624,
+   "threads": 4,
+   "open_fds": 20,
+   "db": {
+    "asic_load_runtime:idle": 5,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586437.4213393,
+   "tag": "periodic",
+   "cpu_percent": 36.13,
+   "memory": "91.98MiB",
+   "pids": 5,
+   "rss_kib": 117644,
+   "threads": 5,
+   "open_fds": 22,
+   "db": {
+    "asic_load_runtime:idle": 4,
+    "asic_load_runtime:idle in transaction": 1,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586443.6761017,
+   "tag": "periodic",
+   "cpu_percent": 38.79,
+   "memory": "91.67MiB",
+   "pids": 3,
+   "rss_kib": 117612,
+   "threads": 3,
+   "open_fds": 22,
+   "db": {
+    "asic_load_runtime:idle": 4,
+    "asic_load_runtime:idle in transaction": 1,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586449.9688463,
+   "tag": "periodic",
+   "cpu_percent": 33.05,
+   "memory": "91.23MiB",
+   "pids": 4,
+   "rss_kib": 117636,
+   "threads": 4,
+   "open_fds": 22,
+   "db": {
+    "asic_load_runtime:idle": 4,
+    "asic_load_runtime:idle in transaction": 1,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586456.2801175,
+   "tag": "periodic",
+   "cpu_percent": 39.56,
+   "memory": "91.8MiB",
+   "pids": 3,
+   "rss_kib": 117620,
+   "threads": 3,
+   "open_fds": 22,
+   "db": {
+    "asic_load_runtime:idle": 4,
+    "asic_load_runtime:idle in transaction": 1,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586462.532915,
+   "tag": "periodic",
+   "cpu_percent": 29.85,
+   "memory": "91.7MiB",
+   "pids": 4,
+   "rss_kib": 117640,
+   "threads": 4,
+   "open_fds": 22,
+   "db": {
+    "asic_load_runtime:idle": 5,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586468.8131251,
+   "tag": "periodic",
+   "cpu_percent": 37.82,
+   "memory": "91.94MiB",
+   "pids": 4,
+   "rss_kib": 117644,
+   "threads": 4,
+   "open_fds": 22,
+   "db": {
+    "asic_load_runtime:idle": 5,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586475.1156442,
+   "tag": "periodic",
+   "cpu_percent": 29.91,
+   "memory": "91.63MiB",
+   "pids": 4,
+   "rss_kib": 117644,
+   "threads": 4,
+   "open_fds": 22,
+   "db": {
+    "asic_load_runtime:idle": 5,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586481.452007,
+   "tag": "periodic",
+   "cpu_percent": 29.79,
+   "memory": "91.8MiB",
+   "pids": 4,
+   "rss_kib": 117624,
+   "threads": 3,
+   "open_fds": 22,
+   "db": {
+    "asic_load_runtime:idle": 5,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586487.7426069,
+   "tag": "periodic",
+   "cpu_percent": 42.35,
+   "memory": "91.65MiB",
+   "pids": 3,
+   "rss_kib": 117624,
+   "threads": 3,
+   "open_fds": 22,
+   "db": {
+    "asic_load_runtime:idle": 5,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586494.0651517,
+   "tag": "periodic",
+   "cpu_percent": 31.34,
+   "memory": "91.73MiB",
+   "pids": 4,
+   "rss_kib": 117644,
+   "threads": 4,
+   "open_fds": 22,
+   "db": {
+    "asic_load_runtime:idle": 4,
+    "asic_load_runtime:idle in transaction": 1,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586500.3775241,
+   "tag": "periodic",
+   "cpu_percent": 27.83,
+   "memory": "91.88MiB",
+   "pids": 4,
+   "rss_kib": 117644,
+   "threads": 4,
+   "open_fds": 22,
+   "db": {
+    "asic_load_runtime:idle": 5,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586506.6467607,
+   "tag": "periodic",
+   "cpu_percent": 36.41,
+   "memory": "91.36MiB",
+   "pids": 4,
+   "rss_kib": 117636,
+   "threads": 4,
+   "open_fds": 22,
+   "db": {
+    "asic_load_runtime:idle": 4,
+    "asic_load_runtime:idle in transaction": 1,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586512.9100175,
+   "tag": "periodic",
+   "cpu_percent": 43.36,
+   "memory": "91.93MiB",
+   "pids": 10,
+   "rss_kib": 117636,
+   "threads": 4,
+   "open_fds": 22,
+   "db": {
+    "asic_load_runtime:idle": 3,
+    "asic_load_runtime:idle in transaction": 2,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586519.1905594,
+   "tag": "periodic",
+   "cpu_percent": 36.19,
+   "memory": "91.79MiB",
+   "pids": 4,
+   "rss_kib": 117600,
+   "threads": 4,
+   "open_fds": 22,
+   "db": {
+    "asic_load_runtime:idle": 4,
+    "asic_load_runtime:idle in transaction": 1,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586525.4468079,
+   "tag": "periodic",
+   "cpu_percent": 36.59,
+   "memory": "91.19MiB",
+   "pids": 3,
+   "rss_kib": 117580,
+   "threads": 3,
+   "open_fds": 22,
+   "db": {
+    "asic_load_runtime:idle": 5,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586531.6948428,
+   "tag": "periodic",
+   "cpu_percent": 34.96,
+   "memory": "91.21MiB",
+   "pids": 4,
+   "rss_kib": 117600,
+   "threads": 4,
+   "open_fds": 22,
+   "db": {
+    "asic_load_runtime:idle": 5,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586538.0002222,
+   "tag": "periodic",
+   "cpu_percent": 35.74,
+   "memory": "91.83MiB",
+   "pids": 4,
+   "rss_kib": 117604,
+   "threads": 4,
+   "open_fds": 22,
+   "db": {
+    "asic_load_runtime:idle": 4,
+    "asic_load_runtime:idle in transaction": 1,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586544.2724183,
+   "tag": "periodic",
+   "cpu_percent": 40.56,
+   "memory": "91.61MiB",
+   "pids": 4,
+   "rss_kib": 117612,
+   "threads": 4,
+   "open_fds": 22,
+   "db": {
+    "asic_load_runtime:idle": 5,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586550.5115638,
+   "tag": "periodic",
+   "cpu_percent": 48.35,
+   "memory": "91.66MiB",
+   "pids": 4,
+   "rss_kib": 117616,
+   "threads": 4,
+   "open_fds": 22,
+   "db": {
+    "asic_load_runtime:active": 1,
+    "asic_load_runtime:idle": 4,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586556.7608516,
+   "tag": "periodic",
+   "cpu_percent": 32.29,
+   "memory": "91.79MiB",
+   "pids": 4,
+   "rss_kib": 117620,
+   "threads": 4,
+   "open_fds": 22,
+   "db": {
+    "asic_load_runtime:idle": 5,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586563.0337074,
+   "tag": "periodic",
+   "cpu_percent": 41.66,
+   "memory": "91.8MiB",
+   "pids": 4,
+   "rss_kib": 117624,
+   "threads": 4,
+   "open_fds": 22,
+   "db": {
+    "asic_load_runtime:idle": 5,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586569.334201,
+   "tag": "periodic",
+   "cpu_percent": 44.95,
+   "memory": "91.57MiB",
+   "pids": 4,
+   "rss_kib": 117632,
+   "threads": 4,
+   "open_fds": 22,
+   "db": {
+    "asic_load_runtime:idle": 5,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586575.6861951,
+   "tag": "periodic",
+   "cpu_percent": 34.48,
+   "memory": "91.63MiB",
+   "pids": 6,
+   "rss_kib": 117668,
+   "threads": 6,
+   "open_fds": 23,
+   "db": {
+    "asic_load_runtime:idle": 4,
+    "asic_load_runtime:idle in transaction": 1,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586581.962482,
+   "tag": "periodic",
+   "cpu_percent": 34.61,
+   "memory": "91.19MiB",
+   "pids": 4,
+   "rss_kib": 117636,
+   "threads": 4,
+   "open_fds": 23,
+   "db": {
+    "asic_load_runtime:idle": 5,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586588.2219808,
+   "tag": "periodic",
+   "cpu_percent": 39.33,
+   "memory": "91.38MiB",
+   "pids": 4,
+   "rss_kib": 117600,
+   "threads": 4,
+   "open_fds": 23,
+   "db": {
+    "asic_load_runtime:active": 1,
+    "asic_load_runtime:idle": 4,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586594.531395,
+   "tag": "periodic",
+   "cpu_percent": 48.51,
+   "memory": "91.82MiB",
+   "pids": 4,
+   "rss_kib": 117620,
+   "threads": 4,
+   "open_fds": 22,
+   "db": {
+    "asic_load_runtime:idle": 5,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586600.8454063,
+   "tag": "periodic",
+   "cpu_percent": 31.95,
+   "memory": "91.66MiB",
+   "pids": 4,
+   "rss_kib": 117620,
+   "threads": 4,
+   "open_fds": 23,
+   "db": {
+    "asic_load_runtime:idle": 5,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586607.1026495,
+   "tag": "periodic",
+   "cpu_percent": 44.07,
+   "memory": "91.69MiB",
+   "pids": 4,
+   "rss_kib": 117620,
+   "threads": 4,
+   "open_fds": 23,
+   "db": {
+    "asic_load_runtime:active": 1,
+    "asic_load_runtime:idle": 4,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586613.3643255,
+   "tag": "periodic",
+   "cpu_percent": 26.05,
+   "memory": "91.58MiB",
+   "pids": 4,
+   "rss_kib": 117624,
+   "threads": 4,
+   "open_fds": 22,
+   "db": {
+    "asic_load_runtime:idle": 5,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586619.6168349,
+   "tag": "periodic",
+   "cpu_percent": 48.6,
+   "memory": "91.27MiB",
+   "pids": 4,
+   "rss_kib": 117628,
+   "threads": 4,
+   "open_fds": 23,
+   "db": {
+    "asic_load_runtime:active": 1,
+    "asic_load_runtime:idle": 4,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586625.8755054,
+   "tag": "periodic",
+   "cpu_percent": 34.56,
+   "memory": "91.68MiB",
+   "pids": 4,
+   "rss_kib": 117636,
+   "threads": 4,
+   "open_fds": 23,
+   "db": {
+    "asic_load_runtime:idle": 5,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586632.1623418,
+   "tag": "periodic",
+   "cpu_percent": 35.94,
+   "memory": "90.99MiB",
+   "pids": 4,
+   "rss_kib": 117636,
+   "threads": 4,
+   "open_fds": 23,
+   "db": {
+    "asic_load_runtime:idle": 4,
+    "asic_load_runtime:idle in transaction": 1,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586638.4223657,
+   "tag": "periodic",
+   "cpu_percent": 37.1,
+   "memory": "91.59MiB",
+   "pids": 4,
+   "rss_kib": 117636,
+   "threads": 4,
+   "open_fds": 23,
+   "db": {
+    "asic_load_runtime:idle": 4,
+    "asic_load_runtime:idle in transaction": 1,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586644.706868,
+   "tag": "periodic",
+   "cpu_percent": 36.77,
+   "memory": "91.47MiB",
+   "pids": 4,
+   "rss_kib": 117636,
+   "threads": 4,
+   "open_fds": 22,
+   "db": {
+    "asic_load_runtime:idle": 4,
+    "asic_load_runtime:idle in transaction": 1,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586650.9761014,
+   "tag": "periodic",
+   "cpu_percent": 34.02,
+   "memory": "91.84MiB",
+   "pids": 4,
+   "rss_kib": 117636,
+   "threads": 4,
+   "open_fds": 23,
+   "db": {
+    "asic_load_runtime:idle": 4,
+    "asic_load_runtime:idle in transaction": 1,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586657.2493873,
+   "tag": "periodic",
+   "cpu_percent": 26.63,
+   "memory": "91.7MiB",
+   "pids": 4,
+   "rss_kib": 117636,
+   "threads": 4,
+   "open_fds": 23,
+   "db": {
+    "asic_load_runtime:idle": 5,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586663.5071251,
+   "tag": "periodic",
+   "cpu_percent": 59.57,
+   "memory": "91.8MiB",
+   "pids": 4,
+   "rss_kib": 117636,
+   "threads": 4,
+   "open_fds": 23,
+   "db": {
+    "asic_load_runtime:idle": 5,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586669.8099911,
+   "tag": "periodic",
+   "cpu_percent": 33.64,
+   "memory": "92.18MiB",
+   "pids": 4,
+   "rss_kib": 117636,
+   "threads": 4,
+   "open_fds": 23,
+   "db": {
+    "asic_load_runtime:idle": 5,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586676.0916543,
+   "tag": "periodic",
+   "cpu_percent": 36.11,
+   "memory": "91.56MiB",
+   "pids": 4,
+   "rss_kib": 117636,
+   "threads": 4,
+   "open_fds": 23,
+   "db": {
+    "asic_load_runtime:idle": 5,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586682.3693516,
+   "tag": "periodic",
+   "cpu_percent": 38.93,
+   "memory": "91.5MiB",
+   "pids": 4,
+   "rss_kib": 117632,
+   "threads": 4,
+   "open_fds": 23,
+   "db": {
+    "asic_load_runtime:idle": 5,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586688.651714,
+   "tag": "periodic",
+   "cpu_percent": 50.95,
+   "memory": "91.15MiB",
+   "pids": 4,
+   "rss_kib": 117632,
+   "threads": 4,
+   "open_fds": 23,
+   "db": {
+    "asic_load_runtime:idle": 5,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586694.926903,
+   "tag": "periodic",
+   "cpu_percent": 46.88,
+   "memory": "91.28MiB",
+   "pids": 3,
+   "rss_kib": 117612,
+   "threads": 3,
+   "open_fds": 23,
+   "db": {
+    "asic_load_runtime:idle": 4,
+    "asic_load_runtime:idle in transaction": 1,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586701.2431974,
+   "tag": "periodic",
+   "cpu_percent": 30.32,
+   "memory": "91.94MiB",
+   "pids": 4,
+   "rss_kib": 117632,
+   "threads": 4,
+   "open_fds": 23,
+   "db": {
+    "asic_load_runtime:idle": 5,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586707.49777,
+   "tag": "periodic",
+   "cpu_percent": 30.48,
+   "memory": "91.37MiB",
+   "pids": 6,
+   "rss_kib": 117628,
+   "threads": 6,
+   "open_fds": 24,
+   "db": {
+    "asic_load_runtime:idle": 4,
+    "asic_load_runtime:idle in transaction": 1,
+    "postgres:active": 1,
+    "None:active": 1
+   }
+  },
+  {
+   "t": 1790586713.757776,
+   "tag": "periodic",
+   "cpu_percent": 22.52,
+   "memory": "91.62MiB",
+   "pids": 6,
+   "rss_kib": 117672,
+   "threads": 6,
+   "open_fds": 24,
+   "db": {
+    "asic_load_runtime:idle": 4,
+    "asic_load_runtime:idle in transaction": 1,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586720.005842,
+   "tag": "periodic",
+   "cpu_percent": 48.81,
+   "memory": "91.48MiB",
+   "pids": 4,
+   "rss_kib": 117632,
+   "threads": 4,
+   "open_fds": 24,
+   "db": {
+    "asic_load_runtime:idle": 4,
+    "asic_load_runtime:idle in transaction": 1,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586726.345771,
+   "tag": "periodic",
+   "cpu_percent": 47.13,
+   "memory": "91.39MiB",
+   "pids": 3,
+   "rss_kib": 117612,
+   "threads": 3,
+   "open_fds": 24,
+   "db": {
+    "asic_load_runtime:idle": 4,
+    "asic_load_runtime:idle in transaction": 1,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586732.6026807,
+   "tag": "periodic",
+   "cpu_percent": 41.87,
+   "memory": "91.95MiB",
+   "pids": 4,
+   "rss_kib": 117636,
+   "threads": 4,
+   "open_fds": 24,
+   "db": {
+    "asic_load_runtime:idle": 5,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586738.872225,
+   "tag": "periodic",
+   "cpu_percent": 41.34,
+   "memory": "91.78MiB",
+   "pids": 5,
+   "rss_kib": 117640,
+   "threads": 5,
+   "open_fds": 24,
+   "db": {
+    "asic_load_runtime:idle": 4,
+    "asic_load_runtime:idle in transaction": 1,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586745.142641,
+   "tag": "periodic",
+   "cpu_percent": 41.65,
+   "memory": "91.98MiB",
+   "pids": 5,
+   "rss_kib": 117640,
+   "threads": 5,
+   "open_fds": 24,
+   "db": {
+    "asic_load_runtime:idle": 5,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586751.4423952,
+   "tag": "periodic",
+   "cpu_percent": 29.11,
+   "memory": "91.79MiB",
+   "pids": 3,
+   "rss_kib": 117580,
+   "threads": 3,
+   "open_fds": 24,
+   "db": {
+    "asic_load_runtime:idle": 4,
+    "asic_load_runtime:idle in transaction": 1,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586757.7357523,
+   "tag": "periodic",
+   "cpu_percent": 37.87,
+   "memory": "91.84MiB",
+   "pids": 3,
+   "rss_kib": 117600,
+   "threads": 3,
+   "open_fds": 24,
+   "db": {
+    "asic_load_runtime:idle": 3,
+    "asic_load_runtime:idle in transaction": 2,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586763.9840844,
+   "tag": "periodic",
+   "cpu_percent": 29.78,
+   "memory": "91.57MiB",
+   "pids": 4,
+   "rss_kib": 117620,
+   "threads": 4,
+   "open_fds": 24,
+   "db": {
+    "asic_load_runtime:idle": 5,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586770.2726386,
+   "tag": "periodic",
+   "cpu_percent": 34.26,
+   "memory": "91.85MiB",
+   "pids": 3,
+   "rss_kib": 117608,
+   "threads": 3,
+   "open_fds": 24,
+   "db": {
+    "asic_load_runtime:active": 1,
+    "asic_load_runtime:idle": 3,
+    "asic_load_runtime:idle in transaction": 1,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586776.5294027,
+   "tag": "periodic",
+   "cpu_percent": 38.53,
+   "memory": "91.68MiB",
+   "pids": 3,
+   "rss_kib": 117612,
+   "threads": 3,
+   "open_fds": 24,
+   "db": {
+    "asic_load_runtime:idle": 4,
+    "asic_load_runtime:idle in transaction": 1,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586782.8374157,
+   "tag": "periodic",
+   "cpu_percent": 28.47,
+   "memory": "91.47MiB",
+   "pids": 3,
+   "rss_kib": 117612,
+   "threads": 3,
+   "open_fds": 24,
+   "db": {
+    "asic_load_runtime:idle": 5,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586789.0941863,
+   "tag": "periodic",
+   "cpu_percent": 37.06,
+   "memory": "91.92MiB",
+   "pids": 4,
+   "rss_kib": 117612,
+   "threads": 4,
+   "open_fds": 24,
+   "db": {
+    "asic_load_runtime:idle": 5,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586795.3626885,
+   "tag": "periodic",
+   "cpu_percent": 28.54,
+   "memory": "91.71MiB",
+   "pids": 4,
+   "rss_kib": 117616,
+   "threads": 4,
+   "open_fds": 24,
+   "db": {
+    "asic_load_runtime:idle": 5,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586800.4358032,
+   "tag": "soak:end",
+   "cpu_percent": 0.28,
+   "memory": "91.34MiB",
+   "pids": 4,
+   "rss_kib": 117616,
+   "threads": 4,
+   "open_fds": 23,
+   "db": {
+    "asic_load_runtime:idle": 5,
+    "postgres:active": 1
+   }
+  },
+  {
+   "t": 1790586801.62794,
+   "tag": "periodic",
+   "cpu_percent": 0.3,
+   "memory": "90.68MiB",
+   "pids": 4,
+   "rss_kib": 117616,
+   "threads": 4,
+   "open_fds": 23,
+   "db": {
+    "asic_load_runtime:idle": 5,
+    "postgres:active": 1
+   }
+  }
+ ],
+ "note": "LOCAL BENCHMARK, Phase 16 closure correction: final backend image (api_image_id, content-fingerprint revision label) measured before the correction commit existed, hence commit 006f486 with working_tree_dirty=true; see PHASE16_CLOSURE_RESULTS.md"
+}

@@ -15,6 +15,17 @@ images:
     newName: asic-backend
     newTag: phase14-local
 patches:
+  # Explicit local-test profile: plaintext to the in-cluster test database is permitted only
+  # because this is not production (asic.db.tls). Production keeps the base value.
+  - target:
+      kind: Job
+      name: asic-migration
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/env/1
+        value:
+          name: ASIC_DEPLOYMENT_ENVIRONMENT
+          value: local
   - target:
       kind: NetworkPolicy
       name: migration-egress

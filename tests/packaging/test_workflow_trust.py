@@ -208,7 +208,7 @@ def test_local_smoke_uses_the_same_sequence() -> None:
     assert "from deploy_release import" in smoke
     # Both the failing and the successful path go through the orchestrator ...
     assert smoke.count("run_deployment(") >= 3  # failing, mutant, successful
-    assert "outcome = run_deployment(recorder, migration, application" in smoke
+    assert re.search(r"outcome = run_deployment\(\s*recorder,\s*migration,\s*application", smoke)
     # ... and the smoke never applies the migration or application manifests itself.
     assert not re.search(r"content=(bad_migration|migration|application)", smoke)
     assert "--for=condition=complete" not in smoke

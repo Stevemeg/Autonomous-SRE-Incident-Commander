@@ -13,5 +13,8 @@ data:
   ASIC_SERVICE_NAME: asic-api
   ASIC_OTEL_TRACES_EXPORTER: otlp
   ASIC_API_BASE_URL: http://asic-api:8000/api/v1
+  # The registered behaviour version the worker runs as (administratively registered,
+  # checked against the image's prompt set and tool catalogue at worker startup).
+  ASIC_BEHAVIOUR_VERSION_LABEL: asic-release
   # ASIC_JWT_ISSUER, ASIC_JWT_AUDIENCE and ASIC_OIDC_JWKS_URL are deliberately
   # absent. A production overlay must supply all three; the pod fails closed otherwise.

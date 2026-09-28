@@ -1,6 +1,7 @@
 # Production readiness review
 
-Scope: the repository at the Phase 16 closeout (Phase 15 evidence: `74a202a`). This review asks,
+Scope: the repository at the Phase 16 closure correction (Phase 15 evidence: `74a202a`; closure
+evidence: [PHASE16_CLOSURE_RESULTS.md](testing/PHASE16_CLOSURE_RESULTS.md)). This review asks,
 area by area, whether the system could be operated in production **as built**, and on what
 evidence. It is written to be checked, not believed: every verdict names its source.
 
@@ -22,28 +23,35 @@ Gap identifiers refer to the [production gap register](PRODUCTION_GAP_REGISTER.m
 | Authentication and authorization | **CONDITIONALLY READY** | Requires a real OIDC/JWKS issuer (no live-IdP interop test) and IdP token lifetimes ≤ `ASIC_JWT_MAX_LIFETIME_SECONDS` |
 | Input handling and API robustness | **READY** | Seeded fuzzing of every route: bounded 4xx or classified 503, never a 500 |
 | Secrets and telemetry hygiene | **READY** | Canary campaign across every sink; gitleaks history and tree clean; linear-time redaction |
-| Investigation workflow (bounded, durable, replayable) | **CONDITIONALLY READY** | Proven with the deterministic model provider only; a live model needs GAP-08 and re-evaluation; no worker Deployment (GAP-07) |
+| Investigation workflow (bounded, durable, replayable) | **CONDITIONALLY READY** | Proven with the deterministic model provider only; a live model needs GAP-08 and re-evaluation |
+| Worker (durable execution of recorded work) | **CONDITIONALLY READY** | Claims, leases, bounded concurrency, SIGTERM drain, probes and crash recovery verified in tests and on kind with two replicas. Condition: a live model (GAP-08) — its production profile refuses to start without one; recovery waits for the 15-minute lease (GAP-26); running nodes are not preemptible (GAP-34) |
+| Postmortem drafting (G11) | **CONDITIONALLY READY** | Draft-only, citation-grounded, database-enforced; verified in tests, the demo and kind. Conditions: human review and publication happen outside the product (GAP-30); prose is scripted until GAP-08 (GAP-37) |
+| Incident learning (G12) | **NOT BUILT** | Governed promotion exists; nothing proposes promotions (GAP-31) |
 | Database schema and migrations | **CONDITIONALLY READY** | Migration chain clean from empty; fail-closed ordering and overlap-safe Job replacement proven on kind; expand/contract not guaranteed (GAP-06) |
 | Delivery pipeline and supply chain | **NOT VERIFIED** | Every gate executed locally (security gate 11/11, SBOMs, Trivy, evaluation, kind smoke); remote GitHub Actions/GHCR/attestation never run (GAP-01) |
-| Kubernetes deployment | **CONDITIONALLY READY** | PSA `restricted`, default-deny network policy, probes, rollback verified on kind; needs a cluster with ingress/TLS (GAP-02) and a managed database (GAP-03) |
+| Kubernetes deployment | **CONDITIONALLY READY** | PSA `restricted`, default-deny network policy (the worker's narrower than the API's), probes, rollback verified on kind for the API, frontend and worker; needs a cluster with ingress/TLS (GAP-02) and a managed database (GAP-03) |
 | Resilience to dependency failure | **READY** | Database stress, dependency fault matrix, model failure, telemetry outage, 6/6 chaos experiments on kind |
-| Behaviour under load | **CONDITIONALLY READY** | No deadlock or collapse under burst after the Phase 15 fixes; capacity measured only locally, ingestion ≈ 12 alerts/s per 2-CPU process (GAP-23) |
+| Behaviour under load | **CONDITIONALLY READY** | No deadlock or collapse under burst after the Phase 15 fixes (re-measured on the final image: 96-client burst 92.8 % OK, 7.2 % classified 503, 0 timeouts); capacity measured only locally, ingestion ≈ 21 successful alerts/s per 2-CPU process, below the assumed 50/s (GAP-23) |
 | High availability | **NOT VERIFIED** | Manifests declare 2 replicas and PDBs; only single-replica behaviour measured (GAP-04) |
 | Disaster recovery, backups | **EXTERNAL PREREQUISITE** | GAP-03, GAP-05 |
-| Encryption in transit and at rest | **EXTERNAL PREREQUISITE** | GAP-02, GAP-03, GAP-29 |
+| Database transport encryption (application side) | **CONDITIONALLY READY** | Production processes refuse any database URL that is not `sslmode=verify-full` with a CA (tests, final image). Condition: a TLS-serving managed database; verified TLS against one has not run (GAP-03, GAP-29) |
+| Encryption at rest, ingress TLS, in-cluster mTLS | **EXTERNAL PREREQUISITE** | GAP-02, GAP-03, GAP-29 |
 | Observability and alerting | **CONDITIONALLY READY** | Metrics, traces, logs, dashboards, alerts and runbooks validated as configuration; backends and routing not deployed (GAP-22) |
 | Operations documentation | **READY** | Runbook per alert plus operational runbooks, troubleshooting and operator guides |
 | Data retention | **CONDITIONALLY READY** | Idempotency cache lifecycle executor with receipts; every other class retained until GAP-15 prerequisites exist |
-| External integrations | **NOT VERIFIED** | Local deterministic servers only (GAP-16) |
+| External integrations | **NOT VERIFIED** | Local deterministic servers only (GAP-16); the deployed worker sends no notifications yet (GAP-38) |
 | AI quality (RCA accuracy with a real model, judge calibration) | **NOT VERIFIED** | GAP-08, GAP-09; simulated evaluation validates the pipeline, not reasoning |
 | Rate limiting across replicas | **EXTERNAL PREREQUISITE** | Per-process limits; gateway limiter required (GAP-13) |
 
 **Overall:** the system is **not ready for unsupervised production use** and does not claim to be.
 It is ready for a controlled pilot on a real cluster **once** the external prerequisites in the
 summary are supplied (ingress/TLS, managed PostgreSQL with PITR, OIDC issuer, observability
-backends, gateway rate limiting) and the NOT VERIFIED items are exercised there: a remote CI run,
-two-replica chaos, and live vendor sandboxes. Autonomous remediation should stay restricted to R1
-in non-production until a live model has passed the evaluation gate.
+backends, gateway rate limiting), **a live model provider exists and has passed the evaluation
+gate** (without it the worker's production profile will not start, by design), and the NOT
+VERIFIED items are exercised there: a remote CI run, two-replica chaos, and live vendor sandboxes.
+Autonomous remediation should stay restricted to R1 in non-production until then. The Phase 16
+closure correction closed two blockers (no worker, no postmortems) and moved the database-TLS
+requirement from "external" to an enforced application contract; it did not change this verdict.
 
 ## 2. Evidence by area
 
@@ -76,9 +84,10 @@ interoperability has not been tested here. Sources:
 ### Delivery and supply chain — NOT VERIFIED
 
 Digest-pinned images running as UID 10001, Trivy HIGH/CRITICAL gate, CycloneDX SBOMs bound to image
-IDs, OIDC provenance attestation and a verification script, least-privilege workflows. All checks
-pass when run locally ([PHASE15_RESULTS.md](testing/PHASE15_RESULTS.md)); none has run on GitHub's
-runners.
+IDs, a GitHub OIDC provenance-attestation workflow with a verification script, least-privilege
+workflows. All checks pass when run locally ([PHASE16_CLOSURE_RESULTS.md](testing/PHASE16_CLOSURE_RESULTS.md));
+none has run on GitHub's runners, no image has been published to GHCR, and no attestation has been
+produced or verified (GAP-01).
 
 ### Resilience — READY
 
@@ -107,7 +116,8 @@ demonstrates the accounting, not a bill. Real cost per incident = tokens per run
 model's price; the budget caps it by construction.
 
 **Compute.** The API is stateless apart from per-process limiters; it scales horizontally. One
-2-CPU process served ≈ 77–102 read req/s at saturation locally and ≈ 12 alerts/s of ingestion.
+2-CPU process served ≈ 77–135 read req/s at saturation locally across runs and ≈ 12–21 successful
+alerts/s of ingestion (Phase 15 and the Phase 16 final image; host variance is large).
 Ingestion is synchronous validation plus correlation under per-group locks, so adding processes
 is expected to raise throughput until correlation contention dominates; that scaling is **not
 measured** (GAP-23).
@@ -120,6 +130,8 @@ idempotency cache is deleted), so storage grows with incident volume until GAP-1
 **Telemetry.** Metric labels are bounded (no tenant or incident identifiers), so metric cardinality
 does not grow with tenants; span export is best-effort with a bounded queue.
 
-**Scaling path, in order:** gateway rate limiting (GAP-13) → multiple API replicas on a real
-cluster with 2-replica chaos (GAP-04) → a worker Deployment (GAP-07) → a measured ingestion
-scaling curve (GAP-23) → a live model with the evaluation gate (GAP-08).
+**Scaling path, in order:** a live model with the evaluation gate (GAP-08, which also unblocks the
+production worker) → gateway rate limiting (GAP-13) → multiple API and worker replicas on a real
+cluster with 2-replica chaos (GAP-04) → a tenant-sharded or indexed worker queue (GAP-07) → a
+measured ingestion scaling curve (GAP-23). Each worker pod holds at most `3 × concurrency + 2`
+database connections (8 at the default concurrency of 2).

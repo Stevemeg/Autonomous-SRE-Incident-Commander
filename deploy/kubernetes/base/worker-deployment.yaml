@@ -1,0 +1,128 @@
+# The durable-work worker (Phase 16, F-02): drives investigation dispatches, remediation
+# requests and runs, and postmortem drafting from PostgreSQL. Same immutable backend image as
+# the API; a different command, identity and network policy.
+#
+# ASIC_WORKER_EXECUTION_MODE is "live" here, and live mode refuses to start until a live model
+# provider exists (production gap GAP-08): a production worker will not fabricate reasoning.
+# Only the local overlay selects the deterministic simulator profile.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: asic-worker
+spec:
+  replicas: 2
+  progressDeadlineSeconds: 300
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: asic-worker
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: asic-worker
+        app.kubernetes.io/component: worker
+    spec:
+      serviceAccountName: asic-worker
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: worker
+          image: ghcr.io/stevemeg/asic-backend@sha256:0000000000000000000000000000000000000000000000000000000000000000
+          imagePullPolicy: IfNotPresent
+          command: ["/usr/local/bin/python", "-m", "asic.worker"]
+          envFrom:
+            - configMapRef:
+                name: asic-runtime
+          env:
+            # The ordinary runtime credential (asic_app: NOBYPASSRLS, no DDL, no DELETE).
+            # Never the migration credential.
+            - name: ASIC_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: asic-runtime-database
+                  key: url
+            - name: ASIC_SERVICE_NAME
+              value: asic-worker
+            - name: ASIC_WORKER_EXECUTION_MODE
+              value: live
+            - name: ASIC_WORKER_CONCURRENCY
+              value: "2"
+            - name: ASIC_WORKER_POLL_SECONDS
+              value: "5"
+            # Below terminationGracePeriodSeconds, so a drain finishes before SIGKILL.
+            - name: ASIC_WORKER_DRAIN_SECONDS
+              value: "30"
+            - name: ASIC_WORKER_HEALTH_HOST
+              value: 0.0.0.0
+            - name: ASIC_WORKER_HEALTH_PORT
+              value: "8081"
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              valueFrom:
+                configMapKeyRef:
+                  name: asic-runtime
+                  key: OTEL_EXPORTER_OTLP_ENDPOINT
+          ports:
+            - name: health
+              containerPort: 8081
+          livenessProbe:
+            httpGet:
+              path: /livez
+              port: health
+            initialDelaySeconds: 10
+            timeoutSeconds: 2
+            periodSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: health
+            initialDelaySeconds: 5
+            timeoutSeconds: 3
+            periodSeconds: 5
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: database-ca
+              mountPath: /etc/asic/database-ca
+              readOnly: true
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi
+        # The database CA for sslmode=verify-full (NFR-SEC-07). Supplied by the platform; the
+        # production policy refuses to start without it, the local profile does not use it.
+        - name: database-ca
+          secret:
+            secretName: asic-database-ca
+            optional: true
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: asic-worker
+      terminationGracePeriodSeconds: 45

@@ -18,13 +18,15 @@ the rate constants below say so where they are defined.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
-from typing import Final
+from collections.abc import Mapping, Sequence
+from typing import TYPE_CHECKING, Final
 
 from asic.domain.enums import NodeId
 from asic.domain.errors import ModelProviderError
 from asic.llm.port import ModelCallEstimate, ModelRequest, ModelResponse
-from asic.simulators.scenarios import Scenario
+
+if TYPE_CHECKING:  # test infrastructure; excluded from the production image
+    from asic.simulators.scenarios import Scenario
 
 #: Rough characters-per-token ratio used to derive plausible counts from text length. An
 #: approximation for exercising budget accounting, not a measurement of any tokenizer.
@@ -55,6 +57,7 @@ class DeterministicModelProvider:
             NodeId.G3_INVESTIGATION_PLANNER: scenario.planner_script,
             NodeId.G5_HYPOTHESIS_ENGINE: scenario.hypothesis_script,
             NodeId.G6_REMEDIATION_PLANNER: scenario.remediation_planner_script,
+            NodeId.G11_POSTMORTEM_AUTHOR: scenario.postmortem_script,
         }
         self._cursors: dict[NodeId, int] = dict.fromkeys(self._scripts, 0)
         self._fail_after = fail_after
@@ -71,6 +74,18 @@ class DeterministicModelProvider:
     @property
     def call_count(self) -> int:
         return self._calls
+
+    def resume_after(self, completed: Mapping[NodeId, int]) -> None:
+        """Skip past the calls a resumed run already made (recorded in its model-call ledger).
+
+        The script is positional, so a fresh instance would answer a resumed run's next call
+        with the script's first entry. A real provider answers the call it is asked; skipping
+        the calls the durable ledger shows were already made reproduces that. Used by the
+        worker's simulator profile after a restart - never to change what a run observes.
+        """
+        for node_id, count in completed.items():
+            if node_id in self._cursors:
+                self._cursors[node_id] = max(self._cursors[node_id], int(count))
 
     def remaining(self, node_id: NodeId) -> int:
         script = self._scripts.get(node_id, ())

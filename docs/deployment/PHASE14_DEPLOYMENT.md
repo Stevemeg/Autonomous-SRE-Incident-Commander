@@ -7,7 +7,8 @@ managed PostgreSQL, external secret manager and protected GitHub environment are
 ## Prerequisites and ownership
 
 Terraform owns the `asic-system` namespace (including its Pod Security Admission labels) and the
-`asic-api`, `asic-frontend` and `asic-migration` service accounts. Kustomize owns all workload, Service, Ingress, PDB, ConfigMap and
+`asic-api`, `asic-frontend`, `asic-migration`, `asic-maintenance` and `asic-worker` service
+accounts (none has a token mounted or an RBAC binding). Kustomize owns all workload, Service, Ingress, PDB, ConfigMap and
 NetworkPolicy resources. Production PostgreSQL must provide pgvector, backups/PITR and separate URLs
 for the schema owner/migration role and `asic_app`-equivalent runtime role.
 
@@ -15,13 +16,17 @@ Required platform-provisioned Secrets:
 
 | Secret | Key | Consumer | Meaning |
 |---|---|---|---|
-| `asic-runtime-database` | `url` | API | least-privilege runtime database URL |
-| `asic-migration-database` | `url` | migration Job | schema-owner migration URL |
+| `asic-runtime-database` | `url` | API, worker | least-privilege runtime database URL (`sslmode=verify-full&sslrootcert=/etc/asic/database-ca/ca.crt` in production) |
+| `asic-migration-database` | `url` | migration Job | schema-owner migration URL (same TLS requirement) |
+| `asic-database-ca` | `ca.crt` | API, worker, migration Job | CA bundle for verifying the database server; mounted read-only at `/etc/asic/database-ca` (optional in the manifests, required by the production TLS policy unless `sslrootcert=system`) |
 | `asic-tls` | controller-specific | Ingress | TLS certificate/private key managed outside Git |
 
 Production must patch these ConfigMap values: `ASIC_JWT_ISSUER`, `ASIC_JWT_AUDIENCE`,
 `ASIC_OIDC_JWKS_URL` (HTTPS), `OTEL_EXPORTER_OTLP_ENDPOINT`, public API origin and ingress details.
-Development HS256 is refused when `ASIC_DEPLOYMENT_ENVIRONMENT=production`. Tokens must carry
+Development HS256 is refused when `ASIC_DEPLOYMENT_ENVIRONMENT=production`. So is any database URL
+that is not verified TLS: every backend process (API, worker, migration Job, retention CronJob)
+checks `sslmode=verify-full`, one TCP host and a readable `sslrootcert` before connecting, and exits
+naming the failing setting (never the URL). Tokens must carry
 `iat`, and `exp - iat` may not exceed `ASIC_JWT_MAX_LIFETIME_SECONDS` (default 3600 s, allowed
 300-5400 s; Phase 15, P13-SEC-05). Configure the IdP's token lifetime at or below it.
 
@@ -66,8 +71,13 @@ failure, missing scanner, malformed report, missing image ID or an empty result 
 5. Patch hostname, ingress class, TLS secret and the two immutable image digests.
 6. Free the migration Job slot (see below), create the new Job and watch it to a terminal state;
    stop immediately if it fails.
-7. Only then apply the base and wait for both Deployment rollouts and readiness.
-8. Automatic post-rollout smoke: Service endpoints ready; API `/livez`, `/readyz` 200 and
+7. Register the release's behaviour version (one `behaviour_version` row, owner credentials, label
+   = `ASIC_BEHAVIOUR_VERSION_LABEL`, versions read from the image; `run_deployment(after_migration=...)`
+   is the hook). Until it exists the worker stays unready and claims nothing.
+8. Only then apply the base and wait for every Deployment rollout (API, worker, frontend) and
+   readiness. **The worker's live profile refuses to start until a live model provider exists
+   (GAP-08)**, so a production rollout of the worker cannot complete today; this is deliberate.
+9. Automatic post-rollout smoke: Service endpoints ready; API `/livez`, `/readyz` 200 and
    unauthenticated `/api/v1/incidents` 401; frontend `/livez`, `/readyz` 200. Each service's checks
    are retried as a unit (2 s interval, 5 s per request) within a 60 s **deployment convergence
    allowance** (`--smoke-deadline`), because `rollout status` returns while old API pods are still
@@ -75,7 +85,7 @@ failure, missing scanner, malformed report, missing image ID or an empty result 
    as briefly unavailable. The allowance tolerates convergence only: a release whose checks do not
    all pass by the deadline fails, with the last (redacted) error. Optionally also check `/metrics`
    and one authenticated read-only path with an operator credential.
-9. Record deployed image digests, release commit, migration revision and validation output.
+10. Record deployed image digests, release commit, migration revision and validation output.
 
 The manual `production-deploy` workflow enforces steps 6-8 through `scripts/deploy_release.py`, the
 same orchestrator the kind smoke runs, and serializes deployments (`cancel-in-progress: false`, so a
@@ -232,6 +242,27 @@ overlap). Each experiment's hypothesis, invariant, fault, expected signal, recov
 maximum duration and cleanup are printed before its fault is injected; results are in
 `docs/testing/RESILIENCE_AND_CHAOS.md`.
 
+Phase 16 closure additions, all on the same run:
+
+- **The worker.** The local overlay runs two worker replicas in the simulator profile. The production
+  backend image excludes the simulator package (FR-INT-04), so the smoke builds a local-only image
+  (`deploy/local-simulator/Dockerfile`): the supplied backend image plus `src/asic/simulators`, and
+  verifies every backend layer is its unchanged prefix. It is loaded into kind and never published.
+- **Behaviour registration** between migration and rollout (`after_migration`), from versions read
+  out of the backend image.
+- **Worker identity and network policy**, probed from inside a worker pod: UID 10001, no
+  service-account token, read-only root filesystem, probes 200, runtime database role (no superuser,
+  no BYPASSRLS, no migration privilege); worker→database allowed; worker→internet and worker→API
+  denied; frontend→worker denied.
+- **Acceptance through the product path only** (`scripts/worker_acceptance.py`): administrative
+  onboarding rows as the owner, then a signed-connector alert via the API → worker investigation →
+  remediation request → approval via the API → execution, settling, verification → G11 draft; the
+  persisted state (one investigation and one remediation run, one mutating execution, one resolved
+  transition, one draft, no published postmortem, every citation resolving) and the two pods'
+  `worker.item` logs (each item completed exactly once across the replicas) are asserted.
+- **Graceful termination**: a worker pod is deleted (SIGTERM) and must terminate within its grace
+  period, with a ready replacement.
+
 Terraform state and kubeconfig live in a temporary directory, destroyed with the cluster.
 
 ## Troubleshooting
@@ -272,6 +303,19 @@ replace the placeholder database CIDR in `retention-egress`. To enable: review d
 (`retention_run`), add `--execute` to the command through your overlay, then set `suspend: false`.
 The executor deletes only expired API idempotency records; see
 [DATA_RETENTION.md](../security/DATA_RETENTION.md).
+
+## Worker (Phase 16 closure)
+
+`deploy/kubernetes/base/worker-deployment.yaml`: the same immutable backend image as the API with
+command `python -m asic.worker`, service account `asic-worker` (no token), UID 10001, read-only root
+filesystem, all capabilities dropped, seccomp `RuntimeDefault`, the runtime database Secret only,
+requests 250m/256Mi and limits 1 CPU/1 GiB, `/livez` and `/readyz` probes on port 8081, a 45 s grace
+period above its 30 s drain, a PodDisruptionBudget (`maxUnavailable: 1`) and its own network
+policies (`worker-ingress`: observability namespace to 8081 only; `worker-platform-egress`: the
+database CIDR, the OTLP collector and the egress gateway - no direct HTTPS). The renderer substitutes
+the database CIDR and the backend digest exactly as for the API. The base selects
+`ASIC_WORKER_EXECUTION_MODE=live`, which refuses to start until GAP-08 is closed; only the local
+overlay selects the simulator profile.
 
 ## Deferred operational boundaries
 

@@ -1,7 +1,7 @@
 # `tests/` — Test suites
 
-2,422 tests at the Phase 16 closeout, all passing on a fresh database with no skips
-([PHASE15_RESULTS.md](../docs/testing/PHASE15_RESULTS.md)). Master specification section 17's
+2,472 tests after the Phase 16 closure correction, all passing on a fresh database with no skips
+([PHASE16_CLOSURE_RESULTS.md](../docs/testing/PHASE16_CLOSURE_RESULTS.md)). Master specification section 17's
 fifteen categories map onto the directories below; section 20's rule — a working happy path is
 not completion — is why most suites attack the system rather than exercise it.
 
@@ -20,6 +20,8 @@ not completion — is why most suites attack the system rather than exercise it.
 | `security/` | Phase 13 controls and Phase 15 campaigns: injection, tool abuse, tenant, auth, SSRF, fuzz, secret leak, redaction, retention | PostgreSQL |
 | `resilience/` | Database stress, dependency faults, model failure, crash/resume, event storms, retries/bulkhead, resource bounds, pool deadlocks | PostgreSQL |
 | `e2e/` | Every scenario against its expectation; Phase 15 scenarios A–H | PostgreSQL |
+| `worker/` | Phase 16 closure: the deployed worker - alert-to-postmortem flow through the API, two-worker race, crash recovery, SIGTERM drain, database outage, probes, configuration refusals, separation of duties, import without the simulator package | PostgreSQL |
+| `postmortem/` | Phase 16 closure: G11 golden resolved incident and negative controls (unsupported claims, injected publish instruction, cross-tenant, ineligible, replay/versioning, model failure, database draft-only enforcement) | PostgreSQL |
 | `packaging/` | Images, manifests, workflows, deploy orchestrator, renderer, chaos-suite contract | some: `bash`, `jq` |
 
 Run everything:

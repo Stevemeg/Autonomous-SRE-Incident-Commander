@@ -52,6 +52,9 @@ spec:
                     secretKeyRef:
                       name: asic-maintenance-database
                       key: url
+                # Profile marker for the database transport policy (see migration/job.yaml).
+                - name: ASIC_DEPLOYMENT_ENVIRONMENT
+                  value: production
                 - name: ASIC_MAINTENANCE_IDENTITY
                   value: asic-maintenance
               resources:

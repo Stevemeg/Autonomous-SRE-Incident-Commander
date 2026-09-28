@@ -44,6 +44,7 @@ from asic.api.auth import (
 from asic.api.limits import RequestBoundsMiddleware
 from asic.api.rate_limit import RateLimiter
 from asic.db.models import (
+    Alert,
     ApiIdempotencyRecord,
     Approval,
     AuditRecord,
@@ -58,13 +59,16 @@ from asic.db.models import (
     Incident,
     KnowledgeSource,
     PolicyDecision,
+    Postmortem,
     RemediationAction,
+    RemediationRequest,
     RemediationTarget,
     Service,
     Tenant,
     TimelineEvent,
     ToolDefinition,
     Verification,
+    WorkflowRun,
 )
 from asic.db.projections import append_incident_event, apply_transition
 from asic.db.session import (
@@ -79,9 +83,11 @@ from asic.domain.enums import (
     ActorType,
     ApprovalDecision,
     AuditEventType,
+    HypothesisStatus,
     IncidentEventType,
     IncidentStatus,
     TerminationReason,
+    WorkflowRunStatus,
 )
 from asic.domain.errors import ApprovalInvalid, IllegalStateTransition
 from asic.domain.idempotency import incident_event_key
@@ -147,6 +153,19 @@ class DecisionBody(BaseModel):
 class ControlBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
     justification: Justification
+
+
+class RemediationRequestBody(BaseModel):
+    """A responder asks the worker to remediate an escalated incident (Phase 16).
+
+    Identities only. The worker re-validates them, and G7/G8 still decide whether anything
+    runs and whether a human must approve it: the request confers no execution authority.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    hypothesis_id: uuid.UUID
+    service_id: uuid.UUID
+    justification: Annotated[str, Field(min_length=1, max_length=2000), AfterValidator(_human_text)]
 
 
 def _json(value: Any) -> Any:
@@ -619,6 +638,164 @@ def annotate(
         occurred_at=result.event.occurred_at,
     )
     return _remember(session, principal, idempotency_key, operation, body, response)
+
+
+@incidents.post("/{incident_id}/resolve")
+def resolve(
+    incident_id: uuid.UUID,
+    body: ControlBody,
+    principal: CurrentPrincipal,
+    session: DbSession,
+    idempotency_key: Annotated[str, Header(alias="Idempotency-Key", min_length=16, max_length=128)],
+) -> dict[str, Any]:
+    """A responder declares the incident resolved. The state machine allows it only from a
+    human-resolvable state, and a later postmortem records it as ``human_declared``."""
+    return _control(
+        session,
+        principal,
+        incident_id,
+        body,
+        IncidentStatus.RESOLVED,
+        TerminationReason.SUCCESS,
+        idempotency_key,
+    )
+
+
+_LIVE_RUN_STATUSES = (WorkflowRunStatus.RUNNING, WorkflowRunStatus.SUSPENDED)
+
+
+@incidents.post("/{incident_id}/remediation-requests", status_code=202)
+def request_remediation(
+    incident_id: uuid.UUID,
+    body: RemediationRequestBody,
+    principal: CurrentPrincipal,
+    session: DbSession,
+    idempotency_key: Annotated[str, Header(alias="Idempotency-Key", min_length=16, max_length=128)],
+) -> dict[str, Any]:
+    """Hand an escalated incident's hypothesis to the worker for governed remediation.
+
+    Records the human's justified ``escalated -> investigating`` reopen (ADR-0023) and a
+    durable request in one transaction; the worker starts the remediation graph from it.
+    """
+    operation = f"incident.remediation_request:{incident_id}"
+    incident = _visible_incident(session, principal, incident_id)
+    require_environment(principal, INCIDENT_CONTROL, incident.environment_id)
+    replay = _replay(session, principal, idempotency_key, operation, body)
+    if replay is not None:
+        return replay
+
+    def conflict(code: str, message: str) -> HTTPException:
+        return HTTPException(409, detail={"code": code, "message": message})
+
+    hypothesis = session.scalar(
+        sa.select(Hypothesis).where(
+            Hypothesis.incident_id == incident.id, Hypothesis.id == body.hypothesis_id
+        )
+    )
+    if hypothesis is None or hypothesis.status not in (
+        HypothesisStatus.PROPOSED,
+        HypothesisStatus.ACCEPTED,
+    ):
+        raise conflict("invalid_hypothesis", "hypothesis is not a live hypothesis of this incident")
+    associated = session.scalar(
+        sa.select(Alert.id)
+        .where(Alert.incident_id == incident.id, Alert.service_id == body.service_id)
+        .limit(1)
+    )
+    if associated is None:
+        raise conflict("invalid_service", "service is not associated with this incident")
+    live_run = session.scalar(
+        sa.select(WorkflowRun.id)
+        .where(WorkflowRun.incident_id == incident.id, WorkflowRun.status.in_(_LIVE_RUN_STATUSES))
+        .limit(1)
+    )
+    if live_run is not None:
+        raise conflict("run_active", "a workflow run for this incident is still active")
+    pending = session.scalar(
+        sa.select(RemediationRequest.id).where(
+            RemediationRequest.incident_id == incident.id,
+            RemediationRequest.status == "pending",
+        )
+    )
+    if pending is not None:
+        raise conflict("request_pending", "a remediation request is already pending")
+    if incident.status is IncidentStatus.ESCALATED:
+        apply_transition(
+            session,
+            incident=incident,
+            target=IncidentStatus.INVESTIGATING,
+            actor_type=ActorType.HUMAN,
+            source="phase16_api",
+            correlation_id=uuid.uuid4(),
+            actor_id=str(principal.user_id),
+            justification=body.justification,
+        )
+    elif incident.status is not IncidentStatus.INVESTIGATING:
+        raise conflict(
+            "invalid_transition",
+            f"incident is {incident.status.value}; remediation is requested for an escalated "
+            "incident",
+        )
+    request = RemediationRequest(
+        id=uuid.uuid4(),
+        tenant_id=principal.tenant_id,
+        incident_id=incident.id,
+        hypothesis_id=hypothesis.id,
+        service_id=body.service_id,
+        requested_by_user_id=principal.user_id,
+        justification=body.justification,
+        status="pending",
+    )
+    session.add(request)
+    session.flush()
+    response = _row(
+        id=request.id,
+        incident_id=incident.id,
+        hypothesis_id=hypothesis.id,
+        service_id=body.service_id,
+        status=request.status,
+        incident_status=incident.status,
+    )
+    return _remember(session, principal, idempotency_key, operation, body, response)
+
+
+@incidents.get("/{incident_id}/postmortems")
+def get_postmortems(
+    incident_id: uuid.UUID,
+    principal: CurrentPrincipal,
+    session: DbSession,
+    limit: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = 50,
+    cursor: str | None = None,
+) -> dict[str, Any]:
+    """G11 drafts for this incident. Every one is a ``draft`` awaiting human review."""
+    _visible_incident(session, principal, incident_id)
+    statement = sa.select(Postmortem).where(Postmortem.incident_id == incident_id)
+    after = _decode_cursor(cursor)
+    if after is not None:
+        statement = statement.where(Postmortem.id > after)
+    rows = list(session.scalars(statement.order_by(Postmortem.id).limit(limit + 1)))
+    return _page(
+        [
+            _row(
+                id=x.id,
+                version=x.version,
+                status=x.status,
+                review_required=x.review_required,
+                resolution_basis=x.resolution_basis,
+                title=x.title,
+                content=x.content,
+                sections=x.sections,
+                uncertainties=x.uncertainties,
+                citations=x.citations,
+                generation=x.generation,
+                validation=x.validation,
+                source_fingerprint=x.source_fingerprint,
+                created_at=x.created_at,
+            )
+            for x in rows
+        ],
+        limit,
+    )
 
 
 def _action_json(session: Session, action: RemediationAction) -> dict[str, Any]:

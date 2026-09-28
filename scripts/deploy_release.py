@@ -647,8 +647,14 @@ def run_deployment(
     log: Callable[[str], None] = print,
     clock: Callable[[], float] = _monotonic,
     sleep: Callable[[float], None] = _sleep,
+    after_migration: Callable[[Kubectl], None] | None = None,
 ) -> JobOutcome:
-    """Run the one authoritative migrate-then-rollout sequence. Raises on any failure."""
+    """Run the one authoritative migrate-then-rollout sequence. Raises on any failure.
+
+    ``after_migration`` runs only after the migration succeeded and before any application
+    manifest is applied: the place for release registration (for example the behaviour version
+    the worker will run as), which needs the new schema but must precede the rollout.
+    """
     job_manifest, supporting = split_migration(migration)
     kube("apply", "--dry-run=server", "-f", "-", content=application)
     if supporting:
@@ -682,6 +688,9 @@ def run_deployment(
             f"migration {outcome.state}; application manifests were NOT applied\n"
             f"{outcome.diagnostics}"
         )
+    if after_migration is not None:
+        after_migration(kube)
+        log("post-migration release registration done")
     kube("apply", "-f", "-", content=application)
     for name in deployments_in(application):
         try:

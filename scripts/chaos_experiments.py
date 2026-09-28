@@ -337,7 +337,7 @@ def _probe_tenant(ctx: Context) -> str:
         ).splitlines()[0]
         _psql(
             ctx.kube,
-            f"SELECT set_config('app.current_tenant_id', '{tenant}', true); "
+            f"SELECT set_config('app.tenant_id', '{tenant}', true); "
             "INSERT INTO app_user (tenant_id, external_idp_subject, email, display_name, status) "
             f"VALUES ('{tenant}', 'chaos-probe', 'chaos-probe@example.invalid', 'chaos probe', "
             "'active'); "
@@ -979,8 +979,10 @@ def retention_maintenance(
 ) -> dict[str, Any]:
     """The retention CronJob as delivered: admitted, suspended, and working in-cluster.
 
-    Seeds one tenant with three expired and one recent idempotency record, then runs the
-    CronJob's own Job template twice: as shipped (dry run) and with ``--execute``.
+    Seeds tenant A with three expired and one recent idempotency record and tenant B with two
+    recent ones, then runs the CronJob's own Job template twice: as shipped (dry run) and with
+    ``--execute``. Every count is filtered by tenant explicitly (psql runs as the owner, which
+    bypasses row-level security), and every receipt must name the tenant it acted on.
     """
     dry = run_process(*kubectl, "apply", "--dry-run=server", "-f", "-", content=manifest)
     if dry.returncode or "PodSecurity" in dry.stderr:
@@ -1000,12 +1002,17 @@ def retention_maintenance(
         "INSERT INTO tenant (slug, display_name, status) "
         "VALUES ('kind-retention', 'Kind retention', 'active') RETURNING id",
     ).splitlines()[0]
+    other = _psql(
+        kube,
+        "INSERT INTO tenant (slug, display_name, status) "
+        "VALUES ('kind-retention-b', 'Kind retention B', 'active') RETURNING id",
+    ).splitlines()[0]
 
     def scoped(sql: str) -> str:
         return _psql(
             kube,
             # One simple query = one implicit transaction; psql prints the last result.
-            f"SELECT set_config('app.current_tenant_id', '{tenant}', true); {sql}",
+            f"SELECT set_config('app.tenant_id', '{tenant}', true); {sql}",
         )
 
     scoped(
@@ -1015,9 +1022,18 @@ def retention_maintenance(
         "repeat('a', 64), '{}'::jsonb, now() - (CASE WHEN g <= 3 THEN interval '40 days' "
         "ELSE interval '1 hour' END) - g * interval '1 minute' FROM generate_series(1, 4) g"
     )
+    _psql(
+        kube,
+        "INSERT INTO api_idempotency_record (tenant_id, principal_id, idempotency_key, "
+        "operation, request_digest, response_body, created_at) "
+        f"SELECT '{other}', gen_random_uuid(), 'kind-b-' || g, 'incident.annotate', "
+        "repeat('b', 64), '{}'::jsonb, now() - interval '2 hours' FROM generate_series(1, 2) g",
+    )
 
-    def count(table: str) -> int:
-        out = scoped(f"SELECT count(*) FROM {table}")
+    def count(table: str, owner: str | None = None) -> int:
+        # psql runs as the owner, which bypasses row-level security: filter explicitly, or rows
+        # other steps of the same smoke created in other tenants are counted too.
+        out = _psql(kube, f"SELECT count(*) FROM {table} WHERE tenant_id = '{owner or tenant}'")
         return int([line for line in out.splitlines() if line.strip().isdigit()][-1])
 
     template = cronjob["spec"]["jobTemplate"]
@@ -1029,27 +1045,40 @@ def retention_maintenance(
         kube("create", "-f", "-", content=yaml.safe_dump(body))
         kube("wait", "--for=condition=Complete", f"job/{name}", "--timeout=180s", timeout=210)
         lines = kube("logs", f"job/{name}").splitlines()
-        receipts = [json.loads(line) for line in lines if line.startswith("{")]
-        return [r for r in receipts if r["tenant_id"] == tenant]
+        return [json.loads(line) for line in lines if line.startswith("{")]
 
-    before = count("api_idempotency_record")
-    dry_receipts = job("asic-retention-dry-run", [])
+    def mine(receipts: list[dict[str, Any]], owner: str) -> list[dict[str, Any]]:
+        return [r for r in receipts if r["tenant_id"] == owner]
+
+    before, other_before = count("api_idempotency_record"), count("api_idempotency_record", other)
+    dry_all = job("asic-retention-dry-run", [])
+    dry_receipts = mine(dry_all, tenant)
     after_dry = count("api_idempotency_record")
-    executed = job("asic-retention-execute", ["--execute"])
+    other_after_dry = count("api_idempotency_record", other)
+    executed_all = job("asic-retention-execute", ["--execute"])
+    executed, executed_other = mine(executed_all, tenant), mine(executed_all, other)
     after_execute = count("api_idempotency_record")
+    other_after_execute = count("api_idempotency_record", other)
     receipts = count("retention_run")
+    known = {r["tenant_id"] for r in dry_all + executed_all}
     if not (
         before == 4
         and after_dry == 4
         and after_execute == 1
+        and other_before == other_after_dry == other_after_execute == 2
         and [r["dry_run"] for r in dry_receipts] == [True]
         and dry_receipts[0]["eligible_rows"] == 3
+        and all(r["deleted_rows"] == 0 for r in dry_all)
         and sum(r["deleted_rows"] for r in executed) == 3
+        and all(r["deleted_rows"] == 0 for r in executed_other)
         and receipts == len(dry_receipts) + len(executed)
+        and all(r.get("tenant_id") for r in dry_all + executed_all)
+        and {tenant, other} <= known
     ):
         raise ChaosFailed(
             f"retention run mismatch: {before=} {after_dry=} {after_execute=} {receipts=} "
-            f"{dry_receipts=} {executed=}"
+            f"{other_before=} {other_after_dry=} {other_after_execute=} "
+            f"{dry_receipts=} {executed=} {executed_other=}"
         )
     for name in ("asic-retention-dry-run", "asic-retention-execute"):
         kube("delete", "job", name, "--wait=true", timeout=120)
@@ -1058,7 +1087,13 @@ def retention_maintenance(
         "server_side_admitted": True,
         "dry_run": {"eligible": 3, "deleted": 0, "rows_after": after_dry},
         "execute": {"deleted": 3, "rows_after": after_execute, "recent_row_kept": True},
+        "tenant_b": {
+            "rows_before": other_before,
+            "rows_after_execute": other_after_execute,
+            "deleted": 0,
+        },
         "receipts_written": receipts,
+        "receipts_tenant_bound": True,
         "identity": "asic_maintenance_local (member of asic_maintenance only)",
     }
 

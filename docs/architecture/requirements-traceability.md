@@ -1,36 +1,38 @@
 # Requirements Traceability Matrix
 
-## Final status (Phase 16)
+## Final status (Phase 16 closure correction)
 
-The authoritative closing status of every SRS requirement, as of the Phase 16 closeout. Status
-values: **SATISFIED** (built and verified by a named test or run), **PARTIALLY SATISFIED**
-(built with a stated limit), **INTENTIONALLY DEFERRED** (not built, by decision, with a
-prerequisite) and **EXTERNAL** (needs infrastructure outside this repository). `GAP-nn` refers
-to the [production gap register](../PRODUCTION_GAP_REGISTER.md). Performance figures are
-LOCAL benchmarks ([docs/testing](../testing/README.md)).
+The authoritative closing status of every SRS requirement, recomputed requirement by requirement
+in the Phase 16 closure correction (the previous counts were not carried forward). Status values:
+**SATISFIED** (built and verified by a named test or run; the limit, if any, is stated),
+**PARTIAL** (built, but part of the requirement's wording is not met), **UNSATISFIED** (not built)
+and **EXTERNAL PREREQUISITE** (needs infrastructure outside this repository). No mandatory
+requirement is marked "deferred". `GAP-nn` refers to the
+[production gap register](../PRODUCTION_GAP_REGISTER.md). Performance figures are LOCAL benchmarks
+([docs/testing](../testing/README.md)).
 
 | Status | Count |
 |---|---:|
 | SATISFIED | 112 |
-| PARTIALLY SATISFIED | 16 |
-| INTENTIONALLY DEFERRED | 2 |
-| EXTERNAL | 1 |
+| PARTIAL | 19 |
+| UNSATISFIED | 0 |
+| EXTERNAL PREREQUISITE | 0 |
 | **Total** | **131** |
 
 | Req | Status | Evidence and limit |
 |---|---|---|
-| FR-API-01 | SATISFIED | Five independently authorized surfaces |
+| FR-API-01 | SATISFIED | Five independently authorized surfaces; Phase 16 adds remediation requests and human resolution (incident control) and postmortem reads (incident read), each in the RBAC matrix and fuzz campaign |
 | FR-API-02 | SATISFIED | Tenant from signed claim + RLS; schema-wide tenant campaign |
 | FR-API-03 | SATISFIED | Next.js dashboard renders incidents, evidence, hypotheses, timeline, actions and approvals |
 | FR-API-04 | SATISFIED | Administration permissions separate from operational ones (no step-up authentication) |
-| FR-APR-01 | SATISFIED | Autonomy matrix: no autonomous R2, no production R1 without approval |
+| FR-APR-01 | SATISFIED | Autonomy matrix: no autonomous R2, no production R1 without approval; only R1 in non-production executes without a human (P6). The responder who requested a remediation cannot approve it |
 | FR-APR-02 | SATISFIED | Durable approval wait survives restart (crash matrix); a crash between approval and dispatch fails closed and asks again (GAP-20) |
 | FR-APR-03 | SATISFIED | Expiry escalates; never executes |
 | FR-APR-04 | SATISFIED | Immutable approver, decision, justification and time |
 | FR-APR-05 | SATISFIED | Action-version hash binding; replay/wrong-hash attacks refused |
-| FR-CLB-01 | SATISFIED | Slack, Teams, PagerDuty, Jira, Grafana outbound adapters through the broker, validated against local servers only (GAP-16) |
+| FR-CLB-01 | PARTIAL | Slack, Teams, PagerDuty, Jira and Grafana outbound adapters and the notification service exist and are tested against local servers only (GAP-16); the deployed worker does not compose the notification service, so a deployed incident announces nothing (GAP-38) |
 | FR-CLB-02 | SATISFIED | Deterministic event ids and effect claims; delivery failure never fails the incident |
-| FR-CLB-03 | SATISFIED | No inbound chat approval path exists; approval authority is only the authenticated RBAC API (inbound chat approvals are GAP-12) |
+| FR-CLB-03 | PARTIAL | The invariant holds - chat identity grants nothing, because no collaboration channel reaches the approval service and approvals are accepted only through the authenticated RBAC API - but the inbound collaboration approval path this requirement governs is not built (GAP-12); not claimed as satisfied vacuously |
 | FR-COR-01 | SATISFIED | Deterministic correlation v2; alert-storm tests; event-storm campaign (one incident per group) |
 | FR-COR-02 | SATISFIED | Pure deterministic correlation; import-boundary test excludes model reasoning |
 | FR-COR-03 | SATISFIED | Persisted factors, exclusions and tie-break decisions |
@@ -38,30 +40,30 @@ LOCAL benchmarks ([docs/testing](../testing/README.md)).
 | FR-EVD-01 | SATISFIED | Broker-assigned provenance (`VERIFIED_FACT` for query results, `RETRIEVED` for knowledge) distinct from hypotheses and `MODEL_CLAIM` |
 | FR-EVD-02 | SATISFIED | Citations carry the re-derivation query; citation replay |
 | FR-EVD-03 | SATISFIED | Every retrieved chunk carries a resolvable citation (Phase 6 evaluation) |
-| FR-EVD-04 | PARTIALLY SATISFIED | Historical incidents and runbooks enter only as fenced `RETRIEVED` content with no authority; no scenario yet proves a contradicting stale runbook is outranked by current evidence (GAP-18) |
+| FR-EVD-04 | PARTIAL | Historical knowledge enters only as fenced `RETRIEVED` content with no authority; historical-incident retrieval (T3 -> T2) does not exist (GAP-33); no scenario proves a contradicting stale runbook is outranked (GAP-18) |
 | FR-EVL-01 | SATISFIED | Own data model, read-only API and executable gate |
 | FR-EVL-02 | SATISFIED | 18 versioned golden/adversarial scenarios plus strict replay; no production-incident replay case |
 | FR-EVL-03 | SATISFIED | Zero-tolerance invariants with non-vacuity tests |
-| FR-EVL-04 | PARTIALLY SATISFIED | Multi-judge panel with disagreement recorded; calibration against human labels and live judges not performed (GAP-09) |
+| FR-EVL-04 | PARTIAL | Multi-judge panel with disagreement recorded; calibration against human labels and live judges not performed (GAP-09) |
 | FR-EVL-05 | SATISFIED | Per-scenario, per-metric comparison; never silently omits scenarios or metrics (F-09) |
-| FR-EVL-06 | PARTIALLY SATISFIED | Most §9 metrics computed; latency to first hypothesis, redundant-call rate and calibration error are not (GAP-27) |
+| FR-EVL-06 | PARTIAL | Most §9 metrics computed; latency to first hypothesis, redundant-call rate and calibration error are not (GAP-27) |
 | FR-EVL-07 | SATISFIED | Every report labelled simulated/replay; unmeasured judges `not_measured`; docs validator checks unmeasured claims |
-| FR-EVL-08 | PARTIALLY SATISFIED | Every loop stage has tooling (replay, trace, evaluation, failure classes, regression tests); no recorded walkthrough on a real model regression (GAP-27) |
+| FR-EVL-08 | PARTIAL | Every loop stage has tooling (replay, trace, evaluation, failure classes, regression tests); no recorded walkthrough on a real model regression (GAP-27) |
 | FR-EVL-09 | SATISFIED | Behaviour version on every run; digests force re-baselining |
 | FR-EVL-10 | SATISFIED | Release workflow runs the full 18-scenario gate before publishing; executed locally, remote CI run not verified (GAP-01) |
 | FR-EVL-11 | SATISFIED | Results bind to the workflow run and trace they evaluate; shown for harness runs (no production incident recorded) |
-| FR-INC-01 | SATISFIED | Durable LangGraph workflow with explicit states and append-only transitions |
-| FR-INC-02 | SATISFIED | Checkpoint/resume; crash matrix at every node boundary with zero duplicated effects (`test_crash_resume_matrix.py`) |
+| FR-INC-01 | SATISFIED | Durable LangGraph workflow with explicit states and append-only transitions, driven in deployment by the worker (`python -m asic.worker`) |
+| FR-INC-02 | SATISFIED | Checkpoint/resume; crash matrix at every node boundary with zero duplicated effects (`test_crash_resume_matrix.py`); a worker killed mid-run is recovered by another without repeating an effect (`tests/worker`, demo) |
 | FR-INC-03 | SATISFIED | Five terminal categories; deterministic termination tests |
 | FR-INC-04 | SATISFIED | Append-only incident events; status equals the event-log projection (asserted in E2E and storms) |
 | FR-INC-05 | SATISFIED | Deterministic evidence-backed timeline projection; E2E scenario A |
 | FR-INC-06 | SATISFIED | Timeline entries trace to source events/evidence; determinism tests |
 | FR-ING-01 | SATISFIED | Authenticated connector-scoped ingestion API; `tests/ingestion`, `tests/api`, event-storm and pool-deadlock suites |
-| FR-ING-02 | PARTIALLY SATISFIED | Metrics, logs, Kubernetes state and deployment history through native adapters (local servers); traces are simulator-only and configuration-change history has no dedicated adapter (GAP-17) |
+| FR-ING-02 | PARTIAL | Metrics, logs, Kubernetes state and deployment history through native adapters (local servers); traces are simulator-only and configuration-change history has no dedicated adapter (GAP-17) |
 | FR-ING-03 | SATISFIED | Delivery/occurrence identities and idempotency ledger; redelivery and retry storms over HTTP (`tests/resilience/test_event_storms.py`) |
 | FR-ING-04 | SATISFIED | Canonical versioned envelope with tenant/service/environment from the signed connector |
 | FR-ING-05 | SATISFIED | Durable typed rejection receipts; no silent drop |
-| FR-INT-01 | PARTIALLY SATISFIED | Prometheus, Loki, Kubernetes, Slack, Teams, PagerDuty, Jira, Grafana adapters; OpenTelemetry context propagated; no trace-store adapter (GAP-17) |
+| FR-INT-01 | PARTIAL | Prometheus, Loki, Kubernetes, Slack, Teams, PagerDuty, Jira, Grafana adapters; OpenTelemetry context propagated; no trace-store adapter (GAP-17) |
 | FR-INT-02 | SATISFIED | Deterministic simulators and recorded replay fixtures |
 | FR-INT-03 | SATISFIED | Entire suite runs against local servers and PostgreSQL only |
 | FR-INT-04 | SATISFIED | Live composition refuses simulators/test credentials; production image excludes simulator and test sources |
@@ -69,10 +71,10 @@ LOCAL benchmarks ([docs/testing](../testing/README.md)).
 | FR-INV-02 | SATISFIED | Hypothesise/gather/critique/revise/stop observable in the trace (SC-0012, E2E scenario C) |
 | FR-INV-03 | SATISFIED | Five budget limits each terminate the run; budget-exhaustion scenario |
 | FR-INV-04 | SATISFIED | Limit exhaustion yields a partial result, never a stall |
-| FR-INV-05 | PARTIALLY SATISFIED | Six evidence domains reachable; traces simulator-only and per-domain analysis is deterministic (no model-assisted strategies) |
+| FR-INV-05 | PARTIAL | Six evidence domains reachable; traces simulator-only (GAP-17); per-domain analysis is deterministic; a multi-service incident collects evidence for the first service only (GAP-32) |
 | FR-INV-06 | SATISFIED | Read-only registry ceiling for investigation; tool-abuse campaign refuses writes before any adapter call |
 | FR-INV-07 | SATISFIED | Every step persisted with rationale, tool, inputs, outputs and cost; strict replay |
-| FR-INV-08 | PARTIALLY SATISFIED | Gap tracking drives selection; the redundant-call-rate baseline metric is not computed (GAP-27) |
+| FR-INV-08 | PARTIAL | Gap tracking drives selection; the redundant-call-rate baseline metric is not computed (GAP-27) |
 | FR-KNW-01 | SATISFIED | Governed ingestion, structure-aware chunking and metadata for runbooks, service docs, known errors and postmortems as imported text; no connector-specific fetch |
 | FR-KNW-02 | SATISFIED | Scope filters applied as query predicates before ranking |
 | FR-KNW-03 | SATISFIED | ACL in the pre-ranking CTE; zero unauthorized hits; mutation-tested |
@@ -81,16 +83,16 @@ LOCAL benchmarks ([docs/testing](../testing/README.md)).
 | FR-KNW-06 | SATISFIED | Retrieval evaluation on a 12-document golden corpus (recall@5, precision@5, MRR); small corpus, not a production benchmark |
 | FR-KNW-07 | SATISFIED | Injection corpus across every vector; zero authorization effect (`test_injection_campaign.py`) |
 | FR-MEM-01 | SATISFIED | Five tiers with distinct write authority |
-| FR-MEM-02 | SATISFIED | Database rejects ungoverned memory writes |
+| FR-MEM-02 | SATISFIED | Database rejects ungoverned memory writes. Nothing in the deployed product proposes a promotion yet (no G12 step, GAP-31), so the governed path is exercised by tests, not by incidents |
 | FR-MEM-03 | SATISFIED | No auto-promotion path; every promotion needs a human decision |
 | FR-MEM-04 | SATISFIED | Human, not-the-proposer decision; versioned; lineage re-evaluated |
-| FR-OBS-01 | PARTIALLY SATISFIED | Workflow, node, planner, tool, integration, API, ingestion, knowledge and evaluation spans; model calls are attributes; no database-operation spans (GAP-28) |
+| FR-OBS-01 | PARTIAL | Workflow, node, planner, tool, integration, API, ingestion, knowledge, evaluation, worker and postmortem spans; model calls are attributes; no database-operation spans (GAP-28) |
 | FR-OBS-02 | SATISFIED | Catalogued metrics, seven dashboards and SLO rules (validated, not deployed) |
 | FR-OBS-03 | SATISFIED | Exported trace ids equal persisted ones; strict replay reproduces routing |
 | FR-OBS-04 | SATISFIED | Trace id joins incident, workflow run, evidence, actions and evaluation |
 | FR-OBS-05 | SATISFIED | Secret-leak campaign finds no canary in any sink |
-| FR-PMT-01 | INTENTIONALLY DEFERRED | Postmortem generation (node G11) not built (GAP-10) |
-| FR-PMT-02 | INTENTIONALLY DEFERRED | Depends on FR-PMT-01 (GAP-10) |
+| FR-PMT-01 | SATISFIED | G11 postmortem author (`src/asic/postmortem`) drafts a postmortem for every resolved incident; the deployed worker triggers it (`WorkKind.POSTMORTEM`). Golden and negative-control suite `tests/postmortem`, worker flow `tests/worker`, demo product path and kind acceptance. Prose is scripted until a live model exists (GAP-08, GAP-37) |
+| FR-PMT-02 | SATISFIED | Every non-structural claim cites incident events, evidence or other persisted records by handle, resolved to row ids and re-checked against the database in tests, the demo and kind; a deterministic validator removes uncited, foreign-cited, flagged-only, unsupported-causal and unsupported-figure claims into a labelled uncertainty list. Drafts are `draft` + `review_required`, enforced by a check constraint and append-only grants (migration 0020); no review or publication workflow exists (GAP-30) |
 | FR-POL-01 | SATISFIED | Deterministic gate, sole authorization path, no model call |
 | FR-POL-02 | SATISFIED | Gate input type cannot carry retrieved or model content |
 | FR-POL-03 | SATISFIED | Exactly one policy decision per action |
@@ -110,18 +112,18 @@ LOCAL benchmarks ([docs/testing](../testing/README.md)).
 | FR-VRF-01 | SATISFIED | Every executed action independently verified (E2E scenarios B, H) |
 | FR-VRF-02 | SATISFIED | Executor output absent from the verdict input |
 | FR-VRF-03 | SATISFIED | Criteria frozen at proposal |
-| FR-VRF-04 | PARTIALLY SATISFIED | Verification failure escalates (never marked resolved; partial-effect alert and runbook); automated compensation/rollback is deferred (GAP-11) |
+| FR-VRF-04 | PARTIAL | Verification failure escalates and is never marked resolved (E2E scenario H, partial-effect alert and runbook); rollback tools are registered but no path proposes or triggers compensation (GAP-11) |
 | NFR-MNT-01 | SATISFIED | 31 ADRs (0001-0032; 0021 reserved) with alternatives and trade-offs |
 | NFR-MNT-02 | SATISFIED | Each technology justified in an ADR against the specification |
 | NFR-MNT-03 | SATISFIED | Quality workflow gates all listed categories; executed locally, remote runs not verified (GAP-01) |
 | NFR-MNT-04 | SATISFIED | Hygiene scanner, reproducible clean install, linear authored history |
 | NFR-OBS-06 | SATISFIED | Observable, testable, replayable, evaluable, interruptible, recoverable, permission-aware, reproducible — each with tests |
-| NFR-PRF-01 | PARTIALLY SATISFIED | LOCAL: ingestion p95 678 ms at 8 alerts/s; above ingestion capacity p95 exceeds 5 s |
-| NFR-PRF-02 | PARTIALLY SATISFIED | LOCAL: investigation run p95 3.0 s with the deterministic provider; a live model is not measured |
+| NFR-PRF-01 | PARTIAL | LOCAL (final image): ingestion p95 72 ms at 8 alerts/s; at 50 alerts/s offered most alerts cannot be sent within 1 s (Phase 15: p95 6.4 s), so the budget holds only below ingestion capacity |
+| NFR-PRF-02 | PARTIAL | LOCAL (final image): investigation run p95 3.1 s with the deterministic provider; a live model is not measured |
 | NFR-PRF-03 | SATISFIED | Budget exhaustion is a clean terminating state |
-| NFR-PRF-04 | PARTIALLY SATISFIED | LOCAL: ≈ 12 alerts/s sustained per 2-CPU API process, below the assumed 50/s (GAP-23) |
+| NFR-PRF-04 | PARTIAL | LOCAL (final image): ≈ 21 successful alerts/s per 2-CPU API process with 56 % of the offered 50/s dropped before sending (Phase 15: ≈ 12/s including rejections); below the assumed 50/s (GAP-23) |
 | NFR-PRF-05 | SATISFIED | Tokens and cost recorded per run and in evaluation reports |
-| NFR-PRT-01 | SATISFIED | Docker images, Kubernetes deploy and Terraform apply/destroy on local kind |
+| NFR-PRT-01 | SATISFIED | Docker images (non-root, digest-addressed); Kubernetes deployment of database, migration, API, frontend and the **worker** on kind + Cilium; Terraform apply / no-drift re-plan / destroy of the namespace, Pod Security Admission and service accounts. Kind acceptance drives alert -> worker -> investigation -> remediation -> verification -> postmortem through the API. Limit: the production worker profile refuses to start until a live model exists (GAP-08); on kind the worker runs the final image plus a test-only simulator layer |
 | NFR-PRT-02 | SATISFIED | Local demo and full suite with simulators and no live infrastructure |
 | NFR-REL-01 | SATISFIED | Crash matrix: resume with zero duplicated side effects |
 | NFR-REL-02 | SATISFIED | Effect-level idempotency for every write tool |
@@ -131,25 +133,35 @@ LOCAL benchmarks ([docs/testing](../testing/README.md)).
 | NFR-REL-06 | SATISFIED | Duplicate classes absorbed; HTTP storms |
 | NFR-REL-07 | SATISFIED | Partial tool failure degrades (dependency fault matrix, E2E scenario E) |
 | NFR-REL-08 | SATISFIED | Provider/API outages end in escalation or uncertainty, never destructive (model-provider suite, chaos) |
-| NFR-REL-09 | PARTIALLY SATISFIED | Resume is proven, but after an unclean process death a new worker takes over only when the 15-minute lease expires, so the assumed 60 s budget is not met (GAP-26); no worker is deployed (GAP-07) |
+| NFR-REL-09 | PARTIAL | Resume is proven and the deployed worker recovers crashed runs, but only after the 15-minute lease expires, so the assumed 60 s budget is not met (GAP-26) |
 | NFR-SEC-01 | SATISFIED | OIDC/JWKS verifier with bounded lifetime; development HS256 refused in production; no live-IdP interop test |
 | NFR-SEC-02 | SATISFIED | RBAC matrix over every route, including approval |
 | NFR-SEC-03 | SATISFIED | RLS backstop with mechanical schema audit; tenant campaign |
 | NFR-SEC-04 | SATISFIED | Least-privilege roles (runtime, migration, auditor, maintenance) and per-connector credentials |
 | NFR-SEC-05 | SATISFIED | Model cannot invoke, widen or authorize outside its menu (tool-abuse and model-failure suites) |
 | NFR-SEC-06 | SATISFIED | Typed secrets, redaction at emission, gitleaks history/tree, canary campaign |
-| NFR-SEC-07 | EXTERNAL | Outbound TLS verified; ingress TLS termination and encryption at rest belong to the platform (GAP-02, GAP-03, GAP-29) |
+| NFR-SEC-07 | PARTIAL | In transit: outbound HTTPS verified; a production process refuses any database URL that is not `sslmode=verify-full` with a mounted CA and a TCP host, enforced by the API, worker, migration and retention entry points before connecting (`asic.db.tls`, `tests/security/test_database_tls.py`, final image). Not verified against a TLS-serving managed database; ingress TLS and pod-to-pod mTLS are platform (GAP-02, GAP-29). At rest: managed-database encryption not deployed (GAP-03) |
 | NFR-SEC-08 | SATISFIED | Executions, decisions and denials audited |
 | NFR-SEC-09 | SATISFIED | Bounded validated input; seeded fuzz campaign over every route never yields a 500 |
 | NFR-SEC-10 | SATISFIED | Injection corpus; zero authorization effect; detection recorded as signal |
 | NFR-SEC-11 | SATISFIED | Log lines, runbooks, tickets and titles reach the model only fenced as untrusted data with no authority; log query results carry `VERIFIED_FACT` provenance (the query happened) while their text stays untrusted |
-| NFR-SEC-12 | PARTIALLY SATISFIED | Per-principal and failed-auth limiters plus an ingestion bulkhead, per process only (GAP-13) |
+| NFR-SEC-12 | PARTIAL | Per-principal and failed-auth limiters plus an ingestion bulkhead, per process only (GAP-13) |
 | NFR-SEC-13 | SATISFIED | `security_gate.py --strict --require-container-scan` executed locally 11/11; remote CI run not verified (GAP-01) |
-| NFR-SEC-14 | PARTIALLY SATISFIED | Classification, holds, dry-run planner and an executor for the idempotency cache only (ADR-0032); other classes deferred (GAP-15) |
+| NFR-SEC-14 | PARTIAL | Classification, holds, dry-run planner and an executor for the idempotency cache only (ADR-0032); other classes deferred (GAP-15) |
 | NFR-SEC-15 | SATISFIED | Per-tenant connector credentials with composite RESTRICT binding |
 | NFR-TST-01 | SATISFIED | All fifteen §17 categories present, including load, resilience and deployment smoke |
 | NFR-TST-02 | SATISFIED | Failure-path, adversarial, chaos and fault suites gate completion |
 | NFR-TST-03 | SATISFIED | SI-1..SI-15 (remediation-safety-policy.md §1) each attacked: proposer/executor separation, command-field refusal, gate input type, read-only credentials, R3 absence, hash-mismatch, drift, duplicate delivery, executor-claim, immutable target, dispatch re-resolution, deterministic verifier, audit reconciliation, fail-closed, ungated memory write |
+
+
+## Phase 16 closure correction evidence
+
+| Requirement | Implemented evidence and limits |
+|---|---|
+| FR-PMT-01, FR-PMT-02 | G11 author and grounding validator (`src/asic/postmortem`), migration 0020 (versioned, append-only, drafts-only), API `GET /incidents/{id}/postmortems`, `tests/postmortem` (golden resolved incident; unsupported causal claim, malicious publish instruction, cross-tenant access, ineligible incident, replay/resume), worker trigger, demo and kind acceptance |
+| NFR-PRT-01, FR-INC-01, FR-INC-02 | Worker (`src/asic/worker`: PostgreSQL discovery, advisory-lock claims over kernel leases, bounded concurrency, SIGTERM drain, probes), `deploy/kubernetes/base/worker-deployment.yaml`, `tests/worker` (full flow, two-worker race, crash recovery, shutdown, outage, configuration), kind acceptance with two replicas |
+| NFR-SEC-07 | `asic.db.tls` production transport policy; migration and maintenance Jobs mark the production profile; optional database CA Secret mounted by every backend workload |
+| FR-CLB-03, FR-CLB-01 | Re-evaluated: no vacuous satisfaction (GAP-12, GAP-38) |
 
 ## Phase 15 implementation evidence
 
@@ -164,7 +176,7 @@ Every measured figure is LOCAL.
 | NFR-SEC-09, NFR-SEC-10, NFR-SEC-12 | API fuzz and abuse-cost, injection corpus, rate-limit and ingestion bulkhead ([SECURITY_HARDENING.md](../testing/SECURITY_HARDENING.md)) |
 | NFR-SEC-01 | P13-SEC-05 closed: `iat` required, bounded token lifetime in both verifiers |
 | NFR-SEC-14 | Retention executor for the idempotency cache under `asic_maintenance`, immutable receipts, suspended dry-run CronJob |
-| NFR-TST-01 | Load/performance, resilience/fault-injection and E2E categories added; 2,422 tests pass ([PHASE15_RESULTS.md](../testing/PHASE15_RESULTS.md)) |
+| NFR-TST-01 | Load/performance, resilience/fault-injection and E2E categories added; 2,472 tests pass after the Phase 16 closure correction ([PHASE16_CLOSURE_RESULTS.md](../testing/PHASE16_CLOSURE_RESULTS.md)) |
 
 ## Phase 5 implementation evidence
 
@@ -359,7 +371,7 @@ production adapter, remediation-quality score or automated compensation is claim
 | NFR-SEC-01..02 | Tool Broker remains the sole provider boundary; write grant/tool enablement and target/action/policy/approval authority are recomputed immediately before dispatch |
 | NFR-REL-06 | Checkpoints retain the original run identity, wall clock and consumed budget; the immutable target and durable remediation rows are re-read on resume. Every current synchronous model adapter must publish a conservative token/cost bound and calls that cannot fit are refused before invocation; live/asynchronous providers remain deferred |
 
-- **Status:** The per-area tables below are the Architecture Package's planned mapping (component, phase, validation, acceptance). Closing status: [Final status](#final-status-phase-16).
+- **Status:** The per-area tables below are the Architecture Package's planned mapping (component, phase, validation, acceptance). Closing status: [Final status](#final-status-phase-16-closure-correction).
 - **Requirement definitions:** [`../prd/SRS.md`](../prd/SRS.md)
 - **Master specification:** [`../spec/MASTER_PROJECT_PROMPT_V3.md`](../spec/MASTER_PROJECT_PROMPT_V3.md)
 
@@ -368,7 +380,7 @@ architecture component that will satisfy it, the phase in which it is built, how
 validated, and the acceptance criterion.
 
 > **Historical note (Phases 3–10).** The closing status of every requirement is the
-> [Final status](#final-status-phase-16) table at the top of this document; the note below records
+> [Final status](#final-status-phase-16-closure-correction) table at the top of this document; the note below records
 > how status was tracked while Phases 3 through 10 were in progress.
 > Rather than repeat a status column 138 times, the rule is: a requirement is
 > implemented **only** where a passing test is named in the Validation column *and* that

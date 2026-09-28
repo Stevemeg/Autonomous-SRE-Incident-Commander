@@ -52,6 +52,8 @@ ROUTES = (
     Route("GET", "/api/v1/incidents", PermissionKey.INCIDENT_READ),
     Route("GET", "/api/v1/incidents/{incident}", PermissionKey.INCIDENT_READ),
     Route("POST", "/api/v1/incidents/{incident}/annotate", PermissionKey.INCIDENT_CONTROL),
+    Route("POST", "/api/v1/incidents/{incident}/resolve", PermissionKey.INCIDENT_CONTROL),
+    Route("GET", "/api/v1/incidents/{incident}/postmortems", PermissionKey.INCIDENT_READ),
     Route("GET", "/api/v1/approvals/pending", PermissionKey.REMEDIATION_APPROVE),
     Route("GET", "/api/v1/evaluation/runs", PermissionKey.EVALUATION_READ),
     Route("GET", "/api/v1/admin/tools", PermissionKey.ADMINISTRATION_READ),

@@ -28,6 +28,7 @@ locals {
     "asic-frontend",
     "asic-migration",
     "asic-maintenance",
+    "asic-worker",
   ])
 }
 

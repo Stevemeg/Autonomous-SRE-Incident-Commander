@@ -516,10 +516,22 @@ def summarise(samples: list[Sample], wall: float) -> dict[str, Any]:
     statuses: dict[str, int] = {}
     for s in samples:
         statuses[str(s.status)] = statuses.get(str(s.status), 0) + 1
+    successful = len(samples) - len(errors)
+    rejected = sum(1 for s in samples if s.status in (429, 503))
+
+    def rate(count: int) -> float | None:
+        return round(count / wall, 2) if wall else None
+
     return {
         "requests": len(samples),
         "wall_seconds": round(wall, 2),
-        "throughput_rps": round(len(samples) / wall, 2) if wall else None,
+        # Terminology (Phase 16 correction): a classified rejection (429/503) is an answered
+        # request, not throughput. ``throughput_rps`` counts successful responses only.
+        "responses_per_second": rate(len(samples)),
+        "successful_per_second": rate(successful),
+        "classified_rejections_per_second": rate(rejected),
+        "classified_rejections": rejected,
+        "throughput_rps": rate(successful),
         "error_rate": round(len(errors) / len(samples), 5) if samples else None,
         "statuses": statuses,
         "p50_ms": pct(latencies, 0.50),
@@ -591,7 +603,13 @@ def open_loop(
                 else:
                     collected.append(result)
     summary = summarise(collected, time.monotonic() - started)
-    return {"target_rps": rate, "scheduled": total, "dropped": dropped, **summary}
+    return {
+        "target_rps": rate,
+        "offered_rps": rate,  # scheduled attempts per second, whether or not they could start
+        "scheduled": total,
+        "dropped": dropped,  # slots that could not start within 1 s: offered but never sent
+        **summary,
+    }
 
 
 def capacity(driver: Driver, seconds: float, levels: list[int]) -> dict[str, Any]:
@@ -771,9 +789,29 @@ def environment(admin_url: str, api_container: str | None) -> dict[str, Any]:
             ["git", "status", "--porcelain"], capture_output=True, text=True, cwd=REPO, check=False
         ).stdout.strip()
     )
+    image: dict[str, str] = {}
+    if api_container:
+        inspected = subprocess.run(
+            [
+                "docker",
+                "inspect",
+                api_container,
+                "--format",
+                '{{.Image}} {{index .Config.Labels "org.opencontainers.image.revision"}}',
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        ).stdout.split()
+        if len(inspected) == 2:
+            # The image under test, not the harness's checkout: the revision label carries the
+            # content fingerprint of the tree the image was built from.
+            image = {"api_image_id": inspected[0], "api_image_revision": inspected[1]}
     return {
         "label": LABEL,
         "date": datetime.now(UTC).isoformat(timespec="seconds"),
+        **image,
         "commit": commit,
         "working_tree_dirty": dirty,
         "host": {

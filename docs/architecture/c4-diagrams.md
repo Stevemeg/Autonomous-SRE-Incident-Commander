@@ -166,6 +166,12 @@ flowchart TB
 | API service | Edge authorization, normalisation, correlation | Alert rate | Yes |
 | Orchestrator worker | Incident workflows, agent execution, **all authorization and egress** | Concurrent incidents | No — holds workflow leases; state in PostgreSQL |
 | Batch worker | Offline knowledge, postmortem, memory, evaluation | Offline job volume | Yes |
+
+> **As built (Phase 16 closure):** one worker container (`asic-worker`, `python -m asic.worker`, the
+> API's image) plays both worker roles above for incidents: investigations, remediation runs and
+> G11 postmortem drafts. Knowledge ingestion and evaluation runs are operator commands, and memory
+> curation (G12) is not built. See [orchestration-kernel §18](./orchestration-kernel.md) and
+> [agent topology §0](./agent-topology.md).
 | Dashboard | Presentation only; no direct store access | Operator count | Yes |
 
 ---

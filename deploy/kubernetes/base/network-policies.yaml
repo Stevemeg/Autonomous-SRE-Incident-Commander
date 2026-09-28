@@ -119,3 +119,53 @@ spec:
               app.kubernetes.io/name: asic-egress-gateway
       ports:
         - {protocol: TCP, port: 8443}
+---
+# The worker serves nothing but its probes (kubelet) and, optionally, /metrics to the
+# observability namespace. No frontend, ingress controller or other namespace reaches it.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: worker-ingress
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: asic-worker
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: observability
+      ports:
+        - {protocol: TCP, port: 8081}
+---
+# Narrower than the API's: the worker needs the database, the trace collector and the egress
+# gateway (the only route to integration adapters). It never talks to the identity provider, so
+# the renderer's reviewed direct-HTTPS CIDRs are not appended to this policy.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: worker-platform-egress
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: asic-worker
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 192.0.2.1/32
+      ports:
+        - {protocol: TCP, port: 5432}
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: observability
+      ports:
+        - {protocol: TCP, port: 4318}
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: asic-egress-gateway
+      ports:
+        - {protocol: TCP, port: 8443}

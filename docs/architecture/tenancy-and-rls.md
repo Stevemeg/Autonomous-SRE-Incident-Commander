@@ -52,7 +52,7 @@ flowchart TB
 |---|---|---|
 | **1. Application** | `tenant_scope()` binds the tenant for the transaction; `require_tenant()` raises rather than returning an empty set | Ordinary programming, and makes an unbound query diagnosable |
 | **2. Referential** | Composite foreign keys `(tenant_id, child_id) → parent(tenant_id, id)` | A row pointing at another tenant's row, even when RLS is satisfied |
-| **3. Row-level security** | `FORCE ROW LEVEL SECURITY` plus a `USING`/`WITH CHECK` policy on all 30 tenant-scoped tables | **Every query that forgot its tenant predicate** |
+| **3. Row-level security** | `FORCE ROW LEVEL SECURITY` plus a `USING`/`WITH CHECK` policy on every tenant-scoped table (50 at the Phase 16 closure; the audit derives the set from the models) | **Every query that forgot its tenant predicate** |
 
 Layer 3 is the backstop, and it is the one that makes the guarantee real.
 
@@ -226,8 +226,8 @@ shipping a role that can already see everything.
 
 | Property | Test |
 |---|---|
-| All 30 tenant-scoped tables have RLS enabled *and* forced | `test_every_tenant_scoped_table_has_rls_enabled_and_forced` |
-| All 30 have an isolation policy with both `USING` and `WITH CHECK` | `test_policies_constrain_writes_as_well_as_reads` |
+| Every tenant-scoped table (30 in Phase 3, 50 now) has RLS enabled *and* forced | `test_every_tenant_scoped_table_has_rls_enabled_and_forced` |
+| Every one has an isolation policy with both `USING` and `WITH CHECK` | `test_policies_constrain_writes_as_well_as_reads` |
 | Unbound reads return nothing; unbound writes are refused | `TestFailClosed` |
 | Reads, updates and deletes cannot reach another tenant's rows | `TestCrossTenantReads`, `TestCrossTenantWrites` |
 | Aggregates do not leak counts | `test_aggregates_do_not_leak_counts_across_tenants` |
@@ -235,7 +235,8 @@ shipping a role that can already see everything.
 | The test role is genuinely unprivileged | `test_the_test_role_is_not_privileged` |
 | Global catalogues are read-only to the application | `test_global_catalogues_are_read_only_to_the_application` |
 
-**Not yet verified, and honestly out of scope for Phase 3:**
+**Not verified in Phase 3** (kept as written then; the final status of each follows in
+*Resolution at the project close* below):
 
 - Concurrency: no test yet runs two tenants' work simultaneously on a shared pool to prove
   the transaction-local setting holds under contention. Planned for Phase 15.
@@ -264,3 +265,17 @@ FKs. Migration 0018 tightened the grants that the audit found over-broad and add
 connector-binding composite key (ADR-0030). Still true:
 production composition must run the application as `asic_app` (a superuser bypasses RLS whatever
 `FORCE` says), and concurrency under a shared pool remains a Phase 15 obligation.
+
+### Resolution at the project close (Phase 16)
+
+| Phase 3 open item | Final state |
+|---|---|
+| Concurrency: two tenants on a shared pool | **Implemented evidence.** Phase 15 ran the API under load as the real non-owner role (400 principals, one tenant per run, pooled connections) and fixed two pool deadlocks with regression tests; the schema-wide tenant campaign attacks every tenant table and GET route as the runtime role (`tests/security/test_tenant_campaign.py`); the Phase 16 worker binds each tenant per transaction and its race test runs two workers on one pool (`tests/worker`) |
+| Connection pooling in a real server | **Implemented evidence.** `bind_tenant_on_begin` binds per transaction in the endpoint's thread; exercised by the load harness and kind deployment |
+| `pg_hba`/TLS configuration | **Application side built** (Phase 16): production refuses a database URL that is not `sslmode=verify-full` with a mounted CA (`asic.db.tls`); server-side TLS and `pg_hba` belong to the managed database ([GAP-03, GAP-29](../PRODUCTION_GAP_REGISTER.md)) |
+| Performance of RLS predicates at scale | **Not measured** beyond the local benchmark ([GAP-23](../PRODUCTION_GAP_REGISTER.md)) |
+
+Phase 16 added two tenant tables' worth of change: `remediation_request` (new, FORCE RLS,
+composite tenant foreign keys, no DELETE) and `postmortem` (existing; now append-only, the runtime
+role holds only SELECT and INSERT). Both are picked up by the mechanical audit automatically,
+because the audit derives its expectations from the model registry.

@@ -430,9 +430,12 @@ in the node rather than a hazard the orchestrator can route around.
 with cancellation, or a per-node connection that can be closed out of band so an abandoned
 thread cannot reach the database. Either is an orchestration change, not a tuning change,
 and the brief for this correction is explicit that a new execution engine is out of scope.
-Recorded as a **Phase 15 obligation** alongside the concurrency work, since both concern the
-same execution model. Introducing Temporal or another workflow engine to solve it is
-explicitly not the answer (ADR-0002).
+It was recorded for Phase 15; Phase 15 delivered the concurrency evidence (pool-deadlock fixes,
+load and chaos runs) but not preemption, and the project closes with it as a **known limitation,
+[GAP-34](../PRODUCTION_GAP_REGISTER.md)**. The deployed worker inherits it: a SIGTERM drain waits
+for a running node and, at its deadline, abandons it to lease-based recovery rather than
+interrupting it (§18). Introducing Temporal or another workflow engine to solve it is explicitly
+not the answer (ADR-0002).
 
 **How the claim is kept honest.** `tests/orchestration/test_timeouts.py` asserts that the
 kernel does *not* run nodes on a worker pool. If node preemption is ever implemented, that
@@ -539,12 +542,45 @@ Stated because they are real, not because they are comfortable.
 
 | Limitation | Consequence | Where it is addressed |
 |---|---|---|
-| No real model provider | Reasoning quality is untested and unclaimed. Phase 7 added bounded reflection to the existing model-backed hypothesis call; it did not add a live provider (ADR-0016 still applies unchanged) | Phase 11, when a measurable evaluation harness exists |
-| No real adapters | Behaviour against live telemetry is unproven | Phase 10 |
-| Single-service evidence collection | A multi-service incident collects for the first service in scope. Phase 7 did not touch the evidence collector's domain strategies - it added reflection and hypothesis revision over evidence already gathered, not new collection strategies | Not yet scheduled; revisit if a later phase's evidence shows this matters |
-| Concurrency under a shared pool untested | Lease correctness is tested; contention is not measured | Phase 15 |
-| No performance measured | No latency, throughput or cost figure exists | Phase 15 |
-| **Node execution is not preemptible** | A node that blocks in pure Python is bounded only by the timeouts *inside* it | §11.2, Phase 15 obligation |
+| No real model provider | Reasoning quality is untested and unclaimed; every model call goes to the scripted deterministic provider (ADR-0016) | Open: [GAP-08](../PRODUCTION_GAP_REGISTER.md). The production worker profile refuses to start without one |
+| Adapters validated only against local servers | Native Prometheus, Loki, Kubernetes and collaboration adapters exist (Phase 10); behaviour against live systems is unproven | Open: GAP-16 |
+| Single-service evidence collection | A multi-service incident collects for the first service in scope. The evidence collector's domain strategies were built per service; later phases added reflection over gathered evidence, not collection fan-out | Open: [GAP-32](../PRODUCTION_GAP_REGISTER.md) |
+| Concurrency under a shared pool | Measured in Phase 15: the load harness found and fixed two pool deadlocks; the tenant campaign runs as the real non-owner role; two workers racing for one item produce one execution (`tests/worker`, kind) | Implemented evidence ([LOAD_AND_PERFORMANCE.md](../testing/LOAD_AND_PERFORMANCE.md)) |
+| Performance | LOCAL benchmark figures only | Open: GAP-23 |
+| **Node execution is not preemptible** | A node that blocks is bounded only by the timeouts *inside* it; a drain cannot interrupt it | §11.2; open: [GAP-34](../PRODUCTION_GAP_REGISTER.md) |
+| Resume after an unclean death waits for the lease | A crashed worker's run is taken over only after its 15-minute lease | Open: GAP-26 |
 | `0005` cannot be downgraded once a tool has run | Correct: `ON DELETE RESTRICT` protects execution history | Deprecate a catalogue entry rather than deleting it ([ADR-0018](../adr/0018-migrations-are-historical-contracts.md)) |
 | Reflection shares the hypothesis engine's model call | It cannot ask a follow-up question the same call did not already answer; a revision or counter-evidence request is proposed in the same response that formed the hypothesis it concerns | ADR-0022's documented revisit trigger |
 | A revision supersedes at most one hypothesis per step | `revise_hypothesis` names one target; superseding several requires several bounded-reflection steps, one per iteration | Not measured as a real constraint yet - no scenario has needed more than one |
+
+---
+
+## 18. The deployed worker (Phase 16 closure)
+
+The API records work and never runs a graph. `python -m asic.worker` (`src/asic/worker`) is the
+deployed process that drives it, reusing PostgreSQL as the only queue (no broker, ADR-0007):
+
+| Work | Discovered as | Driven through |
+|---|---|---|
+| Investigation | pending `investigation_dispatch`, or a linked run that is suspended or lease-expired | `InvestigationDispatcher` |
+| Remediation start | pending `remediation_request` (a responder's API request) | `RemediationKernel.start(request_id=...)`, linked in the run-creating transaction |
+| Remediation continuation | a suspended or lease-expired remediation run with something new to act on (a recorded decision, an elapsed approval or settling window) | `RemediationKernel.resume` |
+| Postmortem | a resolved incident with no draft since its last resolution | G11 `PostmortemAuthor` |
+
+* **Ownership.** A session-scoped `pg_try_advisory_lock` per item stops two workers starting the
+  same item and vanishes with a dead worker's connection; the kernel lease, the one-live-run index,
+  dispatch/request linkage and effect idempotency remain the authority.
+* **Bounded concurrency.** A fixed pool (`ASIC_WORKER_CONCURRENCY`, at most 8); claims never
+  exceed free slots.
+* **Tenancy.** Discovery reads the global tenant catalogue and binds each tenant in its own
+  transaction; the worker is the ordinary runtime role, under row-level security.
+* **Failure.** Items fail with safe codes and are retried after a backoff; a request that keeps
+  failing is rejected and its incident handed back to a human.
+* **Shutdown.** SIGTERM stops claiming, drains for `ASIC_WORKER_DRAIN_SECONDS` (below the pod's
+  grace period), then exits; unfinished nodes recover by lease (GAP-34, GAP-26).
+* **Health.** An internal HTTP server: `/livez` (the poll loop is turning), `/readyz` (a recent
+  poll reached PostgreSQL, the behaviour version is resolved and the worker is not draining),
+  optionally `/metrics`. No API duplication.
+* **Profiles.** `live` refuses to start (no live model, GAP-08); `simulator` is non-production
+  test infrastructure and runs from a derived image on kind (the production image has no
+  simulator). Limits: [GAP-07](../PRODUCTION_GAP_REGISTER.md).

@@ -299,3 +299,20 @@ Code: `src/asic/observability/` (`catalogue`, `setup`, `lifecycle`, `logging`, `
   folded into incident operations and API health.
 - **Deployment.** Prometheus, Grafana, Loki, Tempo and the collector are not deployed (Phase 14);
   no metric, latency or availability value has been observed from a running deployment.
+
+---
+
+## Phase 16 closure: worker and G11 signals
+
+| Signal | Kind | Labels (closed vocabularies) |
+|---|---|---|
+| `asic_worker_items_total` | counter | `kind` (investigation, remediation_start, remediation_run, postmortem), `outcome` (completed, suspended, busy, terminal, rejected, created, existing, not_eligible, sources_changed, not_visible, failed, claimed_elsewhere) |
+| `asic_worker_item_duration_seconds` | histogram | `kind` |
+| `asic_postmortem_drafts_total` | counter | `outcome` |
+| `asic_postmortem_claims_removed_total` | counter | `reason` (no_citation, unknown_citation, flagged_source_only, unsupported_causal_claim, unsupported_figure, malformed) |
+
+No tenant, incident or item identifier is a label. The worker logs one `worker.item` record per
+item (kind, outcome, tenant and item ids as log fields, never labels) and `worker.blocked`,
+`worker.poll_failed`, `worker.stopping`, `worker.stopped`; G11 emits a `postmortem.author` span and
+the `postmortem.drafted` incident event. The worker serves `/metrics` on its probe port only when
+`ASIC_METRICS_ENABLED=true`.

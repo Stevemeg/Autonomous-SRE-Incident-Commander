@@ -185,3 +185,24 @@ limiting (GAP-13), DNS rebinding (GAP-14), secret-manager rotation (GAP-25) and 
 independent penetration test (GAP-24). Operational response: the
 [security incident runbook](../runbooks/operations/security-incident.md) and
 [secret rotation runbook](../runbooks/operations/secret-rotation.md).
+
+---
+
+## Phase 16 closure additions
+
+* **Database transport.** A production process refuses to start unless its database URL is
+  `sslmode=verify-full` with one TCP host and a readable CA (`asic.db.tls`); the check runs before
+  the first connection in the API, worker, migration and retention entry points and never prints
+  the URL. Plaintext is accepted only in an explicit non-production profile (NFR-SEC-07 remains
+  partial: encryption at rest and in-cluster mTLS are the platform's, GAP-03, GAP-29).
+* **Worker authority.** The worker is the ordinary runtime role under row-level security, with its
+  own tokenless service account and a network policy narrower than the API's. It has no endpoint
+  that accepts work; everything it does was recorded by an authenticated, authorized API call or by
+  ingestion.
+* **Remediation requests confer no authority.** A request only asks the worker to run the remediation
+  graph; the policy gate still decides, production actions still wait for an approver, and the
+  responder who requested the remediation cannot approve it.
+* **Postmortems are drafts by construction.** The database refuses any postmortem row that is not an
+  unreviewed draft and the runtime role cannot update one; retrieved or model text cannot change
+  that. Injected content in evidence is fenced, and a claim resting only on injection-flagged
+  evidence is removed.

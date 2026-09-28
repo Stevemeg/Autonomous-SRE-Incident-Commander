@@ -15,6 +15,7 @@ from sqlalchemy import engine_from_config, pool
 
 # Importing the models package is what populates the metadata Alembic compares against.
 from asic.db.models import metadata_obj
+from asic.db.tls import enforce_database_tls_policy
 
 config = context.config
 
@@ -30,6 +31,9 @@ def _database_url() -> str:
     for var in _URL_ENV_VARS:
         value = os.environ.get(var)
         if value:
+            # The migration role is the schema owner: it must meet the same production
+            # transport policy as the application (NFR-SEC-07, asic.db.tls).
+            enforce_database_tls_policy(value)
             return value
     raise RuntimeError(
         "no database URL for migrations: set "

@@ -30,13 +30,19 @@ T1 → T3 happens at incident close, mechanically, append-only. T3 → T5 and T3
 a proposal and a human approval record. There is no automatic path from "this worked
 once" to "this is what we do" (§10, SI-15).
 
-**Implementation note:** the proposal/approval mechanism is `asic.memory.service.
-MemoryGovernanceService` — a deterministic service called directly, not the `G12_MEMORY_
-CURATOR` orchestration node. `G12_MEMORY_CURATOR` exists as a reserved `NodeId` value but
-is not wired into any graph in this phase; nothing currently *proposes* a promotion
-automatically. `propose()`/`decide()` are available for a future node, an operator tool, or
-a human-facing workflow to call — Phase 6 builds the governance the promotion must satisfy,
-not the trigger that initiates one.
+**As built (Phase 16 closure):** the proposal/approval mechanism is `asic.memory.service.
+MemoryGovernanceService` — a deterministic service, not the `G12_MEMORY_CURATOR` node.
+`G12_MEMORY_CURATOR` is a reserved `NodeId` wired into nothing: no node, worker step or API
+route calls `propose()`/`decide()`, so **no promotion is ever proposed in the running product**
+([GAP-31](../PRODUCTION_GAP_REGISTER.md)). The governance the promotion must satisfy is built
+and tested; the trigger is not.
+
+**As built, the only live retrieval into T2 is T4** (the governed knowledge store, cited).
+There is **no T3 → T2 path**: the historical-incident read model (`asic.memory.history`) was
+removed in Phase 16 as dead code, and T5 verified outcomes are not retrieved into prompts either.
+A past incident reaches a running investigation only if its postmortem or runbook was ingested
+into T4 as a document ([GAP-33](../PRODUCTION_GAP_REGISTER.md)). The diagram below shows the
+as-built flows; the dashed edges are designed and **not built**.
 
 ```mermaid
 flowchart LR
@@ -48,11 +54,11 @@ flowchart LR
     H(["Human approval gate"])
 
     T1 -->|"assembled into"| T2
-    T3 -->|"advisory retrieval"| T2
-    T4 -->|"cited retrieval"| T2
-    T5 -->|"cited retrieval"| T2
+    T4 -->|"cited retrieval (built)"| T2
+    T3 -.->|"advisory retrieval: not built, GAP-33"| T2
+    T5 -.->|"cited retrieval: not built"| T2
     T1 -->|"incident close, mechanical"| T3
-    T3 --> H
+    T3 -.->|"proposal: no trigger, GAP-31"| H
     H -->|"approved promotion"| T4
     H -->|"approved promotion"| T5
 ```
@@ -61,6 +67,10 @@ flowchart LR
 
 Section 8 is explicit: *"Historical incidents inform current investigation but never
 override current evidence."* Enforced three ways:
+
+*As built, historical material can only arrive as T4 knowledge (ingested postmortems and
+runbooks); the three rules below apply to it, and are designed for a T3 retriever that does not
+exist (GAP-33). No scenario yet proves a contradicting stale document is outranked (GAP-18).*
 
 1. Historical material enters T2 labelled `RETRIEVED`, never `VERIFIED_FACT`.
 2. The Hypothesis Engine (G5) may cite history as *supporting context* but a hypothesis
@@ -336,8 +346,8 @@ budget, in a fixed precedence order:
 | 3 | Current evidence set | `VERIFIED_FACT` | Largest share |
 | 4 | Open gaps and prior hypotheses | Internal | Moderate |
 | 5 | Retrieved knowledge | `RETRIEVED`, delimited | Capped |
-| 6 | Verified past outcomes | `VERIFIED_FACT`, with support count | Capped |
-| 7 | Historical incident summaries | `RETRIEVED`, advisory | Smallest, dropped first |
+| 6 | Verified past outcomes (*designed; not retrieved as built*) | `VERIFIED_FACT`, with support count | Capped |
+| 7 | Historical incident summaries (*designed; not built, GAP-33*) | `RETRIEVED`, advisory | Smallest, dropped first |
 
 Three properties follow: assembly is **deterministic** (same state ⇒ same context, so
 replay is meaningful); **current evidence outranks history** by construction of the budget;

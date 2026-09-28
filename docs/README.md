@@ -3,14 +3,15 @@
 This directory holds every non-code artifact required by the master specification
 (section 16, "REQUIRED ARCHITECTURE/DOCUMENTATION").
 
-> **Current project stage: Phase 16 closeout.** Phases 3–15 are implemented and tested against
-> deterministic simulators, local HTTP servers, PostgreSQL and a disposable kind cluster; Phase 15
-> added load, resilience, chaos, adversarial security and end-to-end evidence
-> ([testing](./testing/README.md)). Nothing has run against production telemetry, live vendor
+> **Current project stage: Phase 16 closure correction complete.** Phases 3–16 are implemented and
+> tested against deterministic simulators, local HTTP servers, PostgreSQL and a disposable kind
+> cluster; Phase 15 added load, resilience, chaos, adversarial security and end-to-end evidence, and
+> the Phase 16 closure added the deployed worker, G11 postmortem drafts and production database TLS
+> ([testing](./testing/README.md), [closure results](./testing/PHASE16_CLOSURE_RESULTS.md)). Nothing has run against production telemetry, live vendor
 > systems, a live LLM or a remote CI runner. Closing status:
 > [production readiness review](./PRODUCTION_READINESS_REVIEW.md),
 > [production gap register](./PRODUCTION_GAP_REGISTER.md) and the
-> [requirements final status](./architecture/requirements-traceability.md#final-status-phase-16).
+> [requirements final status](./architecture/requirements-traceability.md#final-status-phase-16-closure-correction).
 > No metric anywhere in this directory is a measurement unless it is labelled as measured, with
 > its environment.
 

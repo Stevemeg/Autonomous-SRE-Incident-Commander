@@ -23,9 +23,18 @@ An incident stays `investigating` (or `awaiting_approval`) far longer than its b
 
 ## Mitigate
 
-* Let the lease expire, then resume the run through the dispatcher; it continues from its last
-  checkpoint and reapplies no completed side effect (crash/resume matrix,
-  `tests/resilience/test_crash_resume_matrix.py`).
+* Make sure a worker is running and ready: `kubectl -n asic-system get deploy asic-worker` and
+  `kubectl -n asic-system logs deploy/asic-worker | grep worker.item`. There is no manual resume
+  command: once the dead worker's lease expires, the running worker discovers the stranded run on
+  its next poll (a suspended run, or a `running` run with an expired lease) and resumes it from
+  its last checkpoint, reapplying no completed side effect (`tests/worker`, crash/resume matrix
+  `tests/resilience/test_crash_resume_matrix.py`). Expect up to `LEASE_DURATION` (15 minutes)
+  plus one poll interval (GAP-26).
+* If the worker logs `worker.blocked`, the release's behaviour version is not registered or does
+  not match the image; register it (see the operator guide) and the worker resumes by itself.
+* If the worker logs `worker.item` with outcome `failed` for this run repeatedly, read the
+  preceding `worker.item_failed` record (safe error class only) and treat the run as in
+  [workflow-runs-failing](../workflow-runs-failing.md).
 * If a remediation was dispatched before the crash, recovery reconciles its outcome by query; see
   [tool-unknown-outcome](../tool-unknown-outcome.md).
 

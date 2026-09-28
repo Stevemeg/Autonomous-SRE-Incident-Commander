@@ -110,6 +110,26 @@ hypothesis_revisions_total = _meter.create_counter(
     description="Hypotheses superseded by a bounded-reflection revise_hypothesis decision.",
 )
 
+postmortem_drafts_total = _meter.create_counter(
+    "asic.postmortem.drafts",
+    description=(
+        "G11 postmortem author invocations, by outcome (created, existing, not_eligible, "
+        "sources_changed). A closed vocabulary."
+    ),
+)
+postmortem_claims_removed_total = _meter.create_counter(
+    "asic.postmortem.claims.removed",
+    description="Model-drafted postmortem claims removed by grounding validation, by reason.",
+)
+worker_items_total = _meter.create_counter(
+    "asic.worker.items",
+    description="Durable work items the worker attempted, by kind and outcome.",
+)
+worker_item_duration_seconds = _meter.create_histogram(
+    "asic.worker.item.duration",
+    unit="s",
+    description="Wall-clock time to process one durable work item, by kind.",
+)
 
 __all__ = [
     "METER_NAME",
@@ -123,6 +143,8 @@ __all__ = [
     "node_duration_seconds",
     "node_failures_total",
     "notification_failures_total",
+    "postmortem_claims_removed_total",
+    "postmortem_drafts_total",
     "reflection_decisions_total",
     "resumes_total",
     "runs_terminated_total",
@@ -131,4 +153,6 @@ __all__ = [
     "tool_invocations_total",
     "tool_latency_seconds",
     "tool_refusals_total",
+    "worker_item_duration_seconds",
+    "worker_items_total",
 ]

@@ -64,6 +64,7 @@ from asic.db.models.remediation import (
     PolicyDecision,
     RemediationAction,
     RemediationBaseline,
+    RemediationRequest,
     RemediationTarget,
     Verification,
 )
@@ -157,6 +158,7 @@ __all__ = [
     "Postmortem",
     "RemediationAction",
     "RemediationBaseline",
+    "RemediationRequest",
     "RemediationTarget",
     "RetentionRun",
     "Role",

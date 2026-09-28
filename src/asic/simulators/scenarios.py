@@ -128,6 +128,47 @@ class ScenarioExpectation:
     notes: str = ""
 
 
+#: The scripted G11 response every scenario uses unless it supplies its own. Every statement
+#: cites a handle; none states a cause, a figure or a business impact.
+DEFAULT_POSTMORTEM_SCRIPT: Final[str] = json.dumps(
+    {
+        "summary": [
+            {
+                "text": "The incident was closed after a remediation action was executed and "
+                "then checked against a fresh telemetry reading.",
+                "citations": ["RA1", "TX1", "VF1"],
+            }
+        ],
+        "what_went_well": [
+            {
+                "text": "Evidence was gathered from telemetry before any remediation was proposed.",
+                "citations": ["EV1"],
+            },
+            {
+                "text": "The action was checked by an independent verification step before the "
+                "incident was closed.",
+                "citations": ["VF1"],
+            },
+        ],
+        "what_went_poorly": [
+            {
+                "text": "The problem was first noticed through an alert rather than through "
+                "a pre-release check.",
+                "citations": ["A1"],
+            }
+        ],
+        "follow_up_actions": [
+            {
+                "text": "Add a pre-release check that covers the behaviour described by the "
+                "leading hypothesis.",
+                "citations": ["H1"],
+            }
+        ],
+    },
+    sort_keys=True,
+)
+
+
 @dataclass(frozen=True, slots=True)
 class Scenario:
     """One complete, reproducible world."""
@@ -147,6 +188,10 @@ class Scenario:
     #: every investigation-only scenario - the remediation graph is a separate run against
     #: a completed investigation's hypothesis, not a continuation of this same script.
     remediation_planner_script: tuple[str, ...] = ()
+    #: Phase 16: raw model output for G11 Postmortem Author. Cites record *handles*
+    #: (``RA1``, ``VF1``, ...) because a script cannot know runtime ids; a handle that does
+    #: not exist for a given incident is removed by grounding validation, never kept.
+    postmortem_script: tuple[str, ...] = field(default_factory=lambda: (DEFAULT_POSTMORTEM_SCRIPT,))
     budget: BudgetPolicy | None = None
     tags: tuple[str, ...] = field(default_factory=tuple)
 

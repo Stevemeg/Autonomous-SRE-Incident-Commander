@@ -13,7 +13,7 @@ spec:
             matchExpressions:
               - key: app.kubernetes.io/name
                 operator: In
-                values: [asic-api, asic-migration]
+                values: [asic-api, asic-migration, asic-worker]
       ports:
         - {protocol: TCP, port: 5432}
 ---
@@ -25,6 +25,23 @@ spec:
   podSelector:
     matchLabels:
       app.kubernetes.io/name: asic-api
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: postgres
+      ports:
+        - {protocol: TCP, port: 5432}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: local-worker-postgres-egress
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: asic-worker
   policyTypes: [Egress]
   egress:
     - to:

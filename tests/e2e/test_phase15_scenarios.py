@@ -574,10 +574,11 @@ def test_f_a_crash_after_the_side_effect_resumes_without_repeating_it(
     assert action.status is not RemediationActionStatus.FAILED_CLEAN, (
         "an applied effect is never 'clean'"
     )
-    if action.status is RemediationActionStatus.VERIFIED:
-        assert outcome.incident_status is IncidentStatus.RESOLVED
-    else:
-        assert outcome.incident_status is not IncidentStatus.RESOLVED
+    # The fixture's post-settling telemetry has recovered, so the one known outcome is an
+    # independently verified resolution (Phase 16: asserted, no longer conditional).
+    assert action.status is RemediationActionStatus.VERIFIED
+    assert outcome.terminated
+    assert outcome.incident_status is IncidentStatus.RESOLVED
 
 
 # ======================================================== G: cross-tenant attack

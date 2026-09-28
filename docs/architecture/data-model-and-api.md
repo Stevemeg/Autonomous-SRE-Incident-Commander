@@ -165,6 +165,7 @@ Every entity required by the brief, plus those the design makes necessary. `AO` 
 | **`remediation_baseline`** `AO` | Trusted pre-write observation | action/target/service/environment, profile/version, metric/source, read execution, observed/captured time, value, provenance hash | Exactly one per action; composite tenant FKs and broker execution provenance |
 | **`model_call_reservation`** | Durable model-attempt accounting | run, node, invocation key, reserved/actual usage, status, replay response | Reserved before invocation; unresolved outcomes retain the reservation |
 | **`connector_scope_binding`** | Ingestion catalogue authority | connector/source/service/environment, enabled, revoked_at | Signed claims request a tuple; only a current server-owned row authorizes it |
+| **`remediation_request`** | A responder's request that the worker remediate an escalated incident (migration 0020) | id, incident_id, hypothesis_id, service_id, requested_by_user_id, justification, status(`pending`\|`started`\|`rejected`), workflow_run_id, attempts, last_error | FORCE RLS, composite tenant FKs; one pending request per incident; `started` iff it names its run, linked in the run-creating transaction; no execution authority; the requester cannot approve the resulting action |
 | **`audit_record`** `AO` | Immutable audit | id, tenant_id, occurred_at, actor, incident_id, action_id, tool_execution_id, event_type, policy_rule_id, approval_id, outcome, payload_redacted | Never contains secrets; retained 7 years; append-only |
 
 ### 3.5 Knowledge and memory
@@ -175,7 +176,7 @@ Every entity required by the brief, plus those the design makes necessary. `AO` 
 | **`knowledge_chunk`** | Retrievable unit | id, document_id, tenant_id, seq, text, embedding, embedding_model_id, chunk_strategy, service_ids, environments, acl_labels | Embedding model recorded per chunk; scope columns are query predicates |
 | **`memory_entry`** | Durable memory (T4/T5, discriminated by `kind`) | id, tenant_id, root_cause_class, context_signature, action_ref, observed_effect, verification_verdict, support_count, first_seen, last_seen | `support_count = 1` is **never** auto-promoted (§10) |
 | **`memory_promotion`** | Governed write | id, proposed_by, target(`T4`\|`T5`), payload, approval_id, status, created_version | Requires an `approval` row (SI-15) |
-| **`postmortem`** | Draft artifact | id, incident_id, content, citations[], status(`draft`\|`reviewed`\|`published`), authored_by, reviewed_by | Cannot reach `published` without a human reviewer |
+| **`postmortem`** `AO` | G11 draft artifact (migration 0020) | id, incident_id, version, source_fingerprint, title, content, sections{claims+citations}, uncertainties[], citations[], resolution_basis, generation, validation, review_required, status | **Drafts only**: a check constraint refuses any row that is not an unreviewed `draft` with `review_required`; the runtime role holds only SELECT and INSERT; one row per (incident, source fingerprint), versions increase |
 
 ### 3.6 Evaluation and versioning
 
@@ -280,9 +281,14 @@ INCIDENT QUERY / CONTROL
   GET  /incidents/{id}/hypotheses
   GET  /incidents/{id}/actions
   GET  /incidents/{id}/trace
+  GET  /incidents/{id}/postmortems        G11 drafts (Phase 16): draft, review required
   POST /incidents/{id}/escalate
   POST /incidents/{id}/annotate
   POST /incidents/{id}/cancel             interruptibility (§11)
+  POST /incidents/{id}/resolve            human resolution (Phase 16; state machine decides)
+  POST /incidents/{id}/remediation-requests
+                                          {hypothesis_id, service_id, justification}: hand an
+                                          escalated incident to the worker (Phase 16; 202)
 
 APPROVAL
   GET  /approvals/pending

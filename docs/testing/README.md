@@ -5,7 +5,8 @@ production measurement, a service-level commitment or a capacity plan.
 
 | Document | What it covers |
 |---|---|
-| [PHASE15_RESULTS.md](PHASE15_RESULTS.md) | The validation run: test matrix, security tools, measured results and their sources |
+| [PHASE16_CLOSURE_RESULTS.md](PHASE16_CLOSURE_RESULTS.md) | The Phase 16 closure correction's validation: full suite, final images, security gate, kind acceptance of the worker and G11, chaos, evaluation, load |
+| [PHASE15_RESULTS.md](PHASE15_RESULTS.md) | The Phase 15 validation run: test matrix, security tools, measured results and their sources |
 | [LOAD_AND_PERFORMANCE.md](LOAD_AND_PERFORMANCE.md) | Load harness profiles, method and LOCAL BENCHMARK results; redaction timing |
 | [RESILIENCE_AND_CHAOS.md](RESILIENCE_AND_CHAOS.md) | Process-level fault suites and the declared chaos experiments on kind |
 | [SECURITY_HARDENING.md](SECURITY_HARDENING.md) | Adversarial campaigns, defects found and fixed, retention executor, non-claims |

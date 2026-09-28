@@ -96,10 +96,18 @@ spec:
           volumeMounts:
             - name: tmp
               mountPath: /tmp
+            - name: database-ca
+              mountPath: /etc/asic/database-ca
+              readOnly: true
       volumes:
         - name: tmp
           emptyDir:
             sizeLimit: 64Mi
+        # The database CA for sslmode=verify-full (NFR-SEC-07); see worker-deployment.yaml.
+        - name: database-ca
+          secret:
+            secretName: asic-database-ca
+            optional: true
       topologySpreadConstraints:
         - maxSkew: 1
           topologyKey: kubernetes.io/hostname

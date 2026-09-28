@@ -95,6 +95,8 @@ ALLOWED_SOURCE_ROOTS = (
     "src/asic/notifications",  # Phase 10 - S2 deterministic notification service
     "src/asic/evaluation",  # Phase 11 - evaluation harness, replay and regression gate
     "src/asic/retention",  # Phase 13 - retention classification, policy and dry-run planner
+    "src/asic/postmortem",  # Phase 16 closure - G11 postmortem author (FR-PMT-01/02)
+    "src/asic/worker",  # Phase 16 closure - the deployed durable-work worker
     "src/asic/simulators",
     "src/asic/tools",
     "migrations",

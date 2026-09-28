@@ -1,6 +1,6 @@
 # Software Requirements Specification (SRS)
 
-- **Status:** Authored in the Architecture Package (V3 §23 C). Closing implementation status of every requirement: [requirements traceability — final status](../architecture/requirements-traceability.md#final-status-phase-16).
+- **Status:** Authored in the Architecture Package (V3 §23 C). Closing implementation status of every requirement: [requirements traceability — final status](../architecture/requirements-traceability.md#final-status-phase-16-closure-correction).
 - **Authoritative source:** [`../spec/MASTER_PROJECT_PROMPT_V3.md`](../spec/MASTER_PROJECT_PROMPT_V3.md)
 - **Master specification references:** Sections 2–18, 23(C)
 - **Traceability:** every ID below appears in [`../architecture/requirements-traceability.md`](../architecture/requirements-traceability.md)

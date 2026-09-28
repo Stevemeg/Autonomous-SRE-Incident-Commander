@@ -32,6 +32,7 @@ import sqlalchemy as sa
 from sqlalchemy import Engine, create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
+from asic.db.tls import enforce_database_tls_policy
 from asic.domain.errors import TenantContextMismatch, TenantContextMissing
 
 #: The PostgreSQL setting RLS policies read. Namespaced so it cannot collide with a
@@ -126,6 +127,9 @@ def create_app_engine(url: str | None = None, **kwargs: Any) -> Engine:
     resolved = url or os.environ.get(DATABASE_URL_ENV)
     if not resolved:
         raise RuntimeError(f"no database URL: pass one explicitly or set {DATABASE_URL_ENV}")
+    # NFR-SEC-07: a production process refuses plaintext or unverified TLS before it ever
+    # connects (asic.db.tls). Non-production profiles may use plaintext deliberately.
+    enforce_database_tls_policy(resolved)
     kwargs.setdefault("pool_pre_ping", True)
     kwargs.setdefault("future", True)
     # Bounded connection establishment and pool wait (Phase 13): an unreachable database

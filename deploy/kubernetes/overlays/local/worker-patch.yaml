@@ -1,0 +1,18 @@
+# Local kind only: the deterministic simulator profile (test infrastructure, refused in
+# production, run from the derived local-simulator image) and two replicas, so the multi-worker claim path is exercised on every smoke.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: asic-worker
+spec:
+  replicas: 2
+  template:
+    spec:
+      containers:
+        - name: worker
+          # The final backend image plus the simulator package only (deploy/local-simulator);
+          # the production image deliberately has no simulator (FR-INT-04).
+          image: asic-backend-localsim:phase14-local
+          env:
+            - name: ASIC_WORKER_EXECUTION_MODE
+              value: simulator
