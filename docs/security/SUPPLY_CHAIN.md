@@ -103,6 +103,21 @@ or not a fix is currently available. Temporary acceptance requires an explicit, 
 expiry-bearing policy change; there is no silent ignore file. Scanner-database unavailability fails
 closed.
 
+Container scans fetch the schema-2 advisory database directly from Aqua's official
+`ghcr.io/aquasecurity/trivy-db:2` repository, avoiding a lagging mirror's missing fixed-version
+records. This is updated advisory data; the scanner executable remains digest-pinned.
+
+Blocking scan evidence includes at most eight findings with advisory ID, severity, package,
+installed/fixed versions and target. Fields are bounded and control characters removed; raw
+descriptions and scanner JSON are not included.
+
+The frontend retains its pinned Node 24/distroless Debian 13 runtime. Until that base includes
+Debian's CVE-2026-84782 update, a pinned Debian 13 build stage retrieves the exact signed
+`libssl3t64=3.5.7-1~deb13u3` security package. Only that package's files and authentic dpkg
+status/checksum records enter the runtime, so scanning and SBOMs describe the patched binaries.
+The runtime gains no package manager. Replace this patch stage with a refreshed digest from
+the same distroless family once that base includes the fix and the final image passes scanning.
+
 Trivy emits CycloneDX SBOMs from each final image. `scripts/validate_sbom.py` requires non-empty
 components, known final-stage packages and the actual final image ID, preventing an empty or wrong-image
 SBOM from satisfying the gate. Trusted releases retain SBOMs as artifacts and create GitHub OIDC provenance attestations

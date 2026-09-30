@@ -217,6 +217,118 @@ class TestGateVerdict:
         assert verdict["passed"] is False
         assert detail in check["detail"]  # type: ignore[index]
 
+    @pytest.mark.parametrize("severity", ["HIGH", "CRITICAL"])
+    @pytest.mark.parametrize("returncode", [0, 1])
+    def test_blocking_findings_include_actionable_evidence(
+        self, monkeypatch: pytest.MonkeyPatch, severity: str, returncode: int
+    ) -> None:
+        monkeypatch.setenv("ASIC_TRIVY", "trivy")
+        report = {
+            "ArtifactName": "asic-frontend:phase14-test",
+            "ArtifactType": "container_image",
+            "Metadata": {"ImageID": "sha256:" + "a" * 64},
+            "Results": [
+                {
+                    "Target": "debian 13",
+                    "Class": "os-pkgs",
+                    "Vulnerabilities": [
+                        {
+                            "VulnerabilityID": "CVE-2026-84782",
+                            "PkgName": "libssl3t64",
+                            "InstalledVersion": "3.5.7-1~deb13u2",
+                            "FixedVersion": "3.5.7-1~deb13u3",
+                            "Severity": severity,
+                            "Description": "private diagnostic material",
+                        }
+                    ],
+                }
+            ],
+        }
+
+        def runner(command: Sequence[str], cwd: Path, timeout: int) -> object:
+            assert command[command.index("--severity") + 1] == "HIGH,CRITICAL"
+            assert (
+                command[command.index("--db-repository") + 1] == "ghcr.io/aquasecurity/trivy-db:2"
+            )
+            assert command[command.index("--exit-code") + 1] == "1"
+            assert "--ignore-unfixed" not in command
+            return gate.CommandResult(returncode, json.dumps(report), "")
+
+        verdict = gate.run_gate(
+            context(runner, container_images=("asic-frontend:phase14-test",)),
+            only=["container_scan"],
+            require_container_scan=True,
+        )
+        assert verdict["passed"] is False
+        evidence = verdict["checks"][0]["evidence"]  # type: ignore[index]
+        assert evidence == [
+            f"{severity} CVE-2026-84782 package=libssl3t64 installed=3.5.7-1~deb13u2 "
+            "fixed=3.5.7-1~deb13u3 target=debian 13"
+        ]
+        assert "private diagnostic material" not in json.dumps(verdict)
+
+    def test_finding_evidence_is_bounded_and_control_characters_are_sanitized(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("ASIC_TRIVY", "trivy")
+        report = {
+            "ArtifactName": "asic-frontend:phase14-test",
+            "ArtifactType": "container_image",
+            "Metadata": {"ImageID": "sha256:" + "a" * 64},
+            "Results": [
+                {
+                    "Target": "debian\n\x1b[31m" + "x" * 1000,
+                    "Class": "os-pkgs",
+                    "Vulnerabilities": [
+                        {
+                            "Severity": "HIGH",
+                            "VulnerabilityID": f"CVE-2026-{number}",
+                            "PkgName": "package\r\n" + "x" * 1000,
+                            "InstalledVersion": "1" * 1000,
+                            "Description": "private diagnostic material",
+                        }
+                        for number in range(100)
+                    ],
+                }
+            ],
+        }
+        verdict = gate.run_gate(
+            context(
+                lambda *_args: gate.CommandResult(1, json.dumps(report), ""),
+                container_images=("asic-frontend:phase14-test",),
+            ),
+            only=["container_scan"],
+            require_container_scan=True,
+        )
+        assert verdict["passed"] is False
+        evidence = verdict["checks"][0]["evidence"]  # type: ignore[index]
+        assert len(evidence) == 9
+        assert evidence[-1] == "92 additional findings omitted"
+        assert all(len(line) < 800 and not any(c in line for c in "\r\n\x1b") for line in evidence)
+        assert "fixed=unknown" in evidence[0]
+        assert "private diagnostic material" not in json.dumps(verdict)
+
+    def test_malformed_vulnerability_records_fail_closed(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("ASIC_TRIVY", "trivy")
+        report = {
+            "ArtifactName": "asic-frontend:phase14-test",
+            "ArtifactType": "container_image",
+            "Metadata": {"ImageID": "sha256:" + "a" * 64},
+            "Results": [{"Target": "debian", "Class": "os-pkgs", "Vulnerabilities": [None]}],
+        }
+        verdict = gate.run_gate(
+            context(
+                lambda *_args: gate.CommandResult(0, json.dumps(report), ""),
+                container_images=("asic-frontend:phase14-test",),
+            ),
+            only=["container_scan"],
+            require_container_scan=True,
+        )
+        assert verdict["passed"] is False
+        assert "malformed vulnerabilities" in verdict["checks"][0]["detail"]  # type: ignore[index]
+
     def test_a_missing_scanner_fails_closed(self) -> None:
         def runner(command: Sequence[str], cwd: Path, timeout: int) -> object:
             if "gitleaks" in " ".join(command):

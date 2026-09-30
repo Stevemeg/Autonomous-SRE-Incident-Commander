@@ -29,6 +29,13 @@ def test_production_images_are_multistage_pinned_and_non_root() -> None:
         assert "@sha256:" in text
         assert "USER 10001:10001" in text
         assert ":latest" not in text
+        image_defaults = dict(re.findall(r"^ARG (\w+)=(\S+)", text, flags=re.MULTILINE))
+        for image in re.findall(r"^FROM (\S+)", text, flags=re.MULTILINE):
+            if image.startswith("${"):
+                image = image_defaults[image[2:-1]]
+            elif image in re.findall(r"^FROM \S+ AS (\S+)", text, flags=re.MULTILINE):
+                continue  # A prior stage is local to this build, not a registry reference.
+            assert re.search(r"@sha256:[0-9a-f]{64}$", image), image
     assert "--require-hashes" in (REPO / "Dockerfile").read_text("utf-8")
 
 

@@ -376,6 +376,13 @@ def check_gitleaks_tree(ctx: Context) -> Check:
     return _gitleaks(ctx, "gitleaks_tree", "dir", "working tree")
 
 
+def _finding_field(value: object) -> str:
+    """Bound scanner metadata and remove control characters from diagnostic lines."""
+    if not isinstance(value, str) or not value:
+        return "unknown"
+    return re.sub(r"[^A-Za-z0-9 ._:/@+~()=-]", "?", value)[:120]
+
+
 def check_container_scan(ctx: Context) -> Check:
     images = ctx.container_images
     if not images:
@@ -424,6 +431,8 @@ def check_container_scan(ctx: Context) -> Check:
             [
                 *base,
                 "image",
+                "--db-repository",
+                "ghcr.io/aquasecurity/trivy-db:2",
                 "--quiet",
                 "--scanners",
                 "vuln",
@@ -470,21 +479,37 @@ def check_container_scan(ctx: Context) -> Check:
         ):
             return Check("container_scan", FAILED, "trivy produced malformed scan targets")
         vulnerabilities = [
-            vulnerability
+            (target["Target"], vulnerability)
             for target in results
             if isinstance(target, dict)
             for vulnerability in (target.get("Vulnerabilities") or [])
         ]
+        if any(not isinstance(vulnerability, dict) for _, vulnerability in vulnerabilities):
+            return Check("container_scan", FAILED, "trivy produced malformed vulnerabilities")
         if result.returncode != 0 or vulnerabilities:
             severities: dict[str, int] = {}
-            for vulnerability in vulnerabilities:
+            findings: list[str] = []
+            for target, vulnerability in vulnerabilities:
                 severity = str(vulnerability.get("Severity", "UNKNOWN"))
                 severities[severity] = severities.get(severity, 0) + 1
+                if len(findings) < 8:
+                    findings.append(
+                        f"{_finding_field(severity)} "
+                        f"{_finding_field(vulnerability.get('VulnerabilityID'))} "
+                        f"package={_finding_field(vulnerability.get('PkgName'))} "
+                        f"installed={_finding_field(vulnerability.get('InstalledVersion'))} "
+                        f"fixed={_finding_field(vulnerability.get('FixedVersion'))} "
+                        f"target={_finding_field(target)}"
+                    )
+            if len(vulnerabilities) > len(findings):
+                findings.append(
+                    f"{len(vulnerabilities) - len(findings)} additional findings omitted"
+                )
             return Check(
                 "container_scan",
                 FAILED,
                 f"blocking container vulnerabilities in {image}: {severities}",
-                evidence=_tail(result.stderr, 8),
+                evidence=findings or _tail(result.stderr, 8),
             )
         evidence.append(f"{image} -> {metadata['ImageID']} ({len(results)} targets)")
     return Check(
