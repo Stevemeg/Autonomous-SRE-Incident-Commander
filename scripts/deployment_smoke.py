@@ -18,7 +18,6 @@ import json
 import shutil
 import subprocess
 import sys
-import tempfile
 import threading
 import time
 import urllib.request
@@ -41,6 +40,7 @@ from deploy_release import (
     ready_endpoints,
     run_deployment,
 )
+from deployment_workspace import deployment_directory, terraform_user_args
 
 REPO = Path(__file__).resolve().parents[1]
 HELM = "alpine/helm@sha256:aef9b56f64e866207d9591d0abd8f6d767b36aadd12edf68f8a719716d9d29c9"
@@ -410,7 +410,7 @@ def main() -> int:
         ).strip()
     )
     evidence: dict[str, object] = {}
-    with tempfile.TemporaryDirectory(prefix="asic-deployment-") as directory:
+    with deployment_directory() as directory:
         scratch = Path(directory)
         # LOCAL TEST ONLY: the kind worker's simulator profile needs src/asic/simulators, which
         # the production image excludes (FR-INT-04). Build the supplied backend image plus that
@@ -478,6 +478,7 @@ def main() -> int:
             "docker",
             "run",
             "--rm",
+            *terraform_user_args(),
             "--network",
             "kind",
             "-v",
